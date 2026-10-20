@@ -8,6 +8,7 @@
 #include "stage.h"
 #include "stage_data.h"
 #include "assets.h"
+#include "vm.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -15,6 +16,7 @@
 static RbEnemyPool  g_enemies;
 static RbBulletPool g_bullets;
 static RbAssets     g_assets;
+static RbVm        *g_vm;
 
 static int btn_pressed(const RbGame *g, uint16_t mask)
 {
@@ -25,18 +27,30 @@ static void begin_stage(RbGame *g, uint16_t stage, int fresh_ship)
 {
     int16_t lives = g->player.lives;
 
+    if (g_vm) {
+        /* The stage chunk's own script spawns the ship, the shot
+         * controller, and the director. A later opcode 0x0D loads the
+         * next chunk; this reset is only the title-to-play entry. */
+        vm_reset_play(g_vm, stage);
+        vm_set_hiscore(g_vm, g->hiscore);
+        g->stage = stage;
+        g->scroll_y = 0;
+        g->scroll_speed = 0;
+        player_reset(&g->player);
+        if (!fresh_ship) {
+            g->player.lives = lives;
+        }
+        return;
+    }
+
     enemy_pool_init(&g_enemies);
     bullet_pool_init(&g_bullets);
     stage_begin(stage);
     g->stage = stage;
     g->scroll_y = stage_scroll_y();
     g->scroll_speed = stage_scroll_speed();
-    if (fresh_ship) {
-        player_reset(&g->player);
-    } else {
-        /* Each stage's ship script calls the same spawn (320, 344).
-         * Lives stay; the original stage-clear script is not ported. */
-        player_reset(&g->player);
+    player_reset(&g->player);
+    if (!fresh_ship) {
         g->player.lives = lives;
     }
 }
@@ -60,6 +74,10 @@ void game_init(RbGame *g, const char *asset_dir)
     if (assets_load(&g_assets, g->asset_dir) == 0) {
         fprintf(stderr, "assets: loaded SGM1 (%u chunks, %zu bytes) from %s\n",
                 (unsigned)g_assets.sgm1.count, g_assets.sgm1_size, g->asset_dir);
+        if (vm_create(&g_vm, &g_assets) != 0) {
+            fprintf(stderr, "vm: create failed, using the scaffold director\n");
+            g_vm = NULL;
+        }
     } else {
         fprintf(stderr, "assets: optional load failed for %s (running without ROM data)\n",
                 g->asset_dir);
@@ -92,59 +110,78 @@ void game_update(RbGame *g)
         break;
 
     case RB_STATE_PLAY:
-        /* Entity phase of frame_loop (game image 0x933). The ship native
-         * runs, then the other actors move, then the director spawns.
-         * A child created this frame does not move until the next one. */
-        player_update(&g->player, &g->input);
-        stage_note_despawn(enemy_pool_update(&g_enemies));
-        stage_tick(&g_enemies);
-        g->scroll_y = stage_scroll_y();
-        g->scroll_speed = stage_scroll_speed();
-        bullet_pool_update(&g_bullets);
+        if (g_vm) {
+            RbVmInfo info;
 
-        /* Stand-in for the shot controller at chunk 0x62E3. Damage 1 and
-         * velocity -8 are not original constants. Score comes from the
-         * hp-change path, not from the shot. */
-        if (btn_pressed(g, RB_BTN_A)) {
-            RbBullet shot;
-            memset(&shot, 0, sizeof(shot));
-            shot.pos.x = (int16_t)(g->player.pos.x + 8);
-            shot.pos.y = (int16_t)(g->player.pos.y - 8);
-            shot.vel.x = 0;
-            shot.vel.y = -8;
-            shot.hitbox.x = shot.pos.x;
-            shot.hitbox.y = shot.pos.y;
-            shot.hitbox.w = 4;
-            shot.hitbox.h = 8;
-            shot.damage = 1;
-            shot.owner = 0;
-            shot.life = 90;
-            bullet_spawn(&g_bullets, &shot);
-            sys_play_sound(1, 200);
-        }
-
-        collision_player_vs_enemies(&g->player, &g_enemies);
-        collision_bullets_vs_enemies(&g_bullets, &g_enemies);
-        g->score += enemy_collect_score(&g_enemies);
-
-        if (g->player.lives <= 0) {
-            sys_stop_music();
-            if (g->score > g->hiscore) {
-                g->hiscore = g->score;
+            /* One forward scan. A child spawned this frame runs only if
+             * its slot is still ahead of the parent. */
+            vm_set_input(g_vm, &g->input);
+            vm_frame(g_vm);
+            vm_info(g_vm, &info);
+            g->score = info.score;
+            if (info.hiscore > g->hiscore) {
+                g->hiscore = info.hiscore;
             }
-            g->state = RB_STATE_RANKING;
-        } else if (stage_finished()) {
-            /* Heuristic. The original stage-clear script is not ported.
-             * Stage 5's decoded timeline does not reach the terminal rule,
-             * so that stage stays up until the ship is lost. */
-            if (g->stage < RB_STAGE_COUNT) {
-                begin_stage(g, (uint16_t)(g->stage + 1u), 0);
-            } else {
+            g->scroll_y = info.scroll_y;
+            g->scroll_speed = info.speed;
+            g->player.lives = info.lives;
+            g->player.pos.x = info.ship_x;
+            g->player.pos.y = info.ship_y;
+            if (info.chunk >= 2 && info.chunk <= 6) {
+                g->stage = (uint16_t)(info.chunk - 1u);
+            }
+            if (vm_quit_requested(g_vm)) {
+                g->state = RB_STATE_QUIT;
+            } else if (vm_boot_requested(g_vm) || info.lives <= 0) {
+                sys_stop_music();
+                if (g->score > g->hiscore) {
+                    g->hiscore = g->score;
+                }
+                g->state = info.lives <= 0 ? RB_STATE_RANKING : RB_STATE_TITLE;
+            }
+        } else {
+            /* Scaffold path used only when SGM1 failed to load. */
+            player_update(&g->player, &g->input);
+            stage_note_despawn(enemy_pool_update(&g_enemies));
+            stage_tick(&g_enemies);
+            g->scroll_y = stage_scroll_y();
+            g->scroll_speed = stage_scroll_speed();
+            bullet_pool_update(&g_bullets);
+            if (btn_pressed(g, RB_BTN_A)) {
+                RbBullet shot;
+
+                memset(&shot, 0, sizeof(shot));
+                shot.pos.x = (int16_t)(g->player.pos.x + 8);
+                shot.pos.y = (int16_t)(g->player.pos.y - 8);
+                shot.vel.y = -8;
+                shot.hitbox.x = shot.pos.x;
+                shot.hitbox.y = shot.pos.y;
+                shot.hitbox.w = 4;
+                shot.hitbox.h = 8;
+                shot.damage = 1;
+                shot.life = 90;
+                bullet_spawn(&g_bullets, &shot);
+                sys_play_sound(1, 200);
+            }
+            collision_player_vs_enemies(&g->player, &g_enemies);
+            collision_bullets_vs_enemies(&g_bullets, &g_enemies);
+            g->score += enemy_collect_score(&g_enemies);
+            if (g->player.lives <= 0) {
                 sys_stop_music();
                 if (g->score > g->hiscore) {
                     g->hiscore = g->score;
                 }
                 g->state = RB_STATE_RANKING;
+            } else if (stage_finished()) {
+                if (g->stage < RB_STAGE_COUNT) {
+                    begin_stage(g, (uint16_t)(g->stage + 1u), 0);
+                } else {
+                    sys_stop_music();
+                    if (g->score > g->hiscore) {
+                        g->hiscore = g->score;
+                    }
+                    g->state = RB_STATE_RANKING;
+                }
             }
         }
         if (g->state == RB_STATE_PLAY && btn_pressed(g, RB_BTN_START)) {
@@ -188,15 +225,43 @@ void game_render(const RbGame *g)
         break;
 
     case RB_STATE_PLAY:
-        player_render(&g->player);
-        enemy_pool_render(&g_enemies);
-        bullet_pool_render(&g_bullets);
-        snprintf(line, sizeof(line), "SCORE %u  HI %u  LIVES %d",
-                 (unsigned)g->score, (unsigned)g->hiscore, (int)g->player.lives);
-        sys_draw_text(8, 8, line, 0xFFFFFFFFu);
-        snprintf(line, sizeof(line), "STAGE %u  CELL %u  SPD %d",
-                 (unsigned)g->stage, (unsigned)stage_cell(), (int)g->scroll_speed);
-        sys_draw_text(8, 24, line, 0xFFC0C0C0u);
+        if (g_vm) {
+            RbVmSprite spr[256];
+            RbVmInfo info;
+            int n;
+            int i;
+
+            n = vm_collect_sprites(g_vm, spr, 256);
+            for (i = 0; i < n; i++) {
+                RbSprite draw;
+
+                memset(&draw, 0, sizeof(draw));
+                draw.x = spr[i].x;
+                draw.y = spr[i].y;
+                draw.w = (uint16_t)(spr[i].w > 0 ? spr[i].w : 1);
+                draw.h = (uint16_t)(spr[i].h > 0 ? spr[i].h : 1);
+                draw.pixels = NULL;
+                draw.solid_rgba = spr[i].rgba;
+                sys_draw_sprite(&draw);
+            }
+            vm_info(g_vm, &info);
+            snprintf(line, sizeof(line), "SCORE %u  HI %u  LIVES %d",
+                     (unsigned)g->score, (unsigned)g->hiscore, (int)info.lives);
+            sys_draw_text(8, 8, line, 0xFFFFFFFFu);
+            snprintf(line, sizeof(line), "STAGE %u  CELL %u  SPD %d",
+                     (unsigned)g->stage, (unsigned)info.cell, (int)info.speed);
+            sys_draw_text(8, 24, line, 0xFFC0C0C0u);
+        } else {
+            player_render(&g->player);
+            enemy_pool_render(&g_enemies);
+            bullet_pool_render(&g_bullets);
+            snprintf(line, sizeof(line), "SCORE %u  HI %u  LIVES %d",
+                     (unsigned)g->score, (unsigned)g->hiscore, (int)g->player.lives);
+            sys_draw_text(8, 8, line, 0xFFFFFFFFu);
+            snprintf(line, sizeof(line), "STAGE %u  CELL %u  SPD %d",
+                     (unsigned)g->stage, (unsigned)stage_cell(), (int)g->scroll_speed);
+            sys_draw_text(8, 24, line, 0xFFC0C0C0u);
+        }
         break;
 
     case RB_STATE_RANKING:
