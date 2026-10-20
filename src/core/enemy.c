@@ -1,5 +1,7 @@
 /**
- * Enemy pool — placeholder behaviours until SGC.COM tables are ported.
+ * Enemy pool. The original dispatcher (game image 0x1A30) walks 256 slots
+ * of 0x52 bytes and calls each live update pointer. Behaviours are bytecode
+ * in SGM1, so this pool is still a stand-in with a fixed downward step.
  */
 #include "enemy.h"
 

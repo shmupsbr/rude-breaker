@@ -25,6 +25,8 @@ void game_init(RbGame *g, const char *asset_dir)
     g->state = RB_STATE_BOOT;
     g->hiscore = 0;
     g->stage = 1;
+    g->scroll_y = 0;
+    g->scroll_speed = 2;
     if (asset_dir) {
         snprintf(g->asset_dir, sizeof(g->asset_dir), "%s", asset_dir);
     }
@@ -64,17 +66,28 @@ void game_update(RbGame *g)
             enemy_pool_init(&g_enemies);
             bullet_pool_init(&g_bullets);
             g->score = 0;
+            g->scroll_y = 0;
+            g->scroll_speed = 2;
             g->state = RB_STATE_PLAY;
             sys_play_music(0);
         }
         break;
 
     case RB_STATE_PLAY:
+        /* Entity phase of frame_loop (game image 0x933): the ship update
+         * runs as one entity, then the remaining actors. Spawn scripts are
+         * still bytecode, so the wave below stays a stand-in. */
         player_update(&g->player, &g->input);
         enemy_pool_update(&g_enemies);
         bullet_pool_update(&g_bullets);
 
-        /* Placeholder wave until SGC.COM spawn tables are ported. */
+        /* Opcode 0x4B: scroll_y += scroll_speed, wrap at 400. */
+        g->scroll_y = (int16_t)(g->scroll_y + g->scroll_speed);
+        if (g->scroll_y >= 0x190) {
+            g->scroll_y = (int16_t)(g->scroll_y - 0x190);
+        }
+
+        /* Placeholder wave until the stage bytecode spawn tables are ported. */
         if ((g->frame % 90u) == 0u && g_enemies.count < 8u) {
             int16_t x = (int16_t)(40 + (g->frame * 37u) % (RB_NATIVE_W - 80));
             enemy_spawn(&g_enemies, 1, x, -16);
