@@ -101,17 +101,17 @@ State pointer `BP` is `0x34C`. `SS=DS=ES=CS` for the loader. The game later rece
 | `0x1AAD` | `entity_clear_one` | Zeros `0x29` words. | high |
 | `0x2DD0` | `vm_opcode_table` | 256 words. Opcodes `0x00`–`0x50` are real. `0x51`–`0xFF` point at `0x2FF4`. | high |
 | `0x2FD0` | `vm_execute` | Installs a return thunk and falls into `vm_fetch`. | high |
-| `0x2FD6` | `vm_fetch` | Byte at `ES:[DI]`, `DI` from `[si+8]`, segment from `[si+0x0A]`. `jmp cs:[bx*2+0x2DD0]`. | high |
+| `0x2FD6` | `vm_fetch` | Reads the opcode, increments `DI`, stores the IP past the opcode, then jumps to the handler. Opcode `0x04` (`0x304A`) only ends this frame; the next frame continues at the next byte. It is a one-frame yield, not a script terminator. Opcode `0x00` yields forever. Opcode `0x06` waits N frames before the next opcode (N=1 runs it on the following frame). | high |
 | `0x35D8` | `vm_subop_table` | Even sub-opcode ids, used by opcodes `0x20`–`0x24` and `0x4F`/`0x50`. | high |
 | `0x3604` | `vm_subop_skip` | Byte length to skip when the target entity is absent. Valid through sub-op `0x2A`. | high |
 | `0x3BAE` | `byte_alu` | Byte operators. Index is the raw script byte. | high |
 | `0x3C2A` | `word_alu` | Word operators. `0x00` mov, `0x06` add, `0x08` sub, `0x12` and, `0x14` or, `0x16` xor, `0x1C` random modulo, `0x1E` shl, `0x20` sar. | high |
-| `0x3CB8` | `cmp_alu` | `0x00` eq … `0x12` jle, `0x14` test-zero, `0x16` test-nonzero. Carry means "branch taken" for the conditional opcodes. | high |
+| `0x3CB8` | `cmp_alu` | `0x00` eq, `0x02` ne, `0x04` unsigned `>`, `0x06` unsigned `<`, `0x08` signed `>`, `0x0A` signed `<`, then the `>=` / `<=` pairs, `0x14` test-zero, `0x16` test-nonzero. Carry clear means the condition is true (`JNC` at `0x39AF`). | high |
 | `0x4144` | `scroll_step` | Opcode `0x4B`. `[bp+0x74] += [bp+0x82]`, wrap `0x190`. `[bp+0x76] = 0x190 - [bp+0x74]`. Also steps `[bp+0x7A]` by the speed and wraps on `[bp+0x7E] << 4`. | high |
 | `0x41A7` | opcode `0x4C` | `compose_sprites` unless `[bp+0xC1] != 0`. | high |
 | `0x41FD` | opcode `0x4E` | Draw every entity whose type bit `0x200` is clear, via `0x1132`. | high |
-| `0x422A` | `hit_test_a` | Opcode `0x4F`. AABB of `(x+[0x42], x+[0x44])` by `(y+[0x46], y+[0x48])`. | high |
-| `0x42D1` | `hit_test_b` | Opcode `0x50`. Same test, second pass. | high |
+| `0x422A` | `hit_all` | Opcode `0x4F`. See Collision. | high |
+| `0x42D1` | `hit_first` | Opcode `0x50`. Same boxes, stops on the first hit. | high |
 
 ### Frame loop (`0x933`)
 
@@ -211,14 +211,57 @@ PC-98 only. None of these belong in `src/core`.
 
 `FPLAY.COM` is executed at startup and owns INT 7Fh. Bytecode opcodes `0x42`–`0x46` call INT 7Fh with AH = 0, 1, 3, or 4. `[bp+0xB9]` bit `0x04` mutes. `SONG.DAT` is opened with AX=`0x0900`, INT 7Fh (loader `0x61A0`, filename at `0x61A9`). Core code calls `sys_play_sound` / `sys_play_music` only.
 
+## Who calls the ship
+
+Startup (`0x88B` / `0x8C7`) and the stage reload (`0x8E6`) both load SGM1 chunk 1. The script header words are `0x78B0` (boot), `0x78C0` (reload, jumps to `0x78FF`), and `0x78C3`. Stage chunks 2–6 start at `0x78AA`, which jumps to `0x78C0`.
+
+The stage root spawns three back-allocated children and then kills itself (`0x4F00`): script `0x5CF4`, the hitbox proxy `0x5641`, and the per-frame ship script `0x4F6E`. That script calls the movement native every frame.
+
+| Chunk | Native entry | Opcode `0x0C` call | Confidence |
+|-------|--------------|--------------------|------------|
+| 1 | `0x53B1` (`inc word [si+0x34]`) | `0x4F93` (`0C B1 53`) | high |
+| 2–6 | `0x53AB` (same prologue) | `0x4F8D` (`0C AB 53`) | high |
+
+`0x53B4` is `test word [bp+0x6E], 0x20`, three bytes into the routine, not the entry. Searching for the word `0x53B4` finds nothing.
+
+The per-frame ship script (same shape in every stage chunk, chunk 2 shown): init globals, call ship init `0x5368` (chunk 1's copy is `0x536E`), spawn the shot controller `0x62E3` with type `0x8000`, set byte `[bp+0xDF] = 0x60`, then each frame: yield, native ship move, native `0x5578` (hiscore compare, not firing), and if word `[bp+0x72]` does not have bit `0x0100`, opcode `0x50` with mask `0x00C0` and `word [target+0x3C] -= 6`.
+
+## Collision (opcodes `0x4F` and `0x50`)
+
+Both scan 256 entities of stride `0x52`. A candidate must have `(type & mask) != 0` and `(type & 0x0100) == 0`. The box test is five signed compares, checked in the listing at `0x426E` and `0x4314`:
+
+- miss if `self_left >= other_right`
+- miss if `self_right < other_left`
+- miss if `self_top >= other_bottom`
+- miss if `other_bottom < 0x20`
+- miss if `self_bottom < other_top`
+
+Touching edges are hits. Ghidra's field indices for these handlers do not match this listing; the bytes above are the ones the port uses.
+
+| Opcode | On a hit | Confidence |
+|--------|----------|------------|
+| `0x4F` `0x422A` | Run the sub-op list on the target, then `dec word [attacker+0x3C]`, keep scanning. | high |
+| `0x50` `0x42D1` | `dec word [attacker+0x3C]` first, run the sub-op list on that one target, store the IP past the list, stop. | high |
+
+Two live responses:
+
+| Site | Mask | Sub-op | What matches | Confidence |
+|------|------|--------|--------------|------------|
+| Ship script `0x4F9A` | `0x00C0` | target hp `-= 6` | Not a type this port spawns. Stream `0x8020` and set-piece `0x8220` have bit `0x20`, which is outside `0xC0`. | high |
+| Hitbox proxy `0x5716` | `0x00E0` | target hp `-= 4` | Stream, set-piece, and the popup (`0x8010`, because bit `0x10` is inside `0xE0`). The proxy box is ±6 on both axes and its counter starts at 1, so one overlapping frame spends a life. | high |
+
+The movement routine's own box (X ±6 or ±10, Y `-8..+10`) is not the body test. The proxy is. The tail of `0x5641` that waits and respawns the proxy is not ported. The core keeps a separation latch (`player.flags` bit `0x0001`) so a life is not lost again until the boxes stop overlapping. That latch is a stand-in, not a timer from the ROM.
+
+Score is native `0x71DC` in the stage chunk, not a kill bonus. If the saved hp at `+0x3E` differs from `+0x3C`, add 10 to the dword at `[bp+0x8E]` / `[bp+0x90]` and play sound `0x25`. An offscreen kill sets hp to 0 and skips this call, so it scores nothing. The port collects the +10 after collision and only for enemies still in the pool.
+
 ## Ship movement (SGM1 chunk 1)
 
-Not a function in the game image. Native island at chunk offset `0x53B4`, `retf` at `0x54B4`.
+Native island at chunk offset `0x53B1`, `retf` at `0x54B4`. Stage chunks place the same bytes at `0x53AB`.
 
 | Chunk offset | Name | Role | Confidence |
 |--------------|------|------|------------|
 | `0x536E` | ship init script | Sub-op block: id `+0x04 = 0x0012`, X = `0x0140` (320), Y = `0x0158` (344), Y hitbox `-8 .. +10`, then opcode `0x30` copies X/Y out to `[bp+0x96]` / `[bp+0x98]`, then return. | medium |
-| `0x53B4` | `ship_update` | On button edge bit `0x20`, toggles mode byte `[bp+0xD5]` and calls a helper at chunk `0x7260`. Sets X hitbox to `-10..+10` if mode is 1, else `-6..+6`. | high |
+| `0x53B1` | `ship_update` | First instruction increments `[si+0x34]`. At `0x53B4`, button edge bit `0x20` toggles mode byte `[bp+0xD5]` and calls chunk `0x7260`. Sets X hitbox to `-10..+10` if mode is 1, else `-6..+6`. | high |
 | `0x5404` | velocity add | `dir = [bp+0x6C] & 0x0F`, index `dir * 4` into a dx/dy table. Flag `[bp+0x72]` bit `0x10` selects the slow table, bit `0x20` the fast table, otherwise the normal table. Adds dx to X and dy to Y. | high |
 | `0x54BE` | slow table | 16 × int16 dx, dy. Cardinals 6 and 5. | high |
 | `0x54FE` | normal table | Cardinals 8 horizontal, 6 vertical. Diagonals 6 and 5. Opposite directions cancel. | high |
@@ -227,23 +270,60 @@ Not a function in the game image. Native island at chunk offset `0x53B4`, `retf`
 
 A bank-angle byte at `[bp+0xD4]` eases toward the horizontal delta, clamped to `-12..11`, and picks a sprite word. Not ported; it does not change the position.
 
-No x86 instruction in the game image adds a speed to the ship. Searching chunk 1 for `x += held_input` finds nothing; the nibble indexes the table instead.
+No x86 instruction in the game image adds a speed to the ship. The direction nibble indexes the table.
+
+## Stage director (chunks 2–6)
+
+Chunk 2 is stage 1. The stage root calls init `0x7959`, spawns the director `0x79CB` (chunk 6 uses `0x79DD`) and the ship group, then yields 17 frames (one yield plus a 16-iteration loop) before spawning the timeline. Timeline IPs: chunk 2 `0x81CF`, 3 `0x81A8`, 4 `0x7C12`, 5 `0x836F`, 6 `0x7F4B`.
+
+Init writes `[bp+0x7A] = 0x1E00`, cell `[bp+0x7C] = 0x1E0`, speed `[bp+0x82] = 15`, cruise target `[bp+0x86] = 4`. `[bp+0x84]` is written once, to 0, so `Y += [bp+0x84]` in the set-piece loop does not move them. The director's first frame is opcode `0x4D` (`0x41B7`): 25 steps of `scroll_y += 16` (subtract `0x190` when the sum is above `0x190`) and `cell -= 1`, then a yield. The per-frame opcode `0x4B` (`0x4144`) starts on the next frame. It subtracts the speed from the sub-position, wraps by `[bp+0x7E] << 4` (`0x1E00`), and adds the speed into scroll Y, wrapping at `0x190`. A new cell calls `0x108E` (row blit, left in the HAL).
+
+The director's tail (chunk 2 `0x8184`, same bytes in the other stages) copies the speed, subtracts the target, and holds when the difference is 0. A positive difference subtracts `0x1000` from the accumulator and SBBs the speed; a negative difference adds `0x1000` and ADCs the speed. The compare and a dummy counter add both rotate the carry byte `[bp+0xBD]`. From speed 15 and target 4 the speed is 14 on frame 1 and reaches 4 at frame 162.
+
+On a cell change the phase byte `[bp+0xC8]` selects a rule, then an equality chain (`26 7C 00`) spawns that cell's rows. A rewind stores `(sub & 0xF) + add` and the waves see the new cell. `tools/gen_stage_tables.py` emits `src/core/stage_data.c`.
+
+| Stage | Chunk | Timeline | Spawns | Cell waves | Popup `0x40A3` | Notes |
+|-------|-------|----------|--------|------------|----------------|-------|
+| 1 | 2 | 293 events, stops at a jump below `0x7000` (step 505) | 288 | 59, first cell 358 | yes, when the cell changes and cell `< 0x70` or cell `> 0x130` | Phase 0 and `0x0A` rewind at cell 416. Phase `0x14` at that cell sets target speed 2 and phase `0x1E`. Child `0x29E1` is a nested formation (it spawns five more scripts, then runs `0x7102`). Those nested spawns are not in the timeline. The script is what drops `[bp+0xAE]`; the port does not count this leader, or the phase switch stays on the rewind. |
+| 2 | 3 | 174 events | 169 | 58 | yes | Switch starts at phase `0x0A`. |
+| 3 | 4 | 129 events | 122 | 10 | no | The chain walker stopped early. Treat 10 rows as incomplete. |
+| 4 | 5 | 144 events | 139 | 64 | no | Several compares are unsigned `>` (body runs when the cell is `<=` the immediate). |
+| 5 | 6 | 17 events, 14 spawns, jump-out at step 46 | 14 | 40 | no | The rest of the stage is the cell chain. Phase 40 in the decoded switch does not advance, and the timeline only stores phase `0x1E`, so the port's stage-finished flag does not fire here. |
+
+After the popup test, every loop frame runs `1B` on the director's `+0x34`: spawn stream child `0x4848` only when `(counter & 0x1FF) == 0`, then add 1 to that counter (chunk 2 at `0x816F`). The first loop frame spawns one, and the next comes 512 frames later. The child is identical in chunks 2–6: type `0x8020`, `X = (rng % 0x160) + 0x90`, `Y = 0`, `vx = 0xFF80` (`rng % 1` is 0), `vy = 0x0300`, `ay = -2`, hp 20, box ±16. The popup is type `0x8010`, `X = (rng % 0x1E0) + 0x50`, hp 1, `vy = ((rng % 3) << 7) + 0x80`, box ±4 (the opener writes no box; ±4 is the stand-in used for this one object). Set-piece child `0x4DE4` is type `0x8220`, hp 96, box ±20, mover `0x6F7C`. With velocity 0 and `Y = 0` the bottom edge is 20, which is below `0x20`, so they are not hittable until something else moves them.
+
+| Mover | Native | Kill bounds | Confidence |
+|-------|--------|-------------|------------|
+| stream | `0x6F2E` | X `< -16` or `>= 0x290`; Y `< 0` or `>= 0x1A0`. Then add `+0x2A` / `+0x2C` into the velocity words. | high |
+| set-piece | `0x6F7C` | X `< 0x10` or `>= 0x270`; Y `< -64` or `>= 0x1D0`. | high |
+| polar | `0x7066` | Rebuild `+0x2A` / `+0x2C` from sincos, add `+0x26` / `+0x28`, integrate. X `< 0x10` or `>= 0x270`; Y `< -160` or `>= 0x1A0`. | high |
+| polar-wide | `0x7102` | Same step. X `< -16` or `>= 0x290`; Y `< -160` or `>= 0x1F0`. Child `0x441B`. | high |
+
+Polar X uses sub-op `0x22` (angle `+ 0x4000`); Y uses sub-op `0x1E`. The formation then adds the spin with sub-op `0x06`. Aim sub-op `0x2A` (homing) is not ported, so a script that only aims sits still when its speed high byte is 0. RNG is `0xE4E` / `0xE5D`. The ROM seeds it from INT 1Ch; the port uses `0x1234`.
+
+A timeline gate on `[bp+0xAE]` waits while that counter is above 0. Counted children add 1 at their opener and the port subtracts 1 when they leave the pool. The walker does not follow opcode `0x08` and stops on a jump below `0x7000`.
 
 ## Ported into the core
 
 | Original | Core | Confidence |
 |----------|------|------------|
-| Frame order at `0x933`: input, entities, draw, vsync, present | `main` already had this order; the comment now cites `0x933`. CRTC and the page flip stay in the HAL. | high |
-| Scroll step `[bp+0x74] += 2`, wrap 400 | `RbGame.scroll_y` / `scroll_speed` during play | high |
-| Normal velocity table, direction nibble, origin clamp, spawn, default hitbox | `player_reset` / `player_update` | high for the table and the clamp, medium for treating chunk `0x536E` as the spawn used at stage start |
+| Frame order at `0x933`: input, entities, draw, vsync, present | `main`. CRTC and the page flip stay in the HAL. | high |
+| Ship caller `0x4F6E` → native `0x53B1` / `0x53AB`, normal velocity table, clamp, spawn | `player_update` / `player_reset` | high |
+| Opcode `0x50` mask `0x00E0`, damage 4, proxy box ±6, five compares | `collision_player_vs_enemies`, `rb_hit_test` | high for the test, medium for the separation latch that stands in for the respawn tail |
+| Score +10 on an hp change (`0x71DC`) | `enemy_collect_score` | high |
+| Scroll `0x4B`, speed regulator, phase rules, cell waves, stream `0x4848`, timeline | `stage_tick`, `src/core/stage_data.c` | high for stage 1's bytes, medium where a chain walk stopped early (stage 3) or a timeline jumps out (stage 5) |
+| Integrators `0x6F2E`, `0x6F7C`, `0x7066`, `0x7102`, sincos `0xE80` | `enemy_pool_update` | high |
+| 256-slot dispatcher | `RB_MAX_ENEMIES 256` | high |
 
-Still a stand-in: enemy waves, player shots, score, and the 64-slot pool. The original dispatcher is 256 slots of `0x52` bytes driven by the bytecode VM.
+Still a stand-in: the shot from `0x62E3` (damage 1, vy `-8`, no score of its own), enemy shots of mask `0x00C0`, a zero hitbox expanded to ±8, and auto-advance when `stage_finished` is set. That flag needs the timeline to end, the gate count to be 0, and the last phase rule's match to have run. It is not the original stage-clear script.
 
 ## Next
 
-1. Walk chunk 1 from script IP `0x78B0` with the opcode sizes in this file, and name the block that far-calls `ship_update`. The offset `0x53B4` is not stored as an immediate in chunk 1 or in the game image.
-2. Opcode `0x4F` / `0x50` hit responses, then replace the placeholder bullets.
-3. Decode one stage chunk (2–6 share chunk 1's shape) far enough to spawn real enemies.
-4. Graphic chunks whose header is `01 00 fc 00 01 ff 9c 00`, then `sys_draw_sprite` pixels.
-5. INT 7Fh command map inside `FPLAY.COM`, then real `sys_play_music` track ids.
-6. Loader `0x6C0B` and `0x5EF5`, the two function pointers the frame loop calls beside vsync and the page flip.
+1. Graphic chunks whose header is `01 00 fc 00 01 ff 9c 00`, then `sys_draw_sprite` pixels.
+2. Shot script `0x62E3`, then drop the stand-in bullet.
+3. The respawn delay after the hitbox proxy's counter reaches 0, and option followers at chunk `0x5A05`.
+4. Aim sub-op `0x2A`, and the enemy-shot class that mask `0x00C0` / damage 6 is waiting for.
+5. Nested formation scripts such as chunk 2 child `0x29E1` (five more spawns, then native `0x7102`). The port places the leader and does not count it toward `[bp+0xAE]`, so the phase switch can leave the intro rewind. The children that script would spawn are absent.
+6. Stage 5's timeline past the jump at step 46, and the real stage-clear / next-stage script. Stage 3's cell chain is short and should be re-walked.
+7. INT 7Fh command map inside `FPLAY.COM`, then real `sys_play_music` track ids.
+8. Loader `0x6C0B` and `0x5EF5`, the two function pointers the frame loop calls beside vsync and the page flip.

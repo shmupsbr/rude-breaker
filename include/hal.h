@@ -126,13 +126,27 @@ typedef struct RB_PACKED RbPlayer {
 
 typedef struct RB_PACKED RbEnemy {
     RbVec2   pos;
-    RbVec2   vel;
-    RbRect   hitbox;
+    RbVec2   vel;        /* 8.8 fixed-point words (entity +0x26 / +0x28) */
+    RbRect   hitbox;     /* absolute rectangle, rebuilt from the offsets */
     int16_t  hp;
     uint16_t type;
     uint16_t flags;
     uint16_t anim_frame;
     uint16_t timer;
+    uint16_t angle;      /* +0x2E, polar heading */
+    uint16_t spin;       /* +0x30 */
+    uint16_t speed;      /* +0x32 */
+    int16_t  ax;         /* +0x2A, added to the X velocity word each frame */
+    int16_t  ay;         /* +0x2C */
+    int16_t  box_l;
+    int16_t  box_r;
+    int16_t  box_t;
+    int16_t  box_b;
+    int16_t  hp_seen;    /* previous +0x3C, so a change can score once */
+    uint8_t  frac_x;     /* +0x4A */
+    uint8_t  frac_y;     /* +0x4B */
+    uint8_t  mover;      /* RB_MOVER_* */
+    uint8_t  counted;    /* 1 = this spawn incremented the stage gate */
 } RbEnemy;
 
 typedef struct RB_PACKED RbBullet {
