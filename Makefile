@@ -18,7 +18,8 @@ CORE_SRCS := \
 	src/core/collision.c \
 	src/core/stage.c \
 	src/core/stage_data.c \
-	src/core/assets.c
+	src/core/assets.c \
+	src/core/vm.c
 
 ifeq ($(PLATFORM),sdl2)
   HAL_SRCS := \
@@ -44,7 +45,7 @@ endif
 SRCS := $(CORE_SRCS) $(HAL_SRCS)
 OBJS := $(SRCS:%.c=$(BUILD)/$(PLATFORM)/%.o)
 
-.PHONY: all clean test-assets test-endian dirs
+.PHONY: all clean test-assets test-endian vm-check dirs
 
 all: dirs $(TARGET) test-endian
 
@@ -63,6 +64,10 @@ $(BUILD)/$(PLATFORM)/%.o: %.c
 test-assets:
 	@python3 tools/parse_sgm1.py assets/raw/RUDEBR/SGM1.DAT assets/sgm1 || \
 	  echo "Place extracted SGM1.DAT under assets/raw/RUDEBR first."
+
+vm-check: dirs
+	$(CC) $(CFLAGS) -o $(BUILD)/vm_check tools/vm_check.c tools/vm_stub.c \
+		src/core/vm.c src/core/assets.c src/core/collision.c
 
 test-endian: dirs
 	$(CC) $(CFLAGS) -o $(BUILD)/test_endian tools/test_endian.c

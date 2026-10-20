@@ -1,14 +1,13 @@
 /**
  * Opcode 0x4F (hit every match) and 0x50 (hit the first match).
  *
- * Both use the same five signed compares. The live ship response is the
- * proxy entity at chunk 0x5641: opcode 0x50, mask 0x00E0, then
- * `word [target+0x3C] -= 4`. The proxy's own counter starts at 1 and is
- * decremented once, so one connecting frame spends the life. The script
- * tail that respawns that proxy is not ported; separation stands in for it.
+ * Both use the same five signed compares. The play path runs these
+ * opcodes inside the bytecode VM. The functions below stay as the
+ * geometry helper and as the scaffold used when no SGM1 image is loaded.
  *
- * Mask 0x00C0 / damage 6 (the ship script at 0x4F9A) is a different class
- * and is not wired to a spawned type yet.
+ * Proxy script 0x5641 uses opcode 0x50, mask 0x00E0, then
+ * `word [target+0x3C] -= 4`. The ship script uses mask 0x00C0 and
+ * subtracts 6. The separation latch is only the scaffold stand-in.
  */
 #include "collision.h"
 
