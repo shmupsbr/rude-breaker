@@ -21,12 +21,13 @@ typedef struct RbGame {
     RbInput     input;
     RbInput     input_prev;
     uint32_t    frame;
-    uint16_t    score;
-    uint16_t    hiscore;
+    /* Native score is the dword at [bp+0x8E]/[bp+0x90]. */
+    uint32_t    score;
+    uint32_t    hiscore;
     uint16_t    stage;
     uint16_t    flags;
-    /* Background scroll. Opcode 0x4B adds scroll_speed (init 2) into
-     * scroll_y and wraps at 400. Row blit stays out of the core. */
+    /* Background scroll. Opcode 0x4B adds the stage speed into scroll_y
+     * and wraps at 400. Row blit stays out of the core. */
     int16_t     scroll_y;
     int16_t     scroll_speed;
     char        asset_dir[260];

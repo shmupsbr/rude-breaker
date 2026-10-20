@@ -1,9 +1,13 @@
 /**
  * Player ship.
  *
- * Per-frame movement is the native routine at SGM1 chunk 1 offset 0x53B4
- * (falls into the velocity add at 0x5404). The ship is an entity: X is
- * field +0x22, Y is field +0x24. Direction comes from the low nibble of
+ * Per-frame movement is the native routine whose first instruction is
+ * `inc word [si+0x34]` at SGM1 chunk 1 offset 0x53B1 (stage chunks 2-6
+ * use 0x53AB). Offset 0x53B4 is the button-edge test three bytes later.
+ * The ship script spawned as child 0x4F6E by 0x4F00 calls it every frame
+ * with opcode 0x0C (chunk 1 at 0x4F93, stage chunks at 0x4F8D).
+ * The ship is an entity: X is field +0x22, Y is field +0x24.
+ * Direction comes from the low nibble of
  * the held-input word (loader poll at 0x7846):
  *   bit0 up, bit1 left, bit2 right, bit3 down.
  * Three 16-entry dx/dy tables sit at chunk offsets 0x54BE (slow),

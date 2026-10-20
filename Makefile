@@ -16,6 +16,8 @@ CORE_SRCS := \
 	src/core/player.c \
 	src/core/enemy.c \
 	src/core/collision.c \
+	src/core/stage.c \
+	src/core/stage_data.c \
 	src/core/assets.c
 
 ifeq ($(PLATFORM),sdl2)
