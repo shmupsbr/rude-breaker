@@ -25,6 +25,10 @@ typedef struct RbGame {
     uint16_t    hiscore;
     uint16_t    stage;
     uint16_t    flags;
+    /* Background scroll. Opcode 0x4B adds scroll_speed (init 2) into
+     * scroll_y and wraps at 400. Row blit stays out of the core. */
+    int16_t     scroll_y;
+    int16_t     scroll_speed;
     char        asset_dir[260];
 } RbGame;
 

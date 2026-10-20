@@ -28,6 +28,9 @@ int main(int argc, char **argv)
 
     game_init(&game, assets);
 
+    /* Same order as frame_loop at game image 0x933: poll input, run the
+     * entity phase, draw, wait for vertical blank, then present. The
+     * original CRTC register writes and the page flip are HAL work. */
     while (!game_wants_quit(&game)) {
         sys_read_input(&game.input);
         game_update(&game);
