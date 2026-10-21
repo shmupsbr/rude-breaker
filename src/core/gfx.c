@@ -14,6 +14,12 @@
 
 struct RbGfx {
     uint8_t *pix;
+    /* Background page. Fills, tiles, and GRCG blits land here. Each
+     * entity draw copies this over pix and stamps sprites only onto pix,
+     * which is what the PC-98 does by rebuilding the hidden page (GRCG
+     * tile restore plus the 0xA4/0xA6 page flip) before the sprites. */
+    uint8_t *bg;
+    int paint_bg;
     uint16_t map[MAP_N];
     const uint8_t *bank[256];
     uint32_t blen[256];
@@ -32,10 +38,14 @@ RbGfx *gfx_create(void)
         return NULL;
     }
     gfx->pix = (uint8_t *)calloc((size_t)RB_GFX_W * (size_t)RB_GFX_H, 1);
-    if (!gfx->pix) {
+    gfx->bg = (uint8_t *)calloc((size_t)RB_GFX_W * (size_t)RB_GFX_H, 1);
+    if (!gfx->pix || !gfx->bg) {
+        free(gfx->pix);
+        free(gfx->bg);
         free(gfx);
         return NULL;
     }
+    gfx->paint_bg = 1;
     return gfx;
 }
 
@@ -45,6 +55,7 @@ void gfx_destroy(RbGfx *gfx)
         return;
     }
     free(gfx->pix);
+    free(gfx->bg);
     free(gfx);
 }
 
@@ -54,6 +65,8 @@ void gfx_reset(RbGfx *gfx)
         return;
     }
     memset(gfx->pix, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    memset(gfx->bg, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    gfx->paint_bg = 1;
     memset(gfx->map, 0, sizeof gfx->map);
     memset(gfx->bank, 0, sizeof gfx->bank);
     memset(gfx->blen, 0, sizeof gfx->blen);
@@ -74,12 +87,45 @@ void gfx_bind(RbGfx *gfx, uint8_t slot, const uint8_t *data, uint32_t len)
     gfx->active = 1;
 }
 
+static size_t pix_at(int x, int y)
+{
+    return (size_t)y * (size_t)RB_GFX_W + (size_t)x;
+}
+
 static void put_idx(RbGfx *gfx, int x, int y, uint8_t idx)
 {
+    size_t at;
+
     if ((unsigned)x >= (unsigned)RB_GFX_W || (unsigned)y >= (unsigned)RB_GFX_H) {
         return;
     }
-    gfx->pix[(size_t)y * (size_t)RB_GFX_W + (size_t)x] = idx;
+    at = pix_at(x, y);
+    gfx->pix[at] = idx;
+    if (gfx->paint_bg) {
+        gfx->bg[at] = idx;
+    }
+}
+
+/* GRCG read-modify-write of one pixel. `planes` is the index bits. */
+static void rmw_idx(RbGfx *gfx, int x, int y, uint8_t planes, int set)
+{
+    size_t at;
+    uint8_t v;
+
+    if ((unsigned)x >= (unsigned)RB_GFX_W || (unsigned)y >= (unsigned)RB_GFX_H) {
+        return;
+    }
+    at = pix_at(x, y);
+    v = gfx->paint_bg ? gfx->bg[at] : gfx->pix[at];
+    if (set) {
+        v = (uint8_t)(v | planes);
+    } else {
+        v = (uint8_t)(v & (uint8_t)~planes);
+    }
+    gfx->pix[at] = v;
+    if (gfx->paint_bg) {
+        gfx->bg[at] = v;
+    }
 }
 
 static int wrap_y(int y)
@@ -357,6 +403,11 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
     if (!gfx || !ent || !chunk || !clen || !cof) {
         return;
     }
+    /* Rebuild the shown page from the sprite-free background, then stamp
+     * this frame's sprites. Scroll lives in the GVRAM address, so a sprite
+     * that holds still on screen still moves through the buffer. */
+    memcpy(gfx->pix, gfx->bg, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    gfx->paint_bg = 0;
     for (i = 0; i < ent_n; i++) {
         const uint8_t *slot = ent + (size_t)i * (size_t)stride;
         uint16_t type = (uint16_t)slot[0] | ((uint16_t)slot[1] << 8);
@@ -374,21 +425,17 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
         const uint8_t *sheet;
         int row;
 
-        /* The original 0x4E skips type bit 0x200. Option followers set that
-         * bit and still carry a pattern, so the port draws them. */
-        if (type == 0) {
+        /* Opcode 0x4E (0x420E): the low byte of the type must be nonzero,
+         * and bit 0x200 hides the sprite. Options set that bit while they
+         * are parked (mode byte off, and for the whole respawn after a
+         * death) so the original does not draw them. */
+        if ((type & 0x00FFu) == 0 || (type & 0x0200u) != 0) {
             continue;
         }
         wcells = slot[0x4C];
         hcells = slot[0x4D];
         if (wcells == 0 || hcells == 0) {
             continue;
-        }
-        if (wcells > 8) {
-            wcells = 8;
-        }
-        if (hcells > 8) {
-            hcells = 8;
         }
         x = (int16_t)((uint16_t)slot[0x22] | ((uint16_t)slot[0x23] << 8));
         y = (int16_t)((uint16_t)slot[0x24] | ((uint16_t)slot[0x25] << 8));
@@ -446,6 +493,7 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
             }
         }
     }
+    gfx->paint_bg = 1;
 }
 
 static int pal_byte(const uint8_t **pp, const uint8_t *end, int *out)
@@ -580,6 +628,7 @@ void gfx_clear_frame(RbGfx *gfx)
         return;
     }
     memset(gfx->pix, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    memset(gfx->bg, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
     gfx->active = 1;
 }
 
@@ -605,7 +654,7 @@ void gfx_merge_plane(RbGfx *gfx, int plane, const uint8_t *src, uint32_t n)
         }
         for (p = 0; p < 8; p++) {
             if ((src[i] >> (7 - p)) & 1) {
-                gfx->pix[(size_t)y * RB_GFX_W + (size_t)(x + p)] |= bit;
+                rmw_idx(gfx, x + p, y, bit, 1);
             }
         }
     }
@@ -718,17 +767,7 @@ void gfx_blit_grid(RbGfx *gfx, const uint8_t *bank, uint32_t blen,
  * 0-bit leaves the pixel alone. Tile 0 therefore clears; tile 1 sets. */
 static void grcg_bit(RbGfx *gfx, int x, int y, uint8_t planes, int set)
 {
-    uint8_t *px;
-
-    if ((unsigned)x >= (unsigned)RB_GFX_W || (unsigned)y >= (unsigned)RB_GFX_H) {
-        return;
-    }
-    px = &gfx->pix[(size_t)y * (size_t)RB_GFX_W + (size_t)x];
-    if (set) {
-        *px = (uint8_t)(*px | planes);
-    } else {
-        *px = (uint8_t)(*px & (uint8_t)~planes);
-    }
+    rmw_idx(gfx, x, y, planes, set);
 }
 
 static void span_skip(const uint8_t **p, const uint8_t *end, uint32_t n)
@@ -899,17 +938,11 @@ void gfx_blit_span(RbGfx *gfx, const uint8_t *src, uint32_t slen,
                     x = (int)(at % 80u) * 8;
                     y = (int)(at / 80u);
                     for (p = 0; p < 8; p++) {
-                        uint8_t *px;
-
                         if (y >= RB_GFX_H) {
                             break;
                         }
-                        px = &gfx->pix[(size_t)y * RB_GFX_W + (size_t)(x + p)];
-                        if ((byte >> (7 - p)) & 1) {
-                            *px = (uint8_t)(*px | bit[plane]);
-                        } else {
-                            *px = (uint8_t)(*px & (uint8_t)~bit[plane]);
-                        }
+                        rmw_idx(gfx, x + p, y, bit[plane],
+                                (byte >> (7 - p)) & 1);
                     }
                 }
                 base = (uint16_t)(base + 0x50u);
