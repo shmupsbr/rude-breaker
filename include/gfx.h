@@ -48,10 +48,13 @@ void gfx_merge_plane(RbGfx *gfx, int plane, const uint8_t *src, uint32_t n);
 void gfx_blit_grid(RbGfx *gfx, const uint8_t *bank, uint32_t blen,
                    const uint8_t *cells, uint32_t cell_n,
                    uint16_t di, int cols, int rows, int kind, int shift);
-/* Opcode 0x3A / 0x3B. src_planes is BH, dst_planes is BL. */
+/* Opcode 0x3A / 0x3B. src_planes is BH, dst_planes is BL.
+ * shift is the AL the loader's 0x7428 passes into the GRCG blit at
+ * 0x7541. Zero with neither mask bit (or only one of them) is the
+ * plain MOVSW copy. Any other combination is the masked RMW path. */
 void gfx_blit_span(RbGfx *gfx, const uint8_t *src, uint32_t slen,
                    uint16_t di, uint16_t row_bytes, uint16_t rows,
-                   uint8_t src_planes, uint8_t dst_planes);
+                   uint8_t src_planes, uint8_t dst_planes, uint8_t shift);
 
 int  gfx_active(const RbGfx *gfx);
 void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,

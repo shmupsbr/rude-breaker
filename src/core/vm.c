@@ -2064,23 +2064,36 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
 
 /* ---- sound opcodes ------------------------------------------------------ */
 
+/* INT 7Fh from the sound opcodes. AH 0 is music (0x4054) and bails to
+ * BB=0xFF when [bp+0xB9] bit 2 is set. AH 3 (0x40B2) and AH 4 (0x40BE)
+ * always run; the mute bit does not swallow a stop or a fade. */
 static void play_al(RbVm *vm, uint8_t ah, uint8_t al)
 {
-    if (vm->g[0xB9] & 0x04u) {
-        return;
-    }
     if (ah == 0) {
+        if (vm->g[0xB9] & 0x04u) {
+            vm->g[0xBB] = 0xFF;
+            return;
+        }
         if (al != vm->g[0xBB]) {
             vm->g[0xBB] = al;
             sys_play_music(al);
         }
-    } else if (ah == 1) {
-        sys_play_sound(al, 180);
-    } else if (ah == 3) {
+        return;
+    }
+    if (ah == 3) {
         vm->g[0xBB] = 0xFF;
-        sys_play_music(0);
-    } else if (ah == 4) {
+        sys_stop_music();
+        return;
+    }
+    if (ah == 4) {
         vm->g[0xBB] = 0xFF;
+        sys_fade_music(al);
+        return;
+    }
+    if (vm->g[0xB9] & 0x04u) {
+        return;
+    }
+    if (ah == 1) {
         sys_play_sound(al, 180);
     }
 }
@@ -2572,7 +2585,8 @@ static void op_grid(RbVm *vm, int ent, uint16_t si, uint16_t dest, int shift, in
 }
 
 static void op_span(RbVm *vm, uint8_t slot, uint16_t si, uint16_t dest,
-                    uint16_t row_bytes, uint16_t rows, uint16_t bx)
+                    uint16_t row_bytes, uint16_t rows, uint16_t bx,
+                    uint8_t shift)
 {
     uint32_t blen = 0;
     const uint8_t *bank = gfx_bank_data(vm->gfx, slot, &blen);
@@ -2581,7 +2595,7 @@ static void op_span(RbVm *vm, uint8_t slot, uint16_t si, uint16_t dest,
         return;
     }
     gfx_blit_span(vm->gfx, bank + si, blen - si, dest, row_bytes, rows,
-                  (uint8_t)(bx >> 8), (uint8_t)bx);
+                  (uint8_t)(bx >> 8), (uint8_t)bx, shift);
 }
 
 static void note_miss(RbVm *vm, int ent, uint8_t op, uint16_t ip)
@@ -3105,6 +3119,7 @@ static void run_fetch(RbVm *vm, int ent)
                 } else {
                     gfx_palette_delta(vm->gfx, p + off, n - off);
                 }
+                vm->g[0xB8] = 1;
             }
             break;
         }
@@ -3169,24 +3184,35 @@ static void run_fetch(RbVm *vm, int ent)
             su16(vm, ent, 8, (uint16_t)(di + 4u));
             break;
         case 0x3A:
+            /* 0x3ECE: AL is the explicit shift at di+2. */
             op_span(vm, (uint8_t)gu16(vm, rd8(vm, ent, (uint16_t)(di + 7u))),
                     rd16(vm, ent, (uint16_t)(di + 8u)),
                     rd16(vm, ent, di),
                     rd16(vm, ent, (uint16_t)(di + 3u)),
                     rd16(vm, ent, (uint16_t)(di + 5u)),
-                    rd16(vm, ent, (uint16_t)(di + 10u)));
+                    rd16(vm, ent, (uint16_t)(di + 10u)),
+                    rd8(vm, ent, (uint16_t)(di + 2u)));
             su16(vm, ent, 8, (uint16_t)(di + 12u));
             break;
-        case 0x3B:
+        case 0x3B: {
+            /* 0x3F0A builds the address from X>>3 and then AND AL,7.
+             * The dispatcher never loads AL, so the original shift is
+             * whatever the previous opcode left behind. The bits the
+             * address throw away are the pixel alignment, and that is
+             * the shift this blit exists to apply. */
+            uint16_t xw = eu16(vm, ent, rd8(vm, ent, di));
+
             op_span(vm, (uint8_t)gu16(vm, rd8(vm, ent, (uint16_t)(di + 6u))),
                     rd16(vm, ent, (uint16_t)(di + 7u)),
-                    gv_from_xy(eu16(vm, ent, rd8(vm, ent, di)),
+                    gv_from_xy(xw,
                                eu16(vm, ent, rd8(vm, ent, (uint16_t)(di + 1u)))),
                     rd16(vm, ent, (uint16_t)(di + 2u)),
                     rd16(vm, ent, (uint16_t)(di + 4u)),
-                    rd16(vm, ent, (uint16_t)(di + 9u)));
+                    rd16(vm, ent, (uint16_t)(di + 9u)),
+                    (uint8_t)(xw & 7u));
             su16(vm, ent, 8, (uint16_t)(di + 11u));
             break;
+        }
         case 0x48:
             text_u8(vm, rd16(vm, ent, di),
                     vm->g[rd8(vm, ent, (uint16_t)(di + 2u))],
@@ -3231,21 +3257,23 @@ static void run_fetch(RbVm *vm, int ent)
             imm8 = rd8(vm, ent, di);
             su16(vm, ent, 8, (uint16_t)(di + 1u));
             gfx_palette_step(vm->gfx, imm8);
+            vm->g[0xB8] = 1;
             break;
         case 0x42:
         case 0x46:
             imm8 = rd8(vm, ent, di);
             su16(vm, ent, 8, (uint16_t)(di + 1u));
             if (op == 0x42) {
-                play_al(vm, 1, imm8);
+                play_al(vm, 0, imm8);
             } else {
                 play_al(vm, 4, imm8);
             }
             break;
         case 0x43:
+            /* 0x407D: AL is the immediate byte, not a global field. */
             f = rd8(vm, ent, di);
             su16(vm, ent, 8, (uint16_t)(di + 1u));
-            play_al(vm, 1, vm->g[f]);
+            play_al(vm, 1, f);
             break;
         case 0x44:
             f = rd8(vm, ent, di);
@@ -3520,6 +3548,119 @@ void vm_set_input(RbVm *vm, const RbInput *in)
     }
 }
 
+void vm_sustain_ship(RbVm *vm)
+{
+    int i;
+
+    if (!vm) {
+        return;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        if (eu16(vm, i, 0) == 0 || eu16(vm, i, 4) != 0x0012u) {
+            continue;
+        }
+        if (eu16(vm, i, 0x3C) < 20u) {
+            su16(vm, i, 0x3C, 20u);
+        }
+    }
+}
+
+uint8_t vm_global_u8(const RbVm *vm, uint8_t field)
+{
+    if (!vm) {
+        return 0;
+    }
+    return vm->g[field];
+}
+
+uint16_t vm_global_u16(const RbVm *vm, uint8_t field)
+{
+    if (!vm || (unsigned)field + 1u >= G_SIZE) {
+        return 0;
+    }
+    return (uint16_t)vm->g[field] | ((uint16_t)vm->g[field + 1u] << 8);
+}
+
+uint16_t vm_origin_ip(const RbVm *vm, uint16_t origin)
+{
+    int i;
+
+    if (!vm) {
+        return 0;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        if (eu16(vm, i, 0) != 0 && vm->origin[i] == origin) {
+            return eu16(vm, i, 8);
+        }
+    }
+    return 0;
+}
+
+void vm_debug_origins(const RbVm *vm)
+{
+    int i;
+    int s;
+
+    if (!vm) {
+        return;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        uint16_t o;
+        int n;
+        int seen = 0;
+
+        if (eu16(vm, i, 0) == 0) {
+            continue;
+        }
+        o = vm->origin[i];
+        for (s = 0; s < i; s++) {
+            if (eu16(vm, s, 0) != 0 && vm->origin[s] == o) {
+                seen = 1;
+                break;
+            }
+        }
+        if (seen) {
+            continue;
+        }
+        n = 0;
+        for (s = 0; s < ENT_N; s++) {
+            if (eu16(vm, s, 0) != 0 && vm->origin[s] == o) {
+                n++;
+            }
+        }
+        fprintf(stderr,
+                "  origin %04X n=%d ip=%04X type=%04X xy=%d,%d v=%04X,%04X hp=%u\n",
+                o, n, eu16(vm, i, 8), eu16(vm, i, 0),
+                (int)(int16_t)eu16(vm, i, 0x22),
+                (int)(int16_t)eu16(vm, i, 0x24),
+                eu16(vm, i, 0x26), eu16(vm, i, 0x28),
+                (unsigned)eu16(vm, i, 0x3C));
+    }
+}
+
+/* 0x5EF5: OUT 0x64, then a wait until [bp+0x60]+[bp+0x5E] is not above
+ * [bp+0x5C]. The timer IRQ is what makes that compare finish; the stores
+ * after the wait are the part the scripts can observe. */
+static void hook_5ef5(RbVm *vm)
+{
+    uint16_t old = gu16(vm, 0x5E);
+    uint16_t limit = gu16(vm, 0x5C);
+
+    sgu16(vm, 0x5E, limit);
+    sgu16(vm, 0x66, (uint16_t)(limit - old));
+}
+
+/* 0x6C0B: if [bp+0xB8] is set, write the staged palette to the DAC and
+ * clear the flag. The software DAC is already the palette opcodes wrote;
+ * present reads it. */
+static void hook_6c0b(RbVm *vm)
+{
+    if (vm->g[0xB8] == 0) {
+        return;
+    }
+    vm->g[0xB8] = 0;
+}
+
 void vm_frame(RbVm *vm)
 {
     int i;
@@ -3530,6 +3671,15 @@ void vm_frame(RbVm *vm)
     for (i = 0; i < ENT_N; i++) {
         run_entity(vm, i);
     }
+    /* Frame loop 0x09DB / 0x0A01 / 0x0A25. 0x5EF5 is the timer wait.
+     * 0x0FB9 then copies the scroll speed into [bp+0x84]. Map-locked
+     * enemies add that word to Y, so a stage that leaves it at the
+     * init zero never brings them on screen and never clears [bp+0xAE].
+     * The GDC register writes in the same routine are display-only.
+     * 0x6C0B flushes the staged palette. */
+    hook_5ef5(vm);
+    sgu16(vm, 0x84, gu16(vm, 0x82));
+    hook_6c0b(vm);
     vm->prev_held = vm->held;
 }
 

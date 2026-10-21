@@ -227,6 +227,99 @@ int main(int argc, char **argv)
     }
     run_stage(vm, 3, 1200, 0);
     run_stage(vm, 5, 1200, 0);
+    /* The finale at 0x3C4D sets [bp+0xCC]. Each next chunk's init
+     * writes [bp+0xC5]. Keeping the ship alive walks 1..6 and lands
+     * on record 1 header 3. */
+    {
+        RbInput in;
+        RbVmInfo info;
+        int f;
+        int seen[7];
+        int expect = 1;
+        int done = 0;
+
+        memset(seen, 0, sizeof seen);
+        memset(&in, 0, sizeof in);
+        in.buttons = RB_BTN_A;
+        vm_reset_play(vm, 1);
+        for (f = 0; f < 40000; f++) {
+            uint8_t c5;
+
+            vm_sustain_ship(vm);
+            vm_set_input(vm, &in);
+            vm_frame(vm);
+            c5 = vm_global_u8(vm, 0xC5);
+            vm_info(vm, &info);
+            if (c5 >= 1 && c5 <= 6 && !seen[c5]) {
+                seen[c5] = f + 1;
+                printf("stage-march f%d c5=%u chunk=%u rec=%u hdr=%u nat_miss=%u\n",
+                       f + 1, (unsigned)c5, (unsigned)info.chunk,
+                       (unsigned)info.load_record, (unsigned)info.load_header,
+                       (unsigned)info.nat_miss);
+                if ((int)c5 == expect) {
+                    expect++;
+                }
+            }
+            if (c5 == 6 && info.chunk == 1 && info.load_record == 1 &&
+                info.load_header == 3) {
+                done = f + 1;
+                break;
+            }
+        }
+        printf("stage-march done=%d expect=%d nat_miss=%u\n",
+               done, expect, (unsigned)info.nat_miss);
+        if (done == 0 || expect != 7 || info.nat_miss != 0) {
+            fprintf(stderr, "stage march did not reach the ending in order\n");
+            vm_destroy(vm);
+            assets_free(&assets);
+            return 1;
+        }
+    }
+    /* Second death loads record 1 header 2. Name entry wants fire
+     * edges, so the button is pulsed. Ranking copies C7 back into C5
+     * and 0x78C6 reloads chunk 2. */
+    {
+        RbInput in;
+        RbVmInfo info;
+        int f;
+        int over = 0;
+        int back = 0;
+
+        memset(&in, 0, sizeof in);
+        vm_reset_play(vm, 1);
+        for (f = 0; f < 12000 && back == 0; f++) {
+            if (over == 0) {
+                in.buttons = RB_BTN_A;
+            } else {
+                in.buttons = ((f & 3) == 0) ? RB_BTN_A : 0;
+            }
+            vm_set_input(vm, &in);
+            vm_frame(vm);
+            vm_info(vm, &info);
+            if (over == 0 && info.chunk == 1 && info.load_record == 1 &&
+                info.load_header == 2) {
+                over = f + 1;
+                printf("game-over f%d c5=%u score=%u\n", over,
+                       (unsigned)vm_global_u8(vm, 0xC5),
+                       (unsigned)info.score);
+            }
+            if (over != 0 && info.chunk == 2 &&
+                vm_global_u8(vm, 0xC5) == 1 &&
+                info.load_record == 2 && info.load_header == 0) {
+                back = f + 1;
+            }
+        }
+        printf("continue back=%d over=%d chunk=%u c5=%u rec=%u hdr=%u\n",
+               back, over, (unsigned)info.chunk,
+               (unsigned)vm_global_u8(vm, 0xC5),
+               (unsigned)info.load_record, (unsigned)info.load_header);
+        if (back == 0 || vm_global_u8(vm, 0xC5) != 1) {
+            fprintf(stderr, "continue did not reload stage 1\n");
+            vm_destroy(vm);
+            assets_free(&assets);
+            return 1;
+        }
+    }
     vm_destroy(vm);
     assets_free(&assets);
     return 0;

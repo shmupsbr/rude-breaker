@@ -698,15 +698,144 @@ void gfx_blit_grid(RbGfx *gfx, const uint8_t *bank, uint32_t blen,
     gfx->active = 1;
 }
 
+/* GRCG RMW: a CPU 1-bit writes `tile` into the selected planes and a
+ * 0-bit leaves the pixel alone. Tile 0 therefore clears; tile 1 sets. */
+static void grcg_bit(RbGfx *gfx, int x, int y, uint8_t planes, int set)
+{
+    uint8_t *px;
+
+    if ((unsigned)x >= (unsigned)RB_GFX_W || (unsigned)y >= (unsigned)RB_GFX_H) {
+        return;
+    }
+    px = &gfx->pix[(size_t)y * (size_t)RB_GFX_W + (size_t)x];
+    if (set) {
+        *px = (uint8_t)(*px | planes);
+    } else {
+        *px = (uint8_t)(*px & (uint8_t)~planes);
+    }
+}
+
+static void span_skip(const uint8_t **p, const uint8_t *end, uint32_t n)
+{
+    if ((uint32_t)(end - *p) <= n) {
+        *p = end;
+    } else {
+        *p += n;
+    }
+}
+
+/* One row of 0x7541 / 0x7795. shift 0 writes row_bytes bytes. A shift of
+ * 1..7 inserts that many zero pixels on the left (bit 7 is leftmost) and
+ * spills into one extra byte, which is what 0x7795 stores. A solid row
+ * (src_row == NULL) is the 0xFF rectangle cleared under tile 0. */
+static void grcg_row(RbGfx *gfx, uint16_t di, const uint8_t *src_row,
+                     int row_bytes, int shift, uint8_t planes, int set)
+{
+    int out_bits = row_bytes * 8 + shift;
+    int i;
+
+    for (i = 0; i < out_bits; i++) {
+        int src_i = i - shift;
+        int bit = 0;
+        uint16_t at;
+        int x;
+        int y;
+
+        if (src_i >= 0) {
+            if (!src_row) {
+                bit = 1;
+            } else if ((src_i >> 3) < row_bytes) {
+                bit = (src_row[src_i >> 3] >> (7 - (src_i & 7))) & 1;
+            }
+        }
+        if (!bit) {
+            continue;
+        }
+        at = (uint16_t)(di + (uint16_t)(i >> 3));
+        x = (int)(at % 80u) * 8 + (i & 7);
+        y = (int)(at / 80u);
+        grcg_bit(gfx, x, y, planes, set);
+    }
+}
+
+/* 0x7541. AL==0 and both mask bits is the unshifted erase-then-paint.
+ * AL!=0 is the shifted form at 0x7679. The original skip multiplies by
+ * CX while CX still holds (row_bytes<<8)|shift; the copy at 0x7795
+ * consumes row_bytes per row, and that is the count used here. */
+static void blit_masked(RbGfx *gfx, const uint8_t *src, uint32_t slen,
+                        uint16_t di, uint16_t row_bytes, uint16_t rows,
+                        uint8_t src_planes, uint8_t dst_planes, int shift)
+{
+    static const uint8_t bit[4] = {0x01u, 0x02u, 0x04u, 0x08u};
+    const uint8_t *p = src;
+    const uint8_t *end = src + slen;
+    uint8_t row[96];
+    int mask_src;
+    int plane;
+    uint16_t row_i;
+
+    if (row_bytes > sizeof row) {
+        return;
+    }
+    if (shift < 0) {
+        shift = 0;
+    }
+    if (shift > 7) {
+        shift &= 7;
+    }
+    mask_src = (src_planes & 0x10u) && (dst_planes & 0x10u);
+    if ((src_planes & 0x10u) && !mask_src) {
+        span_skip(&p, end, (uint32_t)row_bytes * rows);
+    }
+    for (row_i = 0; row_i < rows; row_i++) {
+        uint16_t at = (uint16_t)(di + (uint16_t)(row_i * 0x50u));
+
+        if (mask_src) {
+            uint16_t b;
+
+            for (b = 0; b < row_bytes; b++) {
+                row[b] = (p < end) ? *p++ : 0;
+            }
+            grcg_row(gfx, at, row, (int)row_bytes, shift, 0x0Fu, 0);
+        } else {
+            grcg_row(gfx, at, NULL, (int)row_bytes, shift, 0x0Fu, 0);
+        }
+    }
+    for (plane = 0; plane < 4; plane++) {
+        if (dst_planes & bit[plane]) {
+            if (src_planes & bit[plane]) {
+                for (row_i = 0; row_i < rows; row_i++) {
+                    uint16_t b;
+                    uint16_t at = (uint16_t)(di + (uint16_t)(row_i * 0x50u));
+
+                    for (b = 0; b < row_bytes; b++) {
+                        row[b] = (p < end) ? *p++ : 0;
+                    }
+                    grcg_row(gfx, at, row, (int)row_bytes, shift, bit[plane], 1);
+                }
+            }
+        } else if (src_planes & bit[plane]) {
+            span_skip(&p, end, (uint32_t)row_bytes * rows);
+        }
+    }
+    gfx->active = 1;
+}
+
 void gfx_blit_span(RbGfx *gfx, const uint8_t *src, uint32_t slen,
                    uint16_t di, uint16_t row_bytes, uint16_t rows,
-                   uint8_t src_planes, uint8_t dst_planes)
+                   uint8_t src_planes, uint8_t dst_planes, uint8_t shift)
 {
     static const uint8_t bit[4] = {0x01u, 0x02u, 0x04u, 0x08u};
     uint32_t si = 0;
     int plane;
 
     if (!gfx || !src || row_bytes == 0 || rows == 0) {
+        return;
+    }
+    /* 0x7428: AL!=0, or both BH and BL carrying bit 0x10, enters 0x7541. */
+    if (shift != 0 || ((src_planes & 0x10u) && (dst_planes & 0x10u))) {
+        blit_masked(gfx, src, slen, di, row_bytes, rows,
+                    src_planes, dst_planes, (int)(shift & 7u));
         return;
     }
     if (src_planes & 0x10u) {

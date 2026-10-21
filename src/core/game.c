@@ -71,6 +71,7 @@ void game_init(RbGame *g, const char *asset_dir)
     enemy_pool_init(&g_enemies);
     bullet_pool_init(&g_bullets);
 
+    sys_audio_bind(g->asset_dir);
     if (assets_load(&g_assets, g->asset_dir) == 0) {
         fprintf(stderr, "assets: loaded SGM1 (%u chunks, %zu bytes) from %s\n",
                 (unsigned)g_assets.sgm1.count, g_assets.sgm1_size, g->asset_dir);
