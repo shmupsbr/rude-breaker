@@ -291,7 +291,9 @@ int main(int argc, char **argv)
                 info.load_header == 2) {
                 over = frame;
             }
-            if (over != 0 && !result_shot && frame == over + 80 &&
+            /* +80 is the fade to black before the reload. The result
+             * and name entry are on screen from about +16. */
+            if (over != 0 && !result_shot && frame == over + 40 &&
                 info.chunk == 1) {
                 result_shot = 1;
                 snprintf(path, sizeof path, "%s/result_screen.png", out_dir);
