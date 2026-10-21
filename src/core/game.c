@@ -251,12 +251,14 @@ void game_render(const RbGame *g)
                 }
             }
             vm_info(g_vm, &info);
-            snprintf(line, sizeof(line), "SCORE %u  HI %u  LIVES %d",
-                     (unsigned)g->score, (unsigned)g->hiscore, (int)info.lives);
-            sys_draw_text(8, 8, line, 0xFFFFFFFFu);
-            snprintf(line, sizeof(line), "STAGE %u  CELL %u  SPD %d",
-                     (unsigned)g->stage, (unsigned)info.cell, (int)info.speed);
-            sys_draw_text(8, 24, line, 0xFFC0C0C0u);
+            if (!(frame && vm_gfx_active(g_vm))) {
+                snprintf(line, sizeof(line), "SCORE %u  HI %u  LIVES %d",
+                         (unsigned)g->score, (unsigned)g->hiscore, (int)info.lives);
+                sys_draw_text(8, 8, line, 0xFFFFFFFFu);
+                snprintf(line, sizeof(line), "STAGE %u  CELL %u  SPD %d",
+                         (unsigned)g->stage, (unsigned)info.cell, (int)info.speed);
+                sys_draw_text(8, 24, line, 0xFFC0C0C0u);
+            }
         } else {
             player_render(&g->player);
             enemy_pool_render(&g_enemies);
