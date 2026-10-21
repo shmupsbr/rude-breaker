@@ -513,26 +513,20 @@ void gfx_palette_delta(RbGfx *gfx, const uint8_t *p, uint32_t n)
     }
 }
 
+/* 0x6C0B samples the palette out to the DAC. It does not write the
+ * words back: a fade with shift 0 accumulates in the low nibble, and
+ * storing (low >> 4) << 4 would clear that nibble every frame. */
 void gfx_dac_flush(RbGfx *gfx)
 {
-    int idx;
-    int c;
+    (void)gfx;
+}
 
-    if (!gfx) {
-        return;
+static int dac_level(int16_t w)
+{
+    if ((w & 0xFF00) != 0) {
+        return 15;
     }
-    for (idx = 0; idx < 16; idx++) {
-        for (c = 0; c < 3; c++) {
-            int16_t w = gfx->pal[idx][c];
-            uint8_t level;
-
-            if ((w & 0xFF00) != 0) {
-                w = 0x00F0;
-            }
-            level = (uint8_t)(((uint16_t)w & 0xFFu) >> 4);
-            gfx->pal[idx][c] = (int16_t)((int16_t)level << 4);
-        }
-    }
+    return (int)(((uint16_t)w & 0xFFu) >> 4);
 }
 
 void gfx_palette_step(RbGfx *gfx, uint8_t shift)
@@ -1039,14 +1033,8 @@ void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,
             uint32_t px = 0xFFu;
 
             for (ch = 0; ch < 3; ch++) {
-                int v = gfx->pal[idx][ch] >> 4;
+                int v = dac_level(gfx->pal[idx][ch]);
 
-                if (v < 0) {
-                    v = 0;
-                }
-                if (v > 15) {
-                    v = 15;
-                }
                 px |= (uint32_t)(v * 17) << (8 + (2 - ch) * 8);
             }
             /* pal[][0] is red, [1] green, [2] blue, matching ports AC/AA/AE. */
