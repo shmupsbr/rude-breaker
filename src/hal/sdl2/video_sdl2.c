@@ -42,8 +42,6 @@ void sys_message(const char *title, const char *text)
 
 int sys_init(const char *title)
 {
-    Uint32 render_flags = SDL_RENDERER_ACCELERATED;
-
     SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
@@ -60,16 +58,23 @@ int sys_init(const char *title)
         return -1;
     }
 
-    if (!frames_are_fast()) {
-        render_flags |= SDL_RENDERER_PRESENTVSYNC;
-    }
-    g_rb_renderer = SDL_CreateRenderer(g_rb_window, -1, render_flags);
+    /* The logic rate is a fixed timer in sys_wait_vblank. Present vsync
+     * would lock that to a 120 Hz or 144 Hz monitor and run the game
+     * several times too fast. */
+    g_rb_renderer = SDL_CreateRenderer(g_rb_window, -1, SDL_RENDERER_ACCELERATED);
     if (!g_rb_renderer) {
         g_rb_renderer = SDL_CreateRenderer(g_rb_window, -1, 0);
     }
     if (!g_rb_renderer) {
         fprintf(stderr, "SDL_CreateRenderer: %s\n", SDL_GetError());
         return -1;
+    }
+    {
+        SDL_RendererInfo info;
+
+        if (SDL_GetRendererInfo(g_rb_renderer, &info) == 0 && info.name) {
+            fprintf(stderr, "renderer: %s\n", info.name);
+        }
     }
     SDL_RenderSetLogicalSize(g_rb_renderer, RB_NATIVE_W, RB_NATIVE_H);
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
@@ -254,26 +259,85 @@ void sys_draw_text(int16_t x, int16_t y, const char *utf8, uint32_t rgba)
     }
 }
 
-void sys_wait_vblank(void)
+static void note_timing(unsigned counts)
 {
-    /* Prefer vsync via Present; also clamp to ~60 Hz if vsync is off.
-     * RUDEBR_FAST skips the clamp so a smoke test can walk a stage
-     * without waiting out 60 Hz. It is not a player control. */
-    static uint32_t last;
-    uint32_t now;
-    const uint32_t frame_ms = 1000u / (uint32_t)RB_TARGET_FPS;
+    static uint64_t origin;
+    static uint64_t window;
+    static unsigned frames;
+    const char *v = getenv("RUDEBR_TIMING");
+    uint64_t freq;
+    uint64_t now;
 
+    if (!v || !v[0] || strcmp(v, "0") == 0) {
+        return;
+    }
+    freq = SDL_GetPerformanceFrequency();
+    now = SDL_GetPerformanceCounter();
+    if (freq == 0) {
+        return;
+    }
+    if (frames == 0) {
+        origin = now;
+        window = now;
+    }
+    frames++;
+    if ((frames % 60u) == 0u && now > window) {
+        double wall_ms = (double)(now - origin) * 1000.0 / (double)freq;
+        double fps = 60.0 * (double)freq / (double)(now - window);
+
+        fprintf(stderr,
+                "timing: frames=%u wall_ms=%.0f logic_fps=%.2f vsyncs=%u\n",
+                frames, wall_ms, fps, counts);
+        window = now;
+    }
+}
+
+void sys_wait_vblank(unsigned counts)
+{
+    /* Absolute deadline so a slow frame does not stack extra delay, and
+     * a late frame resyncs instead of trying to catch up. RUDEBR_FAST
+     * skips the wait. It is not a player control. */
+    static uint64_t next;
+    uint64_t freq;
+    uint64_t now;
+    uint64_t step;
+
+    if (counts == 0u) {
+        counts = 1u;
+    }
+    if (counts > 30u) {
+        counts = 30u;
+    }
+    note_timing(counts);
     if (frames_are_fast()) {
         return;
     }
-    now = SDL_GetTicks();
-    if (last != 0) {
-        uint32_t elapsed = now - last;
-        if (elapsed < frame_ms) {
-            SDL_Delay(frame_ms - elapsed);
+    freq = SDL_GetPerformanceFrequency();
+    now = SDL_GetPerformanceCounter();
+    if (freq == 0) {
+        SDL_Delay((1000u / (unsigned)RB_WAIT_HZ) * counts);
+        return;
+    }
+    step = (freq * (uint64_t)counts) / (uint64_t)RB_WAIT_HZ;
+    if (step == 0u) {
+        step = 1u;
+    }
+    if (next == 0u || now > next + step) {
+        next = now;
+    }
+    next += step;
+    while ((now = SDL_GetPerformanceCounter()) + freq / 500ull < next) {
+        uint64_t left = next - now;
+        uint32_t ms = (uint32_t)((left * 1000ull) / freq);
+
+        if (ms > 1u) {
+            SDL_Delay(ms - 1u);
+        } else {
+            break;
         }
     }
-    last = SDL_GetTicks();
+    while (SDL_GetPerformanceCounter() < next) {
+    }
 }
 
 void sys_present(void)

@@ -59,6 +59,16 @@ int sys_audio_bind(const char *dir)
     return rc;
 }
 
+int sys_audio_bind_mem(const uint8_t *com, size_t com_n,
+                       const uint8_t *song, size_t song_n,
+                       const char *rhythm_dir)
+{
+    int rc = fplay_bind_mem(com, com_n, song, song_n, rhythm_dir);
+
+    open_device();
+    return rc;
+}
+
 int sys_play_sound(uint16_t id, uint8_t vol)
 {
     (void)vol;

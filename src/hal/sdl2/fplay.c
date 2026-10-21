@@ -1505,27 +1505,15 @@ int fplay_ready(void)
     return ready;
 }
 
-int fplay_bind(const char *dir)
+int fplay_bind_mem(const uint8_t *com, size_t com_n,
+                   const uint8_t *song, size_t song_n,
+                   const char *rhythm_dir)
 {
-    char path[1024];
-    uint8_t *com;
-    uint8_t *song;
-    size_t com_n = 0;
-    size_t song_n = 0;
     size_t copy;
 
     ready = 0;
-    if (!dir || !dir[0]) {
-        return -1;
-    }
-    snprintf(path, sizeof path, "%s/FPLAY.COM", dir);
-    com = read_file(path, &com_n);
-    snprintf(path, sizeof path, "%s/SONG.DAT", dir);
-    song = read_file(path, &song_n);
-    if (!com || !song) {
-        free(com);
-        free(song);
-        fprintf(stderr, "fplay: FPLAY.COM or SONG.DAT missing in %s\n", dir);
+    if (!com || com_n == 0 || !song || song_n == 0) {
+        fprintf(stderr, "fplay: FPLAY.COM or SONG.DAT missing\n");
         return -1;
     }
     memset(mem, 0, sizeof mem);
@@ -1545,12 +1533,10 @@ int fplay_bind(const char *dir)
         copy = MEM_N - 0x4000u;
     }
     memcpy(mem + 0x4000, song, copy);
-    free(com);
-    free(song);
     flags = IF | 2u;
     r[R_SP] = 0xFFFE;
     ip = 0;
-    opna_autoload_rhythm(dir);
+    opna_autoload_rhythm(rhythm_dir);
     opna_reset();
     enter_near(0x0BD0);
     ready = (unknown_op == 0 && mem[0x280] != 0) ? 1 : 0;
@@ -1558,6 +1544,34 @@ int fplay_bind(const char *dir)
     fprintf(stderr, "fplay: %u tracks, writes=%u unknown=%02X@%04X ready=%d\n",
             mem[0x280], opn_writes, unknown_op, unknown_ip, ready);
     return ready ? 0 : -1;
+}
+
+int fplay_bind(const char *dir)
+{
+    char path[1024];
+    uint8_t *com;
+    uint8_t *song;
+    size_t com_n = 0;
+    size_t song_n = 0;
+    int rc;
+
+    if (!dir || !dir[0]) {
+        return -1;
+    }
+    snprintf(path, sizeof path, "%s/FPLAY.COM", dir);
+    com = read_file(path, &com_n);
+    snprintf(path, sizeof path, "%s/SONG.DAT", dir);
+    song = read_file(path, &song_n);
+    if (!com || !song) {
+        free(com);
+        free(song);
+        fprintf(stderr, "fplay: FPLAY.COM or SONG.DAT missing in %s\n", dir);
+        return -1;
+    }
+    rc = fplay_bind_mem(com, com_n, song, song_n, dir);
+    free(com);
+    free(song);
+    return rc;
 }
 
 void fplay_command(uint8_t ah, uint8_t al)

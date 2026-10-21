@@ -22,6 +22,8 @@ CORE_SRCS := \
 	src/core/stage.c \
 	src/core/stage_data.c \
 	src/core/assets.c \
+	src/core/diskimg.c \
+	src/core/inflate.c \
 	src/core/vm.c \
 	src/core/gfx.c
 

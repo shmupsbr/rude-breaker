@@ -1028,10 +1028,19 @@ void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,
             src -= RB_GFX_H;
         }
         for (x = 0; x < RB_GFX_W; x++) {
-            uint8_t idx = gfx->pix[(size_t)src * RB_GFX_W + (size_t)x];
+            uint8_t idx;
             int ch;
             uint32_t px = 0xFFu;
 
+            /* Real captures keep the 80 px side columns pure black. GVRAM
+             * is 640 wide and index 0 is the stage color, so those columns
+             * would otherwise show the background and any sprite that
+             * spills past the playfield. Text is painted after this. */
+            if (x < 80 || x >= 560) {
+                rgba[(size_t)y * (size_t)w + (size_t)x] = 0x000000FFu;
+                continue;
+            }
+            idx = gfx->pix[(size_t)src * RB_GFX_W + (size_t)x];
             for (ch = 0; ch < 3; ch++) {
                 int v = dac_level(gfx->pal[idx][ch]);
 

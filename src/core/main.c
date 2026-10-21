@@ -1,11 +1,12 @@
 /**
  * Rude Breaker — program entry.
  *
- * Disk files are resolved in this order: an explicit directory argument,
- * RUDEBR_ASSETS, the executable's directory, <exe>/RUDEBR, then the
- * in-tree assets/raw/RUDEBR used while developing. The packaged binary
- * ships with none of those files.
+ * Data comes from loose files (SGM1.DAT, FPLAY.COM, SONG.DAT) or from a
+ * PC-98 disk image. Search order: the command argument, RUDEBR_ASSETS,
+ * the executable's directory, <exe>/RUDEBR, then assets/raw/RUDEBR.
+ * An image may be a raw .hdm, .fdi, .d88, .hdi, .nhd, or a zip of one.
  */
+#include "diskimg.h"
 #include "exepath.h"
 #include "game.h"
 #include "hal.h"
@@ -14,22 +15,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-static char g_asset_dir[1024];
-
-static int file_readable(const char *path)
-{
-    FILE *fp = fopen(path, "rb");
-
-    if (!fp) {
-        return 0;
-    }
-    fclose(fp);
-    return 1;
-}
-
-static int dir_has_sgm1(const char *dir)
+static int loose_sgm1(const char *dir)
 {
     char path[1200];
+    FILE *fp;
     int n;
 
     if (!dir || !dir[0]) {
@@ -39,15 +28,34 @@ static int dir_has_sgm1(const char *dir)
     if (n <= 0 || (size_t)n >= sizeof(path)) {
         return 0;
     }
-    return file_readable(path);
+    fp = fopen(path, "rb");
+    if (fp) {
+        fclose(fp);
+        return 1;
+    }
+    n = snprintf(path, sizeof(path), "%s/RUDEBR/SGM1.DAT", dir);
+    if (n <= 0 || (size_t)n >= sizeof(path)) {
+        return 0;
+    }
+    fp = fopen(path, "rb");
+    if (!fp) {
+        return 0;
+    }
+    fclose(fp);
+    return 1;
 }
 
-static void set_dir(const char *dir)
+static int dir_usable(const char *dir)
 {
-    snprintf(g_asset_dir, sizeof(g_asset_dir), "%s", dir ? dir : "");
+    char image[1200];
+
+    if (loose_sgm1(dir)) {
+        return 1;
+    }
+    return disk_find_image(dir, image, sizeof(image)) == 0;
 }
 
-static void choose_assets(int argc, char **argv)
+static void choose_source(int argc, char **argv, char *out, size_t n)
 {
     const char *cli = NULL;
     const char *env;
@@ -56,8 +64,7 @@ static void choose_assets(int argc, char **argv)
     int have_exe = 0;
     int i;
 
-    g_asset_dir[0] = 0;
-    exe[0] = 0;
+    out[0] = 0;
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--ym2608-rom") == 0) {
             if (i + 1 < argc) {
@@ -67,10 +74,11 @@ static void choose_assets(int argc, char **argv)
         }
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             fprintf(stderr,
-                    "usage: rudebreaker [data-directory] [--ym2608-rom file]\n"
+                    "usage: rudebreaker [folder-or-disk-image] [--ym2608-rom file]\n"
                     "\n"
-                    "Put SGM1.DAT, FPLAY.COM, and SONG.DAT from your own\n"
-                    "Rude Breaker disk next to this program. RBRANK.DAT and\n"
+                    "Put SGM1.DAT, FPLAY.COM, and SONG.DAT next to this program,\n"
+                    "or drop a PC-98 disk image there. Images: .hdm .fdi .d88\n"
+                    ".hdi .nhd, or a zip of one of those. RBRANK.DAT and\n"
                     "ym2608_adpcm_rom.bin are optional. SGC.COM, READJS.COM,\n"
                     "and RUDEBR.BAT are not read.\n");
             exit(0);
@@ -81,65 +89,74 @@ static void choose_assets(int argc, char **argv)
     }
 
     if (cli && cli[0]) {
-        set_dir(cli);
+        snprintf(out, n, "%s", cli);
         return;
     }
     env = getenv("RUDEBR_ASSETS");
     if (env && env[0]) {
-        set_dir(env);
+        snprintf(out, n, "%s", env);
         return;
     }
     if (rb_exe_dir(exe, sizeof(exe)) == 0) {
         have_exe = 1;
-        if (dir_has_sgm1(exe)) {
-            set_dir(exe);
+        if (dir_usable(exe)) {
+            snprintf(out, n, "%s", exe);
             return;
         }
         snprintf(nested, sizeof(nested), "%s/RUDEBR", exe);
-        if (dir_has_sgm1(nested)) {
-            set_dir(nested);
+        if (dir_usable(nested)) {
+            snprintf(out, n, "%s", nested);
             return;
         }
     }
-    if (dir_has_sgm1("assets/raw/RUDEBR")) {
-        set_dir("assets/raw/RUDEBR");
+    if (loose_sgm1("assets/raw/RUDEBR")) {
+        snprintf(out, n, "%s", "assets/raw/RUDEBR");
         return;
     }
     if (have_exe) {
-        set_dir(exe);
+        snprintf(out, n, "%s", exe);
         return;
     }
-    set_dir("assets/raw/RUDEBR");
+    snprintf(out, n, "%s", "assets/raw/RUDEBR");
 }
 
 int main(int argc, char **argv)
 {
     RbGame game;
+    RbDisk disk;
+    char source[1024];
     const char *stop;
     int rc = 0;
 
-    choose_assets(argc, argv);
-    fprintf(stderr, "rudebreaker: data directory: %s\n", g_asset_dir);
+    choose_source(argc, argv, source, sizeof(source));
+    fprintf(stderr, "rudebreaker: data directory: %s\n", source);
+    disk_init(&disk);
+    if (disk_open(source, &disk) != 0 && disk.label[0] == 0) {
+        snprintf(disk.label, sizeof(disk.label), "%s", source);
+    }
 
     if (sys_init("Rude Breaker") != 0) {
         fprintf(stderr, "sys_init failed\n");
+        disk_free(&disk);
         return 1;
     }
 
-    game_init(&game, g_asset_dir);
+    game_init(&game, &disk);
+    disk_free(&disk);
 
-    /* Same order as frame_loop at game image 0x933: poll input, run the
-     * entity phase, draw, wait for vertical blank, then present. */
     while (!game_wants_quit(&game)) {
         sys_read_input(&game.input);
         game_update(&game);
         game_render(&game);
-        sys_wait_vblank();
+        sys_wait_vblank(game_vsyncs(&game));
         sys_present();
     }
 
+    if (game_data_missing()) {
+        rc = 1;
+    }
     stop = getenv("RUDEBR_STOP");
-    if (stop && stop[0] && !game_smoke_done()) {
+    if (stop && stop[0] && !game_data_missing() && !game_smoke_done()) {
         fprintf(stderr, "smoke: stop condition not reached (%s)\n", stop);
         rc = 3;
     }

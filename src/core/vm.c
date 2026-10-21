@@ -3551,6 +3551,58 @@ void vm_destroy(RbVm *vm)
     free(vm);
 }
 
+/* Chunk 1 header 0 is the boot script (word at offset 0, documented 0x78B0).
+ * Stage entry stays on vm_reset_play so the march does not run the attract. */
+void vm_reset_boot(RbVm *vm)
+{
+    uint16_t ip;
+
+    if (!vm) {
+        return;
+    }
+    memset(vm->ent, 0, sizeof vm->ent);
+    memset(vm->g, 0, sizeof vm->g);
+    memset(vm->vars, 0, sizeof vm->vars);
+    memset(vm->mode, 0, sizeof vm->mode);
+    memset(vm->origin, 0, sizeof vm->origin);
+    memset(vm->script_entered, 0, sizeof vm->script_entered);
+    vm->disp_al = 0;
+    vm->spawns = 0;
+    vm->step_faults = 0;
+    vm->op_miss = 0;
+    vm->nat_miss = 0;
+    vm->aim_ops = 0;
+    vm->ship_natives = 0;
+    vm->option_natives = 0;
+    vm->loads = 0;
+    vm->quit = 0;
+    vm->boot = 0;
+    vm->rng_mix = 0x1234u;
+    vm->rng_cf = 0;
+    sgu16(vm, 0x5C, 0x1234u);
+    sgu16(vm, 0x62, 3);
+    sgu16(vm, 0x60, 3);
+    memset(vm->rank, 0, sizeof vm->rank);
+    memset(vm->text, 0, sizeof vm->text);
+    vm->text_di = 0;
+    vm->text_saved = 0;
+    vm->text_attr = 0x5756u;
+    sgu16(vm, 0x56, (uint16_t)RANK_BASE);
+    gfx_reset(vm->gfx);
+    install_boot_font(vm);
+    vm->view_chunk = 1;
+    if (ensure_chunk(vm, 1) != 0 || vm->clen[1] < 2u) {
+        return;
+    }
+    ip = read_u16_le(vm->chunk[1]);
+    clear_slot(vm, 0);
+    su16(vm, 0, 0, 0x4000u);
+    su16(vm, 0, 8, ip);
+    vm->cof[0] = 1;
+    vm->origin[0] = ip;
+    vm->mode[0] = MODE_FETCH;
+}
+
 void vm_reset_play(RbVm *vm, uint16_t stage)
 {
     unsigned chunk;
@@ -3733,9 +3785,10 @@ void vm_debug_origins(const RbVm *vm)
     }
 }
 
-/* 0x5EF5: OUT 0x64, then a wait until [bp+0x60]+[bp+0x5E] is not above
- * [bp+0x5C]. The timer IRQ is what makes that compare finish; the stores
- * after the wait are the part the scripts can observe. */
+/* 0x5EF5: OUT 0x64, then spin until the vsync counter [bp+0x5C] has
+ * advanced by [bp+0x60]. That counter is also the RNG seed, so the port
+ * does not bump it. The host timer in sys_wait_vblank sleeps the same
+ * count. The stores below are what later script reads can observe. */
 static void hook_5ef5(RbVm *vm)
 {
     uint16_t old = gu16(vm, 0x5E);
@@ -3900,6 +3953,24 @@ int vm_collect_sprites(const RbVm *vm, RbVmSprite *out, int max)
         }
     }
     return n;
+}
+
+unsigned vm_vsync_count(const RbVm *vm)
+{
+    unsigned n;
+
+    if (!vm) {
+        return 1;
+    }
+    n = gu16(vm, 0x60);
+    return n == 0u ? 1u : n;
+}
+
+void vm_ack_boot(RbVm *vm)
+{
+    if (vm) {
+        vm->boot = 0;
+    }
 }
 
 int vm_quit_requested(const RbVm *vm)

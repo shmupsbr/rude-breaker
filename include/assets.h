@@ -34,6 +34,9 @@ typedef struct RbAssets {
 } RbAssets;
 
 int  assets_load(RbAssets *a, const char *rudebr_dir);
+int  assets_load_mem(RbAssets *a, const uint8_t *sgm1, size_t sgm1_n,
+                     const uint8_t *song, size_t song_n,
+                     const uint8_t *rank, size_t rank_n);
 void assets_free(RbAssets *a);
 const uint8_t *assets_sgm1_chunk(const RbAssets *a, uint16_t index,
                                  uint32_t *size_out);

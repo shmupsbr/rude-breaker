@@ -1,6 +1,7 @@
 #ifndef RUDEBREAKER_GAME_H
 #define RUDEBREAKER_GAME_H
 
+#include "diskimg.h"
 #include "hal.h"
 
 #ifdef __cplusplus
@@ -33,10 +34,14 @@ typedef struct RbGame {
     char        asset_dir[512];
 } RbGame;
 
-void game_init(RbGame *g, const char *asset_dir);
+void game_init(RbGame *g, const RbDisk *disk);
 void game_update(RbGame *g);
 void game_render(const RbGame *g);
+/* How many PC-98 wait counts this logic frame should sleep. */
+unsigned game_vsyncs(const RbGame *g);
 int  game_wants_quit(const RbGame *g);
+/* 1 when required disk files were missing and scaffold mode is off. */
+int  game_data_missing(void);
 /* 1 after RUDEBR_STOP's event was reached. Players never set that variable. */
 int  game_smoke_done(void);
 

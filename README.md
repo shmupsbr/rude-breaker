@@ -54,14 +54,14 @@ The movement keys match the PC-98 clusters. WASD is an extra set.
 | Action | Keyboard | Gamepad |
 |--------|----------|---------|
 | Move | Arrow keys, keypad 8 / 4 / 6 / 2, or W A S D | Left stick or d-pad |
-| Fire, and start from the title | Z, Space, or keypad 0 | South (A) |
+| Fire, and the title trigger | Z, Space, or keypad 0 | South (A) |
 | Mode | X, N, M, Enter, or keypad Enter | East (B) |
 | Special | Left Shift or Right Shift | West (X) |
-| Back to the title | Escape | Start |
+| Escape | Escape | Start |
 | Quit | F10 | Back |
 | Original number keys | 1, 2, 3, 4 | — |
 
-The title and the ranking screen both wait for Z or Space.
+The original logo, title, and menus run from the disk script. Z or Space is the trigger those screens read. Escape is the PC-98 escape bit. F10 quits.
 
 ### Rhythm ROM
 
@@ -171,7 +171,8 @@ controls, and the packaged README section above is the player list.
 
 | Variable | Effect |
 |----------|--------|
-| `RUDEBR_FAST=1` | Skip the 60 Hz wait. |
+| `RUDEBR_FAST=1` | Skip the PC-98 wait (about 40 logic frames per second). |
+| `RUDEBR_TIMING=1` | Log logic frames per second. Not a player control. |
 | `RUDEBR_TRACE=1` | Log state, ship, chunk, and score. |
 | `RUDEBR_HOLD=A,RIGHT` | Hold those buttons. Tokens: `A` `B` `C` `LEFT` `RIGHT` `UP` `DOWN` `START` `QUIT` `1`–`4`. |
 | `RUDEBR_SUSTAIN=1` | Keep the ship above the death hit so a stage can finish. The VM frame function does not call this. |

@@ -90,6 +90,39 @@ static void parse_sgm1_toc(RbAssets *a)
     }
 }
 
+int assets_load_mem(RbAssets *a, const uint8_t *sgm1, size_t sgm1_n,
+                    const uint8_t *song, size_t song_n,
+                    const uint8_t *rank, size_t rank_n)
+{
+    memset(a, 0, sizeof(*a));
+    if (!sgm1 || sgm1_n == 0) {
+        return -1;
+    }
+    a->sgm1_data = (uint8_t *)malloc(sgm1_n);
+    if (!a->sgm1_data) {
+        return -1;
+    }
+    memcpy(a->sgm1_data, sgm1, sgm1_n);
+    a->sgm1_size = sgm1_n;
+    if (song && song_n) {
+        a->song_data = (uint8_t *)malloc(song_n);
+        if (a->song_data) {
+            memcpy(a->song_data, song, song_n);
+            a->song_size = song_n;
+        }
+    }
+    if (rank && rank_n) {
+        a->rank_data = (uint8_t *)malloc(rank_n);
+        if (a->rank_data) {
+            memcpy(a->rank_data, rank, rank_n);
+            a->rank_size = rank_n;
+        }
+    }
+    parse_sgm1_toc(a);
+    a->loaded = 1;
+    return 0;
+}
+
 int assets_load(RbAssets *a, const char *rudebr_dir)
 {
     char path[1024];

@@ -75,7 +75,12 @@ static inline void write_u32_le(uint8_t *p, uint32_t v)
 
 #define RB_NATIVE_W     640
 #define RB_NATIVE_H     400
-#define RB_TARGET_FPS   60
+/* One count of the loader's vsync wait ([bp+0x60], usually 3). Three
+ * counts match the PC-9821 capture at about 40 logic frames per second
+ * (ship 8 px/frame ~320 px/s, cruise scroll 4 px/frame ~160 px/s,
+ * player shots 24 px/frame ~960 px/s). Not the host refresh rate. */
+#define RB_WAIT_HZ      120
+#define RB_TARGET_FPS   RB_WAIT_HZ
 
 /* X68000 Phase-2 outer raster (640x400 centered in 640x480) */
 #define RB_X68K_OUTER_H 480
@@ -194,8 +199,9 @@ void sys_shutdown(void);
 /* stderr, plus a dialog when a real video driver is up. */
 void sys_message(const char *title, const char *text);
 
-/* Block until the next 60 Hz frame boundary, then present the backbuffer. */
-void sys_wait_vblank(void);
+/* Sleep `counts` PC-98 wait ticks (1/RB_WAIT_HZ each). A zero count still
+ * waits one tick, which is the GDC edge that follows the counter. */
+void sys_wait_vblank(unsigned counts);
 void sys_present(void);
 
 void sys_clear(uint8_t r, uint8_t g, uint8_t b);
@@ -212,6 +218,10 @@ int  sys_play_music(uint16_t track_id);
 void sys_stop_music(void);
 /* Open FPLAY.COM and SONG.DAT from a RUDEBR directory. 0 on success. */
 int  sys_audio_bind(const char *dir);
+/* Same player, from buffers already read out of a directory or a disk image. */
+int  sys_audio_bind_mem(const uint8_t *com, size_t com_n,
+                        const uint8_t *song, size_t song_n,
+                        const char *rhythm_dir);
 /* Optional path to ym2608_adpcm_rom.bin. NULL clears it. The file is
  * not shipped; a missing ROM leaves ADPCM-A silent. */
 void sys_set_rhythm_override(const char *path);
