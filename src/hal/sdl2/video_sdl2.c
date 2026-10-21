@@ -83,6 +83,11 @@ void sys_shutdown(void)
     SDL_Quit();
 }
 
+uint32_t *sys_frame_pixels(void)
+{
+    return g_rb_pixels;
+}
+
 void sys_clear(uint8_t r, uint8_t g, uint8_t b)
 {
     uint32_t color = ((uint32_t)r << 24) | ((uint32_t)g << 16) |

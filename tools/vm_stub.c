@@ -38,6 +38,11 @@ void sys_draw_text(int16_t x, int16_t y, const char *utf8, uint32_t rgba)
     (void)rgba;
 }
 
+uint32_t *sys_frame_pixels(void)
+{
+    return NULL;
+}
+
 void sys_clear(uint8_t r, uint8_t g, uint8_t b)
 {
     (void)r;

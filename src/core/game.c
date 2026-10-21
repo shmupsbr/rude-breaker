@@ -226,23 +226,29 @@ void game_render(const RbGame *g)
 
     case RB_STATE_PLAY:
         if (g_vm) {
-            RbVmSprite spr[256];
             RbVmInfo info;
-            int n;
-            int i;
+            uint32_t *frame = sys_frame_pixels();
 
-            n = vm_collect_sprites(g_vm, spr, 256);
-            for (i = 0; i < n; i++) {
-                RbSprite draw;
+            if (frame && vm_gfx_active(g_vm)) {
+                vm_present(g_vm, frame, RB_NATIVE_W, RB_NATIVE_H);
+            } else {
+                RbVmSprite spr[256];
+                int n;
+                int i;
 
-                memset(&draw, 0, sizeof(draw));
-                draw.x = spr[i].x;
-                draw.y = spr[i].y;
-                draw.w = (uint16_t)(spr[i].w > 0 ? spr[i].w : 1);
-                draw.h = (uint16_t)(spr[i].h > 0 ? spr[i].h : 1);
-                draw.pixels = NULL;
-                draw.solid_rgba = spr[i].rgba;
-                sys_draw_sprite(&draw);
+                n = vm_collect_sprites(g_vm, spr, 256);
+                for (i = 0; i < n; i++) {
+                    RbSprite draw;
+
+                    memset(&draw, 0, sizeof(draw));
+                    draw.x = spr[i].x;
+                    draw.y = spr[i].y;
+                    draw.w = (uint16_t)(spr[i].w > 0 ? spr[i].w : 1);
+                    draw.h = (uint16_t)(spr[i].h > 0 ? spr[i].h : 1);
+                    draw.pixels = NULL;
+                    draw.solid_rgba = spr[i].rgba;
+                    sys_draw_sprite(&draw);
+                }
             }
             vm_info(g_vm, &info);
             snprintf(line, sizeof(line), "SCORE %u  HI %u  LIVES %d",
