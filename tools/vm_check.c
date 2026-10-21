@@ -136,6 +136,48 @@ int main(int argc, char **argv)
         return rc;
     }
     run_stage(vm, 1, 2500, 0);
+    /* Fire keeps the ship alive until the timeline spawns 0x29E1.
+     * An idle ship takes the death script and loads the clear first. */
+    {
+        RbInput in;
+        RbVmInfo info;
+        int f;
+        int form_at = 0;
+        int kids_at = 0;
+        int clear_at = 0;
+
+        memset(&in, 0, sizeof in);
+        in.buttons = RB_BTN_A;
+        vm_reset_play(vm, 1);
+        for (f = 0; f < 1800; f++) {
+            vm_set_input(vm, &in);
+            vm_frame(vm);
+            if (!form_at && vm_count_origin(vm, 0x29E1) > 0) {
+                form_at = f + 1;
+            }
+            if (!kids_at && vm_count_origin(vm, 0x353A) > 0 &&
+                vm_count_origin(vm, 0x36E0) > 0 &&
+                vm_count_origin(vm, 0x31B2) > 0 &&
+                vm_count_origin(vm, 0x3376) > 0 &&
+                vm_count_origin(vm, 0x2FA0) > 0) {
+                kids_at = f + 1;
+            }
+            vm_info(vm, &info);
+            if (info.chunk != 2) {
+                clear_at = f + 1;
+                break;
+            }
+        }
+        printf("fire-hold form_at=%d kids_at=%d clear_at=%d chunk=%u score=%u\n",
+               form_at, kids_at, clear_at, (unsigned)info.chunk,
+               (unsigned)info.score);
+        if (!(form_at > 0 && kids_at > 0 && clear_at > kids_at)) {
+            fprintf(stderr, "stage 1 formation did not spawn before the clear\n");
+            vm_destroy(vm);
+            assets_free(&assets);
+            return 1;
+        }
+    }
     {
         RbInput in;
         RbVmInfo info;

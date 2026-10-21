@@ -225,8 +225,6 @@ int main(int argc, char **argv)
     RbInput in;
     uint32_t *px;
     int frame;
-    const int shots[] = {90, 1400, 2200};
-    int si = 0;
 
     if (assets_load(&assets, dir) != 0) {
         fprintf(stderr, "assets load failed\n");
@@ -243,23 +241,45 @@ int main(int argc, char **argv)
     memset(&in, 0, sizeof in);
     in.buttons = RB_BTN_A;
     vm_reset_play(vm, 1);
+    vm_set_hiscore(vm, 25000);
     for (frame = 1; frame <= 2200; frame++) {
         RbVmInfo info;
+        int shot = 0;
+        char path[256];
 
         vm_set_input(vm, &in);
         vm_frame(vm);
-        if (si < 3 && frame == shots[si]) {
-            char path[256];
+        vm_info(vm, &info);
+        if (frame == 180) {
+            snprintf(path, sizeof path, "%s/stage1_hud.png", out_dir);
+            shot = 1;
+        } else if (info.chunk == 2 && vm_count_origin(vm, 0x29E1) > 0) {
+            static int form_shot;
+
+            if (!form_shot) {
+                form_shot = 1;
+                snprintf(path, sizeof path, "%s/stage1_formation.png", out_dir);
+                shot = 1;
+            }
+        } else if (info.chunk == 1 && frame > 200) {
+            static int clear_at;
+
+            if (clear_at == 0) {
+                clear_at = frame;
+            }
+            if (frame == clear_at + 80) {
+                snprintf(path, sizeof path, "%s/stage1_clear.png", out_dir);
+                shot = 1;
+            }
+        }
+        if (shot) {
             int rc;
 
             vm_present(vm, px, RB_NATIVE_W, RB_NATIVE_H);
-            vm_info(vm, &info);
             stats("shot", px, &info);
             printf("  active=%d\n", vm_gfx_active(vm));
-            snprintf(path, sizeof path, "%s/stage1_f%d.png", out_dir, frame);
             rc = write_png(path, px, RB_NATIVE_W, RB_NATIVE_H);
             printf("  wrote %s (%d)\n", path, rc);
-            si++;
         }
     }
     free(px);

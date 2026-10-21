@@ -19,6 +19,8 @@ struct RbGfx {
     uint32_t blen[256];
     int16_t pal[16][3];
     int16_t dpal[16][3];
+    uint8_t glyph[512][32];
+    uint8_t glyph_on[512];
     int active;
 };
 
@@ -57,6 +59,8 @@ void gfx_reset(RbGfx *gfx)
     memset(gfx->blen, 0, sizeof gfx->blen);
     memset(gfx->pal, 0, sizeof gfx->pal);
     memset(gfx->dpal, 0, sizeof gfx->dpal);
+    memset(gfx->glyph, 0, sizeof gfx->glyph);
+    memset(gfx->glyph_on, 0, sizeof gfx->glyph_on);
     gfx->active = 0;
 }
 
@@ -370,7 +374,9 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
         const uint8_t *sheet;
         int row;
 
-        if (type == 0 || (type & 0x0200u) != 0u) {
+        /* The original 0x4E skips type bit 0x200. Option followers set that
+         * bit and still carry a pattern, so the port draws them. */
+        if (type == 0) {
             continue;
         }
         wcells = slot[0x4C];
@@ -526,12 +532,337 @@ void gfx_palette_step(RbGfx *gfx, uint8_t shift)
     }
 }
 
+void gfx_define_glyph(RbGfx *gfx, uint16_t code, const uint8_t *bits, uint32_t n)
+{
+    unsigned id;
+
+    if (!gfx || !bits || n < 32u || code < 0x7600u || code > 0x77FFu) {
+        return;
+    }
+    id = (unsigned)code - 0x7600u;
+    memcpy(gfx->glyph[id], bits, 32);
+    gfx->glyph_on[id] = 1;
+}
+
+const uint8_t *gfx_bank_data(const RbGfx *gfx, uint8_t slot, uint32_t *len)
+{
+    if (!gfx) {
+        if (len) {
+            *len = 0;
+        }
+        return NULL;
+    }
+    if (len) {
+        *len = gfx->blen[slot];
+    }
+    return gfx->bank[slot];
+}
+
+void gfx_clear_frame(RbGfx *gfx)
+{
+    if (!gfx) {
+        return;
+    }
+    memset(gfx->pix, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    gfx->active = 1;
+}
+
+void gfx_merge_plane(RbGfx *gfx, int plane, const uint8_t *src, uint32_t n)
+{
+    uint32_t i;
+    uint8_t bit;
+
+    if (!gfx || !src || plane < 0 || plane > 3) {
+        return;
+    }
+    bit = (uint8_t)(1u << plane);
+    if (n > 32000u) {
+        n = 32000u;
+    }
+    for (i = 0; i < n; i++) {
+        int x = (int)(i % 80u) * 8;
+        int y = (int)(i / 80u);
+        int p;
+
+        if (y >= RB_GFX_H) {
+            break;
+        }
+        for (p = 0; p < 8; p++) {
+            if ((src[i] >> (7 - p)) & 1) {
+                gfx->pix[(size_t)y * RB_GFX_W + (size_t)(x + p)] |= bit;
+            }
+        }
+    }
+    gfx->active = 1;
+}
+
+static void di_xy(uint16_t di, int *x, int *y)
+{
+    uint32_t at = (uint32_t)di % 32000u;
+
+    *x = (int)(at % 80u) * 8;
+    *y = (int)(at / 80u);
+}
+
+static void blit_tile_shift(RbGfx *gfx, const uint8_t *src, int x, int y, int shift)
+{
+    int row;
+
+    if (shift <= 0) {
+        blit_tile(gfx, src, x, y);
+        return;
+    }
+    if (shift > 7) {
+        shift = 7;
+    }
+    for (row = 0; row < 16; row++) {
+        int plane;
+        uint8_t bits[3][24];
+        int col;
+
+        memset(bits, 0, sizeof bits);
+        for (plane = 0; plane < 3; plane++) {
+            const uint8_t *p = src + plane * 32 + row * 2;
+            int i;
+
+            for (i = 0; i < 8; i++) {
+                if ((p[0] >> (7 - i)) & 1) {
+                    bits[plane][i + shift] = 1;
+                }
+                if ((p[1] >> (7 - i)) & 1) {
+                    bits[plane][8 + i + shift] = 1;
+                }
+            }
+        }
+        for (col = 0; col < 16 + shift; col++) {
+            uint8_t idx = 0;
+
+            if (bits[0][col]) {
+                idx |= 1u;
+            }
+            if (bits[1][col]) {
+                idx |= 2u;
+            }
+            if (bits[2][col]) {
+                idx |= 4u;
+            }
+            put_idx(gfx, x + col, wrap_y(y + row), idx);
+        }
+    }
+}
+
+void gfx_blit_grid(RbGfx *gfx, const uint8_t *bank, uint32_t blen,
+                   const uint8_t *cells, uint32_t cell_n,
+                   uint16_t di, int cols, int rows, int kind, int shift)
+{
+    int row;
+    uint32_t ncell = 0;
+    uint16_t row_di;
+
+    if (!gfx || !bank || !cells || cols <= 0 || rows <= 0) {
+        return;
+    }
+    row_di = di;
+    for (row = 0; row < rows; row++) {
+        int col;
+        uint16_t at = row_di;
+
+        for (col = 0; col < cols; col++) {
+            uint8_t index;
+            int x;
+            int y;
+
+            if (ncell >= cell_n) {
+                gfx->active = 1;
+                return;
+            }
+            index = cells[ncell++];
+            di_xy(at, &x, &y);
+            if (kind == 1) {
+                uint32_t off = (uint32_t)index * 128u;
+
+                if (off < blen) {
+                    blit_sprite(gfx, bank + off, blen - off, x, y, 0, 0);
+                }
+            } else {
+                uint32_t off = (uint32_t)index * 160u + 32u;
+
+                if (off + 96u <= blen) {
+                    blit_tile_shift(gfx, bank + off, x, y, shift);
+                }
+            }
+            at = (uint16_t)(at + 2u);
+        }
+        row_di = (uint16_t)(row_di + 0x500u);
+    }
+    gfx->active = 1;
+}
+
+void gfx_blit_span(RbGfx *gfx, const uint8_t *src, uint32_t slen,
+                   uint16_t di, uint16_t row_bytes, uint16_t rows,
+                   uint8_t src_planes, uint8_t dst_planes)
+{
+    static const uint8_t bit[4] = {0x01u, 0x02u, 0x04u, 0x08u};
+    uint32_t si = 0;
+    int plane;
+
+    if (!gfx || !src || row_bytes == 0 || rows == 0) {
+        return;
+    }
+    if (src_planes & 0x10u) {
+        uint32_t skip = (uint32_t)row_bytes * rows;
+
+        if (si + skip > slen) {
+            skip = slen - si;
+        }
+        si += skip;
+    }
+    for (plane = 0; plane < 4; plane++) {
+        uint32_t bytes = (uint32_t)row_bytes * rows;
+
+        if ((src_planes & bit[plane]) == 0) {
+            continue;
+        }
+        if ((dst_planes & bit[plane]) == 0) {
+            if (si + bytes > slen) {
+                si = slen;
+            } else {
+                si += bytes;
+            }
+            continue;
+        }
+        {
+            uint16_t row;
+            uint16_t base = di;
+
+            for (row = 0; row < rows; row++) {
+                uint16_t b;
+
+                for (b = 0; b < row_bytes; b++) {
+                    uint8_t byte;
+                    uint32_t at;
+                    int x;
+                    int y;
+                    int p;
+
+                    if (si >= slen) {
+                        gfx->active = 1;
+                        return;
+                    }
+                    byte = src[si++];
+                    at = ((uint32_t)base + b) % 32000u;
+                    x = (int)(at % 80u) * 8;
+                    y = (int)(at / 80u);
+                    for (p = 0; p < 8; p++) {
+                        uint8_t *px;
+
+                        if (y >= RB_GFX_H) {
+                            break;
+                        }
+                        px = &gfx->pix[(size_t)y * RB_GFX_W + (size_t)(x + p)];
+                        if ((byte >> (7 - p)) & 1) {
+                            *px = (uint8_t)(*px | bit[plane]);
+                        } else {
+                            *px = (uint8_t)(*px & (uint8_t)~bit[plane]);
+                        }
+                    }
+                }
+                base = (uint16_t)(base + 0x50u);
+            }
+        }
+    }
+    gfx->active = 1;
+}
+
 int gfx_active(const RbGfx *gfx)
 {
     return gfx && gfx->active;
 }
 
-void gfx_present(const RbGfx *gfx, int scroll76, uint32_t *rgba, int w, int h)
+static const uint8_t TEXT_RGB[8][3] = {
+    {0, 0, 0},
+    {0, 0, 255},
+    {255, 0, 0},
+    {255, 0, 255},
+    {0, 255, 0},
+    {0, 255, 255},
+    {255, 255, 0},
+    {255, 255, 255}
+};
+
+static void paint_glyph_half(uint32_t *rgba, int w, int x, int y,
+                             const uint8_t *bits, int right, uint32_t rgb)
+{
+    int row;
+
+    for (row = 0; row < 16; row++) {
+        uint8_t line = bits[row * 2 + (right ? 1 : 0)];
+        int col;
+
+        for (col = 0; col < 8; col++) {
+            int px;
+            int py;
+
+            if (((line >> (7 - col)) & 1) == 0) {
+                continue;
+            }
+            px = x + col;
+            py = y + row;
+            if ((unsigned)px >= (unsigned)RB_GFX_W ||
+                (unsigned)py >= (unsigned)RB_GFX_H) {
+                continue;
+            }
+            rgba[(size_t)py * (size_t)w + (size_t)px] = rgb;
+        }
+    }
+}
+
+static void overlay_text(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, int w)
+{
+    int row;
+    int col;
+
+    if (!text) {
+        return;
+    }
+    for (row = 0; row < 25; row++) {
+        for (col = 0; col < 80; col++) {
+            unsigned off = (unsigned)row * 0xA0u + (unsigned)col * 2u;
+            uint8_t b0;
+            uint8_t b1;
+            unsigned low;
+            uint16_t code;
+            unsigned id;
+            int color;
+            uint32_t rgb;
+
+            b0 = text[off];
+            b1 = text[off + 1];
+            if (b1 == 0 && (b0 == 0 || b0 == 0x20u)) {
+                continue;
+            }
+            low = (unsigned)(b0 & 0x7Fu) + 0x20u;
+            if (!((low == 0x76u || low == 0x77u) && b1 != 0)) {
+                continue;
+            }
+            code = (uint16_t)((low << 8) | b1);
+            id = (unsigned)code - 0x7600u;
+            if (id >= 512u || !gfx->glyph_on[id]) {
+                continue;
+            }
+            color = (text[0x2000u + off] >> 5) & 7;
+            rgb = 0xFFu |
+                  ((uint32_t)TEXT_RGB[color][0] << 24) |
+                  ((uint32_t)TEXT_RGB[color][1] << 16) |
+                  ((uint32_t)TEXT_RGB[color][2] << 8);
+            paint_glyph_half(rgba, w, col * 8, row * 16, gfx->glyph[id],
+                             (b0 & 0x80u) != 0, rgb);
+        }
+    }
+}
+
+void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,
+                 uint32_t *rgba, int w, int h)
 {
     int y;
     int scroll;
@@ -571,4 +902,5 @@ void gfx_present(const RbGfx *gfx, int scroll76, uint32_t *rgba, int w, int h)
             rgba[(size_t)y * (size_t)w + (size_t)x] = px;
         }
     }
+    overlay_text(gfx, text, rgba, w);
 }

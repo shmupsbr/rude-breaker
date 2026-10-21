@@ -36,7 +36,25 @@ void gfx_palette_abs(RbGfx *gfx, const uint8_t *p, uint32_t n);
 void gfx_palette_delta(RbGfx *gfx, const uint8_t *p, uint32_t n);
 void gfx_palette_step(RbGfx *gfx, uint8_t shift);
 
+/* User glyphs registered by opcode 0x33 (INT 18h AH=1Ah). Codes are 0x76xx. */
+void gfx_define_glyph(RbGfx *gfx, uint16_t code, const uint8_t *bits, uint32_t n);
+const uint8_t *gfx_bank_data(const RbGfx *gfx, uint8_t slot, uint32_t *len);
+
+/* Opcode 0x31: four LZ planes, blue / red / green / intensity. */
+void gfx_clear_frame(RbGfx *gfx);
+void gfx_merge_plane(RbGfx *gfx, int plane, const uint8_t *src, uint32_t n);
+
+/* kind 0 = tile (index*160, skip 32), kind 1 = sprite (index*128). */
+void gfx_blit_grid(RbGfx *gfx, const uint8_t *bank, uint32_t blen,
+                   const uint8_t *cells, uint32_t cell_n,
+                   uint16_t di, int cols, int rows, int kind, int shift);
+/* Opcode 0x3A / 0x3B. src_planes is BH, dst_planes is BL. */
+void gfx_blit_span(RbGfx *gfx, const uint8_t *src, uint32_t slen,
+                   uint16_t di, uint16_t row_bytes, uint16_t rows,
+                   uint8_t src_planes, uint8_t dst_planes);
+
 int  gfx_active(const RbGfx *gfx);
-void gfx_present(const RbGfx *gfx, int scroll76, uint32_t *rgba, int w, int h);
+void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,
+                 uint32_t *rgba, int w, int h);
 
 #endif /* RUDEBREAKER_GFX_H */

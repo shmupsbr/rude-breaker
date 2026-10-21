@@ -199,10 +199,10 @@ The PC-98 ports stay out of the core. The SDL2 build blits a 640×400 buffer fro
 
 | What | Where | Confidence |
 |------|--------|------------|
-| Text | `A000`, attributes `+0x2000`, via `draw_text` | high |
+| Text | `A000`, attributes `+0x2000`, via `draw_text`. The SDL buffer paints this after the scrolled GVRAM, so the HUD does not scroll. | high |
 | Graphics | `A800` and the other planes, GRCG ports `0x7C` / `0x7E` | high |
 | CRTC scroll | ports `0xA0` / `0xA2`, `crtc_set_scroll` | high |
-| Page flip | ports `0xA4` / `0xA6`, byte `[bp+0xBA]` | high |
+| Page flip | ports `0xA4` / `0xA6`, byte `[bp+0xBA]`. Opcode `0x31` calls loader `0x6AA4`, which expands one SGM1 record as four LZ streams into `A800` / `B000` / `B800` / `E000`. | high |
 | Vsync | port `0x60` bit `0x20` | high |
 | Playfield height | `0x190` = 400 | high |
 | Horizontal cell limit | constants `0x18` / `0x19` inside the blit | medium |
@@ -284,7 +284,7 @@ On a cell change the phase byte `[bp+0xC8]` selects a rule, then an equality cha
 
 | Stage | Chunk | Timeline | Spawns | Cell waves | Popup `0x40A3` | Notes |
 |-------|-------|----------|--------|------------|----------------|-------|
-| 1 | 2 | 293 events, stops at a jump below `0x7000` (step 505) | 288 | 59, first cell 358 | yes, when the cell changes and cell `< 0x70` or cell `> 0x130` | Phase 0 and `0x0A` rewind at cell 416. Phase `0x14` at that cell sets target speed 2 and phase `0x1E`. Child `0x29E1` is a nested formation (it spawns five more scripts, then runs `0x7102`). Those nested spawns are not in the timeline. The script is what drops `[bp+0xAE]`; the port does not count this leader, or the phase switch stays on the rewind. |
+| 1 | 2 | 293 events, stops at a jump below `0x7000` (step 505) | 288 | 59, first cell 358 | yes, when the cell changes and cell `< 0x70` or cell `> 0x130` | Phase 0 and `0x0A` rewind at cell 416. Phase `0x14` at that cell sets target speed 2 and phase `0x1E`. The spawn at `0x8B05` is formation `0x29E1` (five children, then `0x7102`). It runs once `[bp+0xAE]` drops to 0. The only stores to `[bp+0xCB]` in this chunk are the ship script at `0x511D` (2) and `0x530C` (1). |
 | 2 | 3 | 174 events | 169 | 58 | yes | Switch starts at phase `0x0A`. |
 | 3 | 4 | 129 events | 122 | 10 | no | The chain walker stopped early. Treat 10 rows as incomplete. |
 | 4 | 5 | 144 events | 139 | 64 | no | Several compares are unsigned `>` (body runs when the cell is `<=` the immediate). |
@@ -311,32 +311,35 @@ Play runs the bytecode VM in `src/core/vm.c` when SGM1 loads. The scaffold direc
 
 | Original | Core | Confidence |
 |----------|------|------------|
-| Frame order at `0x933`: input, entities, draw, vsync, present | `main`. CRTC and the page flip stay in the HAL. | high |
+| Frame order at `0x933`: input, entities, draw, vsync, present | `main`. The CRTC ports stay in the HAL. Opcode `0x31` expands the page into the software GVRAM. | high |
 | Opcodes `0x00`–`0x50`, sub-ops through `0x2A`, ALU, compare, RNG, sincos, atan, aim | `vm_frame` | high for the dispatch, medium where a native island uses an unhandled 80186 opcode |
 | Ship script `0x4F6E`, shot controller `0x62E3` and children `0x6331` / `0x6498` | the VM. Fire is held bit `0x10`. | high |
 | Native ship move `0x53AB` (chunk 1 `0x53B1`), tables `0x54B8` / `0x54F8` / `0x5538`, clamp | interpreted from the chunk | high |
-| Option followers. Stage-chunk entry `0x59CB` does `OR word [si], 0x200` and `X = ship X - 16` at `0x59FF`. The twin at `0x5F7B` uses `X + 16`. Chunk 1's `OR` is the byte at `0x5A05`. | interpreted. Chunk 1 at `0x9507` arms `[bp+0xD5]` to 1 before a stage load; a direct stage entry keeps that. | high |
+| Option followers. Stage-chunk entry `0x59CB` does `OR word [si], 0x200` and `X = ship X - 16` at `0x59FF`. The twin at `0x5F7B` uses `X + 16`. Chunk 1's `OR` is the byte at `0x5A05`. | interpreted. Chunk 1 at `0x9507` arms `[bp+0xD5]` to 1 before a stage load; a direct stage entry keeps that. `gfx_draw_entities` draws type bit `0x200`. Opcode `0x4E` skips that bit. | high |
 | Proxy `0x5641`, opcode `0x50` mask `0x00E0`, damage 4, and the script tail after that hit | the VM. `rb_hit_test` is the five compares. | high for the test. The tail runs when `[bp+0xD5]` is not 0. |
 | Enemy shots whose type matches mask `0x00C0`, ship damage 6 | the ship script's opcode `0x50` | high |
 | Score +10 on an hp change (`0x71DC`) | the native, inside the VM | high |
 | Scroll `0x4B` / prelude `0x4D`, the bytecode speed regulator | the VM. Speed is 15 on the prelude frame, 14 on the next, and 4 sixteen frames at a time later. | high |
 | Stage 3 cell chain and stage 5 past the old jump-out | the real scripts. A stage-1 run changes cell hundreds of times; stage 5 spawns well past the old 14-spawn cutoff. | high |
 | End of stage | opcode `0x0D` at chunk offset `0x78B3` loads SGM1 record 1, header word 2 (chunk 1 IP `0x78C3`, `JMP 0x8E70`). `stage_finished` is not consulted. | high for the transfer. |
-| Nested formation `0x29E1` | five `0x16` spawns (`0x353A`, `0x36E0`, `0x31B2`, `0x3376`, `0x2FA0`) then native `0x2DC8` / `0x7102`. Stage 5 runs the five children. Stage 1's timeline does not reach the `0x15` at `0x8B05` before the clear jump. | medium |
+| Nested formation `0x29E1` | five `0x16` spawns (`0x353A`, `0x36E0`, `0x31B2`, `0x3376`, `0x2FA0`) then native `0x2DC8` / `0x7102`. Stage 5 runs the five children. On stage 1 the spawn is chunk 2 `0x8B05`, after the `[bp+0xAE]` wait at `0x8AF4`. Holding fire reaches it at frame 1260, and the five children the same frame, while the chunk is still 2. The clear load is frame 1489. An idle ship never gets there: the second death takes `0x5047`, stores `[bp+0xCB] = 2` at `0x511D`, then `1` at `0x530C`, and the root's `CB == 1` test loads record 1 header 2 at frame 904. `[bp+0x62]` stays 3. Top-left does the same spawn at frame 1392. | high |
 | 256-slot dispatcher | the VM's forward scan | high |
 | Opcode `0x32` binds an SGM1 record to a `[bp+slot]` bank and does not switch the script. Stage 1 binds sprite records 12, 13, 16, 17, 18, 19, tiles record 25 at `[bp+0x26]`, and the map record 31 at `[bp+0x16]`. | `gfx_bind` | high |
 | Fill `0x3C` / `0x3D` (GRCG color at loader `0x77D4`) | `gfx_fill`. Stage 1's root fills 80×400 with color 0. | high |
 | Palette `0x3F` (absolute, `0x6BD1`), `0x40` (deltas, `0x6CAB`), `0x41` (step, `0x6D00`) | `gfx_palette_*`. `0x41` is not a music call. Levels are stored `<< 4` and expanded with `v * 17`. | high |
-| Scroll row `0x108E`, compose `0x4C` (`0x10D2`), entity draw `0x4E` (`0x1132`) | `gfx_copy_row`, `gfx_compose`, `gfx_draw_entities`. Tiles are 96 bytes, planes blue/red/green, intensity left 0. Sprites are 128 bytes: mask, blue, red, green. Bit 7 is the left pixel. The playfield is 30×16 pixels inset by 80. Present reads line `(y + [bp+0x76]) mod 400`. | high for the stage-1 path. Options (type bit `0x200`) are not drawn, matching `0x4E`. |
+| Scroll row `0x108E`, compose `0x4C` (`0x10D2`), entity draw `0x4E` (`0x1132`) | `gfx_copy_row`, `gfx_compose`, `gfx_draw_entities`. Tiles are 96 bytes, planes blue/red/green, intensity left 0. Sprites are 128 bytes: mask, blue, red, green. Bit 7 is the left pixel. The playfield is 30×16 pixels inset by 80. Present reads line `(y + [bp+0x76]) mod 400`. | high for the stage-1 path. |
+| Text `0x47` (`0x40D0`), digits `0x48` / `0x49` / `0x4A` | `draw_text` at `0x12C5` and the digit writer at `0x1554`. A zero digit is two spaces of word `0x2020` until `BL` is set; `0x4A` sets `BL` only before the last of eight digits. Gaiji `0x76xx` come from record 11 (32 bytes each, registered like INT 18h AH=1Ah at `0x1592`). Opcode `0x33` is that registration. Direct stage entry installs glyphs 1..63 as codes `0x7621`..`0x765F`, the same range chunk 1's `33 24 01 3F 21 76` would leave behind. Stage 1 writes the HUD at `0x76A9`, the green title at `0x761D`, hiscore at text `0x010C`, score at `0x00D8`. The SDL `SCORE` / `STAGE` strings are not drawn once GVRAM is active. | high |
+| Page flip `0x31` (`0x3D1A`) | `op_page`. AL=3 on the loader call, so `[bp+0x30]` (`0x6AA4`) runs four times through `0x6ACD` into the four planes. A plane ends at the next `00`. The software buffer keeps the first 32000 bytes and still consumes that terminator, so the following stream is not read as an empty plane. | high |
+| Blits `0x34`–`0x3B` | Tile grid `0x6D40`, shifted tile `0x6DCD`, sprite grid `0x6D89`, and the `MOVSW` copy at `0x7428`. Stage 1's playfield is still `0x4C` / `0x4E`. The GRCG masked path at `0x7541` (AL nonzero, or both `0x10` bits in BX) is the copy. | medium for the masked path, high for the copy |
 | Ranking `0x9128` / `0x9156` / `0x91AF` / `0x9213` / `0x923A` | PUSH/POP ES and DS, `LOOP`, `MOV` to a segment, and `REP MOVSW`. `[bp+0x56]` points at a private 256-byte block (`0x400`), not at the globals. Text VRAM is a side buffer. | high for the natives. The name-entry loop at `0x8F60` waits for an edge on bits `0x30` (fire). Holding fire does not leave it. |
 
-Records after chunk 6 decompress with the same LZ77. Sizes: 7–9 are 32000-byte planes, 10 is empty (the stream starts with `00`), 11 is 8192, 12–23 are 32768 (256×128 sprites), 24–29 are 36864 (384×96 tiles), 31 is 28800 (480×30 map words). The stage-1 camera starts on the last rows, which are sparse stars, and the dense tiles sit further up the map.
+Records after chunk 6 use the same LZ77, one stream per call to `0x6ACD`. A single stream stops at the first `00`. Record 10 is 12983 bytes and that first byte is `00`, so one stream returns 0 bytes. That is not a short file and not a 2-byte header. Opcode `0x31` runs four streams in a row. Record 10 is then an empty blue plane, an empty red plane, a 32000-byte green plane (9164 nonzero), and a 32000-byte intensity plane (4518 nonzero), and the compressed bytes are all consumed. Records 7 and 8 are four full 32000-byte planes. Record 9 is two full planes and then two empty ones. Record 11 is one stream of 8192 bytes, the 256×32 gaiji sheet. Records 12–23 are 32768 (256×128 sprites), 24–29 are 36864 (384×96 tiles), 31 is 28800 (480×30 map words). Opcode `0x32` still uses one stream, so binding record 10 that way stays empty. The stage-1 camera starts on the last rows, which are sparse stars, and the dense tiles sit further up the map.
 
 ## Next
 
-1. Text opcodes `0x47`–`0x4A` (PC-98 text VRAM and the digit glyphs). The SDL HUD is still the port's own font. Page flip `0x31` and blit opcodes `0x33`–`0x3B` are operand skips.
-2. Stage 1's formation leader `0x29E1`. The children exist in the chunk and run on stage 5; the stage 1 spawn site is not reached before opcode `0x0D`.
-3. The continue jump at chunk 1 `0x9AD1` (`JMP 0x78C6`) does run after the ranking natives, once fire is tapped through the name entry. That loader picks record 2 when `[bp+0xC5]` is 1, and records 3–6 when the byte is 2–5. Stage 1 stores 1 in both `[bp+0xC5]` and `[bp+0xC7]`, and `0x8DE4` copies `C7` back into `C5`, so a stage-1 clear reloads record 2.
-4. INT 7Fh command map inside `FPLAY.COM`, then real `sys_play_music` track ids.
-5. Loader `0x6C0B` and `0x5EF5`, the two function pointers the frame loop calls beside vsync and the page flip.
+1. The continue jump at chunk 1 `0x9AD1` (`JMP 0x78C6`) does run after the ranking natives, once fire is tapped through the name entry. That loader picks record 2 when `[bp+0xC5]` is 1, and records 3–6 when the byte is 2–5. Stage 1 stores 1 in both `[bp+0xC5]` and `[bp+0xC7]`, and `0x8DE4` copies `C7` back into `C5`, so a stage-1 clear reloads record 2. Chunk 2 has no other store to `[bp+0xCB]` than the ship script, so the clear screen in a normal run is that death path, not a finished stage.
+2. INT 7Fh command map inside `FPLAY.COM`, then real `sys_play_music` track ids.
+3. Loader `0x6C0B` and `0x5EF5`, the two function pointers the frame loop calls beside vsync and the page flip.
+4. The GRCG masked blit at `0x7541`. Opcodes `0x3A` / `0x3B` take the `MOVSW` copy.
+5. x86 parity (`JP` / `JNP` stay false), `F2` REPNZ (skipped), and `STD` (DF stays clear).
 6. Physical keycap names. The HAL bits are remapped, not renamed.

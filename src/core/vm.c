@@ -82,6 +82,9 @@ struct RbVm {
     uint16_t load_header;
     uint8_t seen_op[256];
     uint8_t nat_logged;
+    uint16_t text_di;
+    uint16_t text_saved;
+    uint16_t text_attr;
     RbGfx *gfx;
 };
 
@@ -135,6 +138,14 @@ static uint16_t gu16(const RbVm *vm, int off)
         return 0;
     }
     return read_u16_le(vm->g + off);
+}
+
+static void set_g8(RbVm *vm, int off, uint8_t v)
+{
+    if (off < 0 || off >= G_SIZE) {
+        return;
+    }
+    vm->g[off] = v;
 }
 
 static void sgu16(RbVm *vm, int off, uint16_t v)
@@ -194,7 +205,7 @@ static void clear_slot(RbVm *vm, int i)
 /* ---- LZ77 (loader 0x6ACD) ---------------------------------------------- */
 
 static uint32_t lz_decompress(const uint8_t *src, uint32_t src_n,
-                              uint8_t *dst, uint32_t dst_n)
+                              uint8_t *dst, uint32_t dst_n, uint32_t *used)
 {
     uint32_t si = 0;
     uint32_t di = 0;
@@ -239,6 +250,31 @@ static uint32_t lz_decompress(const uint8_t *src, uint32_t src_n,
             }
         }
     }
+    /* 0x6ACD stops on the 00 terminator, not on a 32000-byte plane.
+     * A full plane leaves that 00 still unread; swallow the rest of
+     * the stream so the next plane starts on its own first byte.
+     * ensure_chunk passes used == NULL and keeps the old stop. */
+    if (used && di == dst_n) {
+        while (si < src_n) {
+            uint8_t ctrl = src[si++];
+
+            if (ctrl == 0) {
+                break;
+            }
+            if (ctrl < 0x80u) {
+                si += ctrl;
+                if (si > src_n) {
+                    si = src_n;
+                    break;
+                }
+            } else if (si < src_n) {
+                si++;
+            }
+        }
+    }
+    if (used) {
+        *used = si;
+    }
     return di;
 }
 
@@ -264,7 +300,7 @@ static int ensure_chunk(RbVm *vm, unsigned index)
         return -1;
     }
     memset(dst, 0, CHUNK_CAP);
-    n = lz_decompress(src, sz, dst, CHUNK_CAP);
+    n = lz_decompress(src, sz, dst, CHUNK_CAP, NULL);
     vm->chunk[index] = dst;
     vm->clen[index] = n;
     return 0;
@@ -797,7 +833,7 @@ static void one_subop(RbVm *vm, int script, int target, uint16_t *di)
         a = rd8(vm, script, *di);
         alu = rd8(vm, script, (uint16_t)(*di + 1u));
         b = rd8(vm, script, (uint16_t)(*di + 2u));
-        vm->g[a] = byte_alu(vm, alu, vm->g[a], b);
+        set_g8(vm, a, byte_alu(vm, alu, vm->g[a], b));
         *di = (uint16_t)(*di + 3u);
         break;
     case 0x0E:
@@ -811,7 +847,7 @@ static void one_subop(RbVm *vm, int script, int target, uint16_t *di)
         a = rd8(vm, script, *di);
         alu = rd8(vm, script, (uint16_t)(*di + 1u));
         b = rd8(vm, script, (uint16_t)(*di + 2u));
-        vm->g[a] = byte_alu(vm, alu, vm->g[a], eu8(vm, target, b));
+        set_g8(vm, a, byte_alu(vm, alu, vm->g[a], eu8(vm, target, b)));
         *di = (uint16_t)(*di + 3u);
         break;
     case 0x12:
@@ -2185,6 +2221,369 @@ static void do_load(RbVm *vm, int ent, uint8_t record, uint8_t header)
 
 /* ---- one entity --------------------------------------------------------- */
 
+/* ---- text (draw_text 0x12C5, digits 0x1412 / 0x143F / 0x1494) ---------- */
+
+static void text_pair(RbVm *vm, uint16_t di, uint16_t left, uint16_t right, uint16_t attr)
+{
+    if ((uint32_t)di + 0x2003u >= TEXT_SIZE) {
+        return;
+    }
+    write_u16_le(vm->text + di, left);
+    write_u16_le(vm->text + di + 2u, right);
+    write_u16_le(vm->text + 0x2000u + di, attr);
+    write_u16_le(vm->text + 0x2000u + di + 2u, attr);
+}
+
+static void text_digit(RbVm *vm, uint16_t di, uint8_t *bl, uint8_t al, uint16_t attr)
+{
+    uint16_t ax;
+
+    if (*bl == 0 && al == 0) {
+        text_pair(vm, di, 0x2020u, 0x2020u, attr);
+        return;
+    }
+    ax = (uint16_t)(0x0056u | ((uint16_t)(al + 0x21u) << 8));
+    text_pair(vm, di, ax, (uint16_t)(ax | 0x0080u), attr);
+    *bl = (uint8_t)(*bl + 1u);
+}
+
+static uint16_t text_f9(uint8_t al, uint8_t ah)
+{
+    unsigned sum;
+    int cf;
+
+    al = (uint8_t)(al << 1);
+    ah = (uint8_t)(ah - 0x1Fu);
+    if ((ah & 0x80u) == 0u) {
+        cf = ah < 0x61u;
+        ah = (uint8_t)(ah + 0xDEu + (unsigned)cf);
+    }
+    sum = (unsigned)ah + 0xA1u;
+    cf = sum > 0xFFu;
+    ah = (uint8_t)sum;
+    al = (uint8_t)(al + 0x1Fu + (unsigned)cf);
+    al = (uint8_t)((al & 0x7Fu) - 0x20u);
+    ah = (uint8_t)(ah & 0x7Fu);
+    return (uint16_t)al | ((uint16_t)ah << 8);
+}
+
+static uint16_t text_cursor(uint8_t x, uint8_t y)
+{
+    return (uint16_t)((unsigned)x * 2u + (unsigned)y * 160u);
+}
+
+static void draw_text(RbVm *vm, int ent, uint16_t si)
+{
+    uint32_t n = 0;
+    const uint8_t *p = code_of(vm, ent, &n);
+    uint16_t di = vm->text_di;
+    int steps = 0;
+
+    if (!p) {
+        return;
+    }
+    while (steps++ < 8000 && (uint32_t)si < n) {
+        uint8_t cmd = p[si++];
+
+        if (cmd < 0xF0u) {
+            uint8_t al;
+            uint8_t ah;
+            int count = cmd;
+
+            if ((uint32_t)si + 1u >= n) {
+                break;
+            }
+            al = p[si++];
+            ah = p[si++];
+            while (count-- > 0) {
+                text_pair(vm, di, al, ah, vm->text_attr);
+                di = (uint16_t)(di + 4u);
+            }
+            continue;
+        }
+        if (cmd == 0xF8u) {
+            uint8_t al;
+            uint8_t ah;
+            uint16_t ax;
+
+            if ((uint32_t)si + 1u >= n) {
+                break;
+            }
+            al = (uint8_t)(p[si++] - 0x20u);
+            ah = p[si++];
+            ax = (uint16_t)al | ((uint16_t)ah << 8);
+            text_pair(vm, di, ax, (uint16_t)((al + 0x80u) | ((uint16_t)ah << 8)),
+                      vm->text_attr);
+            di = (uint16_t)(di + 4u);
+            continue;
+        }
+        if (cmd == 0xF9u) {
+            while ((uint32_t)si + 1u < n) {
+                uint8_t al = p[si++];
+                uint8_t ah = p[si++];
+                uint16_t ax;
+
+                if (al == 0xFFu) {
+                    si = (uint16_t)(si - 1u);
+                    break;
+                }
+                ax = text_f9(al, ah);
+                text_pair(vm, di, ax,
+                          (uint16_t)((ax & 0xFF00u) | (uint8_t)((ax & 0xFFu) + 0x80u)),
+                          vm->text_attr);
+                di = (uint16_t)(di + 4u);
+            }
+            continue;
+        }
+        if (cmd == 0xFAu) {
+            uint8_t x;
+            uint8_t y;
+
+            if ((uint32_t)si + 1u >= n) {
+                break;
+            }
+            x = p[si++];
+            y = p[si++];
+            di = text_cursor(x, y);
+            vm->text_saved = di;
+            continue;
+        }
+        if (cmd == 0xFBu) {
+            uint8_t x;
+            uint8_t y;
+
+            if ((uint32_t)si + 1u >= n) {
+                break;
+            }
+            x = vm->g[p[si++]];
+            y = vm->g[p[si++]];
+            di = text_cursor(x, y);
+            vm->text_saved = di;
+            continue;
+        }
+        if (cmd == 0xFCu) {
+            if ((uint32_t)si >= n) {
+                break;
+            }
+            vm->text_attr = (uint16_t)((vm->text_attr & 0xFF00u) | p[si++]);
+            continue;
+        }
+        if (cmd == 0xFDu) {
+            int count;
+
+            if ((uint32_t)si >= n) {
+                break;
+            }
+            count = p[si++];
+            while (count-- > 0) {
+                if ((uint32_t)di + 0x2003u < TEXT_SIZE) {
+                    write_u16_le(vm->text + 0x2000u + di, vm->text_attr);
+                    write_u16_le(vm->text + 0x2000u + di + 2u, vm->text_attr);
+                }
+                di = (uint16_t)(di + 4u);
+            }
+            continue;
+        }
+        if (cmd == 0xFEu) {
+            di = (uint16_t)(vm->text_saved + 0x00A0u);
+            vm->text_saved = di;
+            continue;
+        }
+        if (cmd == 0xFFu) {
+            vm->text_di = di;
+            return;
+        }
+    }
+    vm->text_di = di;
+}
+
+static void text_u8(RbVm *vm, uint16_t di, uint8_t al, uint16_t attr)
+{
+    uint8_t bl = 0;
+    uint8_t tens;
+    uint8_t ones;
+
+    if (al >= 100u) {
+        al = 99u;
+    }
+    tens = (uint8_t)(al / 10u);
+    ones = (uint8_t)(al % 10u);
+    text_digit(vm, di, &bl, tens, attr);
+    bl = (uint8_t)(bl + 1u);
+    text_digit(vm, (uint16_t)(di + 4u), &bl, ones, attr);
+}
+
+static void text_u16(RbVm *vm, uint16_t di, uint16_t ax, uint16_t attr)
+{
+    static const uint16_t divs[5] = {10000u, 1000u, 100u, 10u, 1u};
+    uint8_t bl = 0;
+    int i;
+
+    for (i = 0; i < 5; i++) {
+        uint8_t d = (uint8_t)(ax / divs[i]);
+
+        ax = (uint16_t)(ax % divs[i]);
+        if (i == 4) {
+            bl = (uint8_t)(bl + 1u);
+        }
+        text_digit(vm, di, &bl, d, attr);
+        di = (uint16_t)(di + 4u);
+    }
+}
+
+static void text_u32(RbVm *vm, uint16_t di, uint16_t dx, uint16_t ax, uint16_t attr)
+{
+    static const uint16_t divs[4] = {1000u, 100u, 10u, 1u};
+    uint32_t v;
+    uint16_t hi;
+    uint16_t lo;
+    uint8_t bl = 0;
+    int pass;
+    int i;
+
+    if (dx > 0x05F5u || (dx == 0x05F5u && ax > 0xE0F6u)) {
+        dx = 0x05F5u;
+        ax = 0xE0F6u;
+    }
+    v = ((uint32_t)dx << 16) | ax;
+    hi = (uint16_t)(v / 10000u);
+    lo = (uint16_t)(v % 10000u);
+    for (pass = 0; pass < 2; pass++) {
+        uint16_t part = (pass == 0) ? hi : lo;
+
+        for (i = 0; i < 4; i++) {
+            uint8_t d = (uint8_t)(part / divs[i]);
+
+            part = (uint16_t)(part % divs[i]);
+            if (pass == 1 && i == 3) {
+                bl = (uint8_t)(bl + 1u);
+            }
+            text_digit(vm, di, &bl, d, attr);
+            di = (uint16_t)(di + 4u);
+        }
+    }
+}
+
+static void install_boot_font(RbVm *vm)
+{
+    unsigned i;
+
+    if (ensure_chunk(vm, 11) != 0) {
+        return;
+    }
+    for (i = 0; i < 63u; i++) {
+        uint32_t off = (1u + i) * 32u;
+
+        if (off + 32u > vm->clen[11]) {
+            break;
+        }
+        gfx_define_glyph(vm->gfx, (uint16_t)(0x7621u + i), vm->chunk[11] + off, 32);
+    }
+}
+
+static void define_glyphs(RbVm *vm, uint16_t slot, uint8_t index, uint8_t count,
+                          uint16_t code)
+{
+    uint32_t blen = 0;
+    const uint8_t *bank = gfx_bank_data(vm->gfx, (uint8_t)slot, &blen);
+    unsigned i;
+
+    if (!bank) {
+        return;
+    }
+    for (i = 0; i < count; i++) {
+        uint32_t off = ((uint32_t)index + i) * 32u;
+
+        if (off + 32u > blen) {
+            break;
+        }
+        gfx_define_glyph(vm->gfx, (uint16_t)(code + i), bank + off, 32);
+    }
+}
+
+static void op_page(RbVm *vm, uint8_t rec)
+{
+    uint32_t sz = 0;
+    const uint8_t *src;
+    uint8_t *plane;
+    uint32_t si = 0;
+    int p;
+
+    if (!vm->assets) {
+        return;
+    }
+    src = assets_sgm1_chunk(vm->assets, rec, &sz);
+    if (!src || sz == 0) {
+        return;
+    }
+    plane = (uint8_t *)malloc(32000u);
+    if (!plane) {
+        return;
+    }
+    gfx_clear_frame(vm->gfx);
+    for (p = 0; p < 4; p++) {
+        uint32_t used = 0;
+        uint32_t n;
+
+        if (si >= sz) {
+            break;
+        }
+        n = lz_decompress(src + si, sz - si, plane, 32000u, &used);
+        gfx_merge_plane(vm->gfx, p, plane, n);
+        si += used;
+    }
+    free(plane);
+}
+
+static uint16_t gv_from_xy(uint16_t x, uint16_t y)
+{
+    uint16_t ax = (uint16_t)(y + (uint16_t)(y << 2));
+
+    ax = (uint16_t)(ax << 4);
+    return (uint16_t)(ax + (x >> 3));
+}
+
+static void op_grid(RbVm *vm, int ent, uint16_t si, uint16_t dest, int shift, int kind)
+{
+    uint32_t n = 0;
+    const uint8_t *p = code_of(vm, ent, &n);
+    uint32_t blen = 0;
+    const uint8_t *bank;
+    int cols;
+    int rows;
+
+    if (!p || (uint32_t)si + 2u >= n) {
+        return;
+    }
+    cols = p[si + 1u];
+    rows = p[si + 2u];
+    if (cols == 0) {
+        cols = 256;
+    }
+    if (rows == 0) {
+        rows = 256;
+    }
+    bank = gfx_bank_data(vm->gfx, p[si], &blen);
+    if (!bank) {
+        return;
+    }
+    gfx_blit_grid(vm->gfx, bank, blen, p + si + 3u, n - (uint32_t)si - 3u,
+                  dest, cols, rows, kind, shift);
+}
+
+static void op_span(RbVm *vm, uint8_t slot, uint16_t si, uint16_t dest,
+                    uint16_t row_bytes, uint16_t rows, uint16_t bx)
+{
+    uint32_t blen = 0;
+    const uint8_t *bank = gfx_bank_data(vm->gfx, slot, &blen);
+
+    if (!bank || (uint32_t)si >= blen) {
+        return;
+    }
+    gfx_blit_span(vm->gfx, bank + si, blen - si, dest, row_bytes, rows,
+                  (uint8_t)(bx >> 8), (uint8_t)bx);
+}
+
 static void note_miss(RbVm *vm, int ent, uint8_t op, uint16_t ip)
 {
     vm->op_miss++;
@@ -2641,7 +3040,7 @@ static void run_fetch(RbVm *vm, int ent)
             f = rd8(vm, ent, di);
             alu = rd8(vm, ent, (uint16_t)(di + 1u));
             imm8 = rd8(vm, ent, (uint16_t)(di + 2u));
-            vm->g[f] = byte_alu(vm, alu, vm->g[f], imm8);
+            set_g8(vm, f, byte_alu(vm, alu, vm->g[f], imm8));
             su16(vm, ent, 8, (uint16_t)(di + 3u));
             break;
         case 0x2C:
@@ -2655,7 +3054,7 @@ static void run_fetch(RbVm *vm, int ent)
             f = rd8(vm, ent, di);
             alu = rd8(vm, ent, (uint16_t)(di + 1u));
             imm8 = rd8(vm, ent, (uint16_t)(di + 2u));
-            vm->g[f] = byte_alu(vm, alu, vm->g[f], vm->g[imm8]);
+            set_g8(vm, f, byte_alu(vm, alu, vm->g[f], vm->g[imm8]));
             su16(vm, ent, 8, (uint16_t)(di + 3u));
             break;
         case 0x2E:
@@ -2669,7 +3068,7 @@ static void run_fetch(RbVm *vm, int ent)
             f = rd8(vm, ent, di);
             alu = rd8(vm, ent, (uint16_t)(di + 1u));
             imm8 = rd8(vm, ent, (uint16_t)(di + 2u));
-            vm->g[f] = byte_alu(vm, alu, vm->g[f], eu8(vm, ent, imm8));
+            set_g8(vm, f, byte_alu(vm, alu, vm->g[f], eu8(vm, ent, imm8)));
             su16(vm, ent, 8, (uint16_t)(di + 3u));
             break;
         case 0x30:
@@ -2679,9 +3078,18 @@ static void run_fetch(RbVm *vm, int ent)
             sgu16(vm, f, word_alu(vm, alu, gu16(vm, f), eu16(vm, ent, imm8)));
             su16(vm, ent, 8, (uint16_t)(di + 3u));
             break;
-        case 0x31:
+        case 0x31: {
+            uint16_t opnd = rd16(vm, ent, di);
+
+            su16(vm, ent, 8, (uint16_t)(di + 2u));
+            op_page(vm, (uint8_t)opnd);
+            break;
+        }
         case 0x3E:
+            su16(vm, ent, 8, (uint16_t)(di + 2u));
+            break;
         case 0x47:
+            draw_text(vm, ent, rd16(vm, ent, di));
             su16(vm, ent, 8, (uint16_t)(di + 2u));
             break;
         case 0x3F:
@@ -2712,23 +3120,84 @@ static void run_fetch(RbVm *vm, int ent)
             break;
         }
         case 0x33:
-        case 0x34:
-        case 0x48:
-        case 0x49:
+            define_glyphs(vm, gu16(vm, rd8(vm, ent, di)),
+                          rd8(vm, ent, (uint16_t)(di + 1u)),
+                          rd8(vm, ent, (uint16_t)(di + 2u)),
+                          rd16(vm, ent, (uint16_t)(di + 3u)));
             su16(vm, ent, 8, (uint16_t)(di + 5u));
             break;
-        case 0x35:
+        case 0x34:
+            op_grid(vm, ent, rd16(vm, ent, (uint16_t)(di + 2u)),
+                    rd16(vm, ent, di), rd8(vm, ent, (uint16_t)(di + 4u)), 0);
+            su16(vm, ent, 8, (uint16_t)(di + 5u));
+            break;
+        case 0x35: {
+            uint16_t y = eu16(vm, ent, rd8(vm, ent, (uint16_t)(di + 1u)));
+            uint16_t x = eu16(vm, ent, rd8(vm, ent, di));
+            uint16_t ax = (uint16_t)(y + (y >> 2));
+            uint16_t bx = (uint16_t)(x >> 6);
+            int shift = (int)(bx & 7u);
+
+            bx = (uint16_t)(bx >> 3);
+            op_grid(vm, ent, rd16(vm, ent, (uint16_t)(di + 2u)),
+                    (uint16_t)(ax + bx), shift, 0);
+            su16(vm, ent, 8, (uint16_t)(di + 4u));
+            break;
+        }
         case 0x36:
+            op_grid(vm, ent, rd16(vm, ent, (uint16_t)(di + 2u)),
+                    rd16(vm, ent, di), 0, 0);
+            su16(vm, ent, 8, (uint16_t)(di + 4u));
+            break;
         case 0x37:
+            op_grid(vm, ent, rd16(vm, ent, (uint16_t)(di + 2u)),
+                    gv_from_xy(eu16(vm, ent, rd8(vm, ent, di)),
+                               eu16(vm, ent, rd8(vm, ent, (uint16_t)(di + 1u)))),
+                    0, 0);
+            su16(vm, ent, 8, (uint16_t)(di + 4u));
+            break;
         case 0x38:
+            op_grid(vm, ent, rd16(vm, ent, (uint16_t)(di + 2u)),
+                    rd16(vm, ent, di), 0, 1);
+            su16(vm, ent, 8, (uint16_t)(di + 4u));
+            break;
         case 0x39:
+            op_grid(vm, ent, rd16(vm, ent, (uint16_t)(di + 2u)),
+                    gv_from_xy(eu16(vm, ent, rd8(vm, ent, di)),
+                               eu16(vm, ent, rd8(vm, ent, (uint16_t)(di + 1u)))),
+                    0, 1);
             su16(vm, ent, 8, (uint16_t)(di + 4u));
             break;
         case 0x3A:
+            op_span(vm, (uint8_t)gu16(vm, rd8(vm, ent, (uint16_t)(di + 7u))),
+                    rd16(vm, ent, (uint16_t)(di + 8u)),
+                    rd16(vm, ent, di),
+                    rd16(vm, ent, (uint16_t)(di + 3u)),
+                    rd16(vm, ent, (uint16_t)(di + 5u)),
+                    rd16(vm, ent, (uint16_t)(di + 10u)));
             su16(vm, ent, 8, (uint16_t)(di + 12u));
             break;
         case 0x3B:
+            op_span(vm, (uint8_t)gu16(vm, rd8(vm, ent, (uint16_t)(di + 6u))),
+                    rd16(vm, ent, (uint16_t)(di + 7u)),
+                    gv_from_xy(eu16(vm, ent, rd8(vm, ent, di)),
+                               eu16(vm, ent, rd8(vm, ent, (uint16_t)(di + 1u)))),
+                    rd16(vm, ent, (uint16_t)(di + 2u)),
+                    rd16(vm, ent, (uint16_t)(di + 4u)),
+                    rd16(vm, ent, (uint16_t)(di + 9u)));
             su16(vm, ent, 8, (uint16_t)(di + 11u));
+            break;
+        case 0x48:
+            text_u8(vm, rd16(vm, ent, di),
+                    vm->g[rd8(vm, ent, (uint16_t)(di + 2u))],
+                    rd16(vm, ent, (uint16_t)(di + 3u)));
+            su16(vm, ent, 8, (uint16_t)(di + 5u));
+            break;
+        case 0x49:
+            text_u16(vm, rd16(vm, ent, di),
+                     gu16(vm, rd8(vm, ent, (uint16_t)(di + 2u))),
+                     rd16(vm, ent, (uint16_t)(di + 3u)));
+            su16(vm, ent, 8, (uint16_t)(di + 5u));
             break;
         case 0x3C:
         case 0x3D: {
@@ -2752,6 +3221,10 @@ static void run_fetch(RbVm *vm, int ent)
             break;
         }
         case 0x4A:
+            text_u32(vm, rd16(vm, ent, di),
+                     gu16(vm, rd8(vm, ent, (uint16_t)(di + 2u))),
+                     gu16(vm, rd8(vm, ent, (uint16_t)(di + 3u))),
+                     rd16(vm, ent, (uint16_t)(di + 4u)));
             su16(vm, ent, 8, (uint16_t)(di + 6u));
             break;
         case 0x41:
@@ -3000,8 +3473,12 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
     vm->g[0xD7] = 1;
     memset(vm->rank, 0, sizeof vm->rank);
     memset(vm->text, 0, sizeof vm->text);
+    vm->text_di = 0;
+    vm->text_saved = 0;
+    vm->text_attr = 0x5756u;
     sgu16(vm, 0x56, (uint16_t)RANK_BASE);
     gfx_reset(vm->gfx);
+    install_boot_font(vm);
     vm->view_chunk = (int)chunk;
     if (ensure_chunk(vm, chunk) != 0 || vm->clen[chunk] < 2u) {
         return;
@@ -3195,7 +3672,7 @@ void vm_present(const RbVm *vm, uint32_t *rgba, int w, int h)
     if (!vm) {
         return;
     }
-    gfx_present(vm->gfx, (int)gu16(vm, 0x76), rgba, w, h);
+    gfx_present(vm->gfx, (int)gu16(vm, 0x76), vm->text, rgba, w, h);
 }
 
 int vm_self_test(RbVm *vm)
