@@ -1550,6 +1550,7 @@ int fplay_bind(const char *dir)
     flags = IF | 2u;
     r[R_SP] = 0xFFFE;
     ip = 0;
+    opna_autoload_rhythm(dir);
     opna_reset();
     enter_near(0x0BD0);
     ready = (unknown_op == 0 && mem[0x280] != 0) ? 1 : 0;

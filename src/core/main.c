@@ -6,6 +6,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static const char *default_assets(void)
 {
@@ -16,10 +17,32 @@ static const char *default_assets(void)
     return "assets/raw/RUDEBR";
 }
 
+static const char *parse_args(int argc, char **argv)
+{
+    const char *assets = NULL;
+    int i;
+
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--ym2608-rom") == 0) {
+            if (i + 1 < argc) {
+                sys_set_rhythm_override(argv[++i]);
+            }
+            continue;
+        }
+        if (!assets) {
+            assets = argv[i];
+        }
+    }
+    if (!assets) {
+        assets = default_assets();
+    }
+    return assets;
+}
+
 int main(int argc, char **argv)
 {
     RbGame game;
-    const char *assets = (argc > 1) ? argv[1] : default_assets();
+    const char *assets = parse_args(argc, argv);
 
     if (sys_init("Rude Breaker") != 0) {
         fprintf(stderr, "sys_init failed\n");

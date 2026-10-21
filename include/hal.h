@@ -210,6 +210,9 @@ int  sys_play_music(uint16_t track_id);
 void sys_stop_music(void);
 /* Open FPLAY.COM and SONG.DAT from a RUDEBR directory. 0 on success. */
 int  sys_audio_bind(const char *dir);
+/* Optional path to ym2608_adpcm_rom.bin. NULL clears it. The file is
+ * not shipped; a missing ROM leaves ADPCM-A silent. */
+void sys_set_rhythm_override(const char *path);
 /* Opcode 0x46, INT 7Fh AH=4. speed is the fade step the driver stores. */
 void sys_fade_music(uint8_t speed);
 

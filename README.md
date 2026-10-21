@@ -48,6 +48,27 @@ Optional asset path (defaults to `assets/raw/RUDEBR` if present):
 RUDEBR_ASSETS=./assets/raw/RUDEBR ./build/rudebreaker
 ```
 
+## YM2608 rhythm ROM (not in the repo)
+
+The six internal percussion samples are Yamaha copyright. Do not commit
+`ym2608_adpcm_rom.bin`, a zip of it, or any dump derived from it. The
+SDL2 build looks for that file at runtime and checks that it is exactly
+8192 bytes with CRC32 `23c9e0d8`. A match is fed to ymfm's ADPCM-A
+external read. Anything else, including a missing file, leaves those
+reads at zero, which is the same silent rhythm as before.
+
+Search order:
+
+1. `--ym2608-rom /path/to/ym2608_adpcm_rom.bin` (this replaces the search)
+2. `RUDEBR_YM2608_ROM` (this also replaces the search)
+3. `ym2608_adpcm_rom.bin` in the same directory as the executable
+4. `ym2608_adpcm_rom.bin` in the asset directory
+
+```bash
+./build/rudebreaker --ym2608-rom "$HOME/ym2608_adpcm_rom.bin" assets/raw/RUDEBR
+RUDEBR_YM2608_ROM="$HOME/ym2608_adpcm_rom.bin" ./build/rudebreaker
+```
+
 ## Build — Phase 2 (X68000 / Human68k)
 
 Requires the Human68k GCC cross toolchain. Replace the SDL2 objects with the

@@ -3,6 +3,7 @@
  */
 #include "hal.h"
 #include "fplay.h"
+#include "opna.h"
 
 #include <SDL.h>
 #include <stdio.h>
@@ -43,6 +44,11 @@ static void open_device(void)
     }
     SDL_PauseAudioDevice(g_dev, 0);
     g_opened = 1;
+}
+
+void sys_set_rhythm_override(const char *path)
+{
+    opna_set_rhythm_override(path);
 }
 
 int sys_audio_bind(const char *dir)

@@ -36,6 +36,11 @@ int sys_audio_bind(const char *dir)
     return 0;
 }
 
+void sys_set_rhythm_override(const char *path)
+{
+    (void)path;
+}
+
 void sys_fade_music(uint8_t speed)
 {
     (void)speed;
