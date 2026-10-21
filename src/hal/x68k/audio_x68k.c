@@ -30,6 +30,17 @@ void sys_stop_music(void)
     /* Key-off all OPM channels when the driver is wired. */
 }
 
+int sys_audio_bind(const char *dir)
+{
+    (void)dir;
+    return 0;
+}
+
+void sys_fade_music(uint8_t speed)
+{
+    (void)speed;
+}
+
 #else
 
 typedef int rb_audio_x68k_placeholder;

@@ -63,6 +63,16 @@ void vm_set_hiscore(RbVm *vm, uint32_t score);
 void vm_set_input(RbVm *vm, const RbInput *in);
 void vm_frame(RbVm *vm);
 
+/* Keep the player ship (id 0x0012) above the hit that starts the
+ * death script. The stage itself ends on [bp+0xCC], not on that death. */
+void vm_sustain_ship(RbVm *vm);
+uint8_t vm_global_u8(const RbVm *vm, uint8_t field);
+uint16_t vm_global_u16(const RbVm *vm, uint8_t field);
+/* Current instruction of the first live entity spawned at origin, or 0. */
+uint16_t vm_origin_ip(const RbVm *vm, uint16_t origin);
+/* Print live entities grouped by spawn address. */
+void vm_debug_origins(const RbVm *vm);
+
 void vm_info(const RbVm *vm, RbVmInfo *out);
 int  vm_count_origin(const RbVm *vm, uint16_t script_ip);
 int  vm_collect_sprites(const RbVm *vm, RbVmSprite *out, int max);

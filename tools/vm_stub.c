@@ -19,6 +19,17 @@ void sys_stop_music(void)
 {
 }
 
+int sys_audio_bind(const char *dir)
+{
+    (void)dir;
+    return 0;
+}
+
+void sys_fade_music(uint8_t speed)
+{
+    (void)speed;
+}
+
 void sys_draw_sprite(const RbSprite *spr)
 {
     (void)spr;

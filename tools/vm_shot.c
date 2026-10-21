@@ -183,6 +183,24 @@ static int write_png(const char *path, const uint32_t *rgba, int w, int h)
     return 0;
 }
 
+static void stats(const char *tag, const uint32_t *px, const RbVmInfo *info);
+
+static int shoot(RbVm *vm, uint32_t *px, const char *path)
+{
+    RbVmInfo info;
+    int rc;
+
+    vm_info(vm, &info);
+    vm_present(vm, px, RB_NATIVE_W, RB_NATIVE_H);
+    stats(path, px, &info);
+    printf("  active=%d c5=%u rec=%u hdr=%u\n", vm_gfx_active(vm),
+           (unsigned)vm_global_u8(vm, 0xC5),
+           (unsigned)info.load_record, (unsigned)info.load_header);
+    rc = write_png(path, px, RB_NATIVE_W, RB_NATIVE_H);
+    printf("  wrote %s (%d)\n", path, rc);
+    return rc;
+}
+
 static void stats(const char *tag, const uint32_t *px, const RbVmInfo *info)
 {
     int y;
@@ -239,47 +257,97 @@ int main(int argc, char **argv)
         return 1;
     }
     memset(&in, 0, sizeof in);
-    in.buttons = RB_BTN_A;
     vm_reset_play(vm, 1);
     vm_set_hiscore(vm, 25000);
-    for (frame = 1; frame <= 2200; frame++) {
-        RbVmInfo info;
-        int shot = 0;
-        char path[256];
+    {
+        int over = 0;
+        int form_shot = 0;
+        int result_shot = 0;
+        int cont_at = 0;
 
-        vm_set_input(vm, &in);
-        vm_frame(vm);
-        vm_info(vm, &info);
-        if (frame == 180) {
-            snprintf(path, sizeof path, "%s/stage1_hud.png", out_dir);
-            shot = 1;
-        } else if (info.chunk == 2 && vm_count_origin(vm, 0x29E1) > 0) {
-            static int form_shot;
+        for (frame = 1; frame <= 8000 && cont_at == 0; frame++) {
+            RbVmInfo info;
+            char path[256];
 
-            if (!form_shot) {
+            if (over == 0) {
+                in.buttons = RB_BTN_A;
+            } else {
+                in.buttons = ((frame & 3) == 0) ? RB_BTN_A : 0;
+            }
+            vm_set_input(vm, &in);
+            vm_frame(vm);
+            vm_info(vm, &info);
+            if (frame == 180) {
+                snprintf(path, sizeof path, "%s/stage1_hud.png", out_dir);
+                shoot(vm, px, path);
+            }
+            if (!form_shot && info.chunk == 2 &&
+                vm_count_origin(vm, 0x29E1) > 0) {
                 form_shot = 1;
                 snprintf(path, sizeof path, "%s/stage1_formation.png", out_dir);
-                shot = 1;
+                shoot(vm, px, path);
             }
-        } else if (info.chunk == 1 && frame > 200) {
-            static int clear_at;
-
-            if (clear_at == 0) {
-                clear_at = frame;
+            if (over == 0 && info.chunk == 1 && info.load_record == 1 &&
+                info.load_header == 2) {
+                over = frame;
             }
-            if (frame == clear_at + 80) {
-                snprintf(path, sizeof path, "%s/stage1_clear.png", out_dir);
-                shot = 1;
+            if (over != 0 && !result_shot && frame == over + 80 &&
+                info.chunk == 1) {
+                result_shot = 1;
+                snprintf(path, sizeof path, "%s/result_screen.png", out_dir);
+                shoot(vm, px, path);
+            }
+            if (over != 0 && info.chunk == 2 && info.load_header == 0 &&
+                vm_global_u8(vm, 0xC5) == 1) {
+                cont_at = frame;
             }
         }
-        if (shot) {
-            int rc;
+        if (cont_at != 0) {
+            int i;
+            char path[256];
 
-            vm_present(vm, px, RB_NATIVE_W, RB_NATIVE_H);
-            stats("shot", px, &info);
-            printf("  active=%d\n", vm_gfx_active(vm));
-            rc = write_png(path, px, RB_NATIVE_W, RB_NATIVE_H);
-            printf("  wrote %s (%d)\n", path, rc);
+            for (i = 0; i < 180; i++) {
+                in.buttons = RB_BTN_A;
+                vm_set_input(vm, &in);
+                vm_frame(vm);
+            }
+            snprintf(path, sizeof path, "%s/continue_stage.png", out_dir);
+            shoot(vm, px, path);
+        }
+    }
+    vm_reset_play(vm, 1);
+    vm_set_hiscore(vm, 25000);
+    {
+        int stage2_at = 0;
+        int stage5_at = 0;
+        int shot2 = 0;
+        int shot5 = 0;
+
+        in.buttons = RB_BTN_A;
+        for (frame = 1; frame <= 25000 && (!shot2 || !shot5); frame++) {
+            RbVmInfo info;
+            char path[256];
+
+            vm_sustain_ship(vm);
+            vm_set_input(vm, &in);
+            vm_frame(vm);
+            vm_info(vm, &info);
+            if (stage2_at == 0 && info.chunk == 3) {
+                stage2_at = frame;
+            }
+            if (!shot2 && stage2_at != 0 && frame == stage2_at + 400) {
+                shot2 = 1;
+                snprintf(path, sizeof path, "%s/stage2.png", out_dir);
+                shoot(vm, px, path);
+            }
+            if (stage5_at == 0 && info.chunk == 6) {
+                stage5_at = frame;
+            }
+            if (!shot5 && stage5_at != 0 && frame == stage5_at + 200) {
+                shot5 = 1;
+                snprintf(path, sizeof path, "%s/stage5.png", out_dir);
+                shoot(vm, px, path);
+            }
         }
     }
     free(px);

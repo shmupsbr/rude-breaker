@@ -26,6 +26,7 @@ ifeq ($(PLATFORM),sdl2)
   HAL_SRCS := \
 	src/hal/sdl2/video_sdl2.c \
 	src/hal/sdl2/audio_sdl2.c \
+	src/hal/sdl2/fplay.c \
 	src/hal/sdl2/input_sdl2.c
   CFLAGS  += $(shell pkg-config --cflags sdl2)
   LDFLAGS += $(shell pkg-config --libs sdl2)

@@ -202,6 +202,10 @@ void sys_read_input(RbInput *out);
 int  sys_play_sound(uint16_t id, uint8_t vol);
 int  sys_play_music(uint16_t track_id);
 void sys_stop_music(void);
+/* Open FPLAY.COM and SONG.DAT from a RUDEBR directory. 0 on success. */
+int  sys_audio_bind(const char *dir);
+/* Opcode 0x46, INT 7Fh AH=4. speed is the fade step the driver stores. */
+void sys_fade_music(uint8_t speed);
 
 /* Milliseconds since sys_init (debug / Phase 1 only; core must not rely). */
 uint32_t sys_ticks_ms(void);
