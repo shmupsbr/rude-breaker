@@ -60,7 +60,9 @@ void gfx_blit_span(RbGfx *gfx, const uint8_t *src, uint32_t slen,
                    uint8_t src_planes, uint8_t dst_planes, uint8_t shift);
 
 int  gfx_active(const RbGfx *gfx);
+/* blank_sides forces the 80 px columns black. The stage playfield does
+ * that; the logo, title, and menus are drawn across the full 640. */
 void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,
-                 uint32_t *rgba, int w, int h);
+                 uint32_t *rgba, int w, int h, int blank_sides);
 
 #endif /* RUDEBREAKER_GFX_H */

@@ -995,6 +995,232 @@ static void paint_glyph_half(uint32_t *rgba, int w, int x, int y,
     }
 }
 
+/* Boot-font stand-in for the PC-98 kanji the text layer would show.
+ * The phrases are the JIS codes draw_text leaves in VRAM. */
+#include "text_en.inc"
+
+static const char *const KANA[] = {
+    "A", "A", "I", "I", "U", "U", "E", "E", "O", "O",
+    "KA", "GA", "KI", "GI", "KU", "GU", "KE", "GE", "KO", "GO",
+    "SA", "ZA", "SHI", "JI", "SU", "ZU", "SE", "ZE", "SO", "ZO",
+    "TA", "DA", "CHI", "DI", "", "TSU", "DU", "TE", "DE", "TO", "DO",
+    "NA", "NI", "NU", "NE", "NO",
+    "HA", "BA", "PA", "HI", "BI", "PI", "FU", "BU", "PU", "HE", "BE", "PE",
+    "HO", "BO", "PO",
+    "MA", "MI", "MU", "ME", "MO",
+    "YA", "YA", "YU", "YU", "YO", "YO",
+    "RA", "RI", "RU", "RE", "RO",
+    "WA", "WA", "WI", "WE", "WO", "N"
+};
+
+static int fold_jis(uint16_t jis, char *dst, int cap)
+{
+    unsigned j1 = (unsigned)(jis >> 8);
+    unsigned j2 = (unsigned)(jis & 0xFFu);
+    const char *s = NULL;
+    char one[2];
+
+    if (jis == 0x2121u || jis == 0x2126u) {
+        s = " ";
+    } else if (jis == 0x2132u) {
+        s = "_";
+    } else if (j1 == 0x23u && j2 >= 0x21u && j2 < 0x7Fu) {
+        one[0] = (char)j2;
+        if (one[0] >= 'a' && one[0] <= 'z') {
+            one[0] = (char)(one[0] - 32);
+        }
+        one[1] = '\0';
+        s = one;
+    } else if ((j1 == 0x24u || j1 == 0x25u) &&
+               j2 >= 0x21u && j2 < 0x21u + (sizeof KANA / sizeof KANA[0])) {
+        s = KANA[j2 - 0x21u];
+    }
+    if (!s) {
+        return -1;
+    }
+    {
+        int n = (int)strlen(s);
+
+        if (n >= cap) {
+            return -1;
+        }
+        memcpy(dst, s, (size_t)n);
+        return n;
+    }
+}
+
+static void paint_en(const RbGfx *gfx, uint32_t *rgba, int w, int x, int y,
+                     const char *s, uint32_t rgb)
+{
+    for (; *s; s++) {
+        int ch = (unsigned char)*s;
+        uint16_t code = 0;
+        unsigned id;
+        int col;
+
+        if (x >= w - 1) {
+            return;
+        }
+        if (ch >= 'a' && ch <= 'z') {
+            ch -= 32;
+        }
+        if (ch == ' ') {
+            x += 16;
+            continue;
+        }
+        if (ch == '_') {
+            for (col = 1; col < 14; col++) {
+                int px = x + col;
+                int py = y + 14;
+
+                if ((unsigned)px < (unsigned)w && (unsigned)py < (unsigned)RB_GFX_H) {
+                    rgba[(size_t)py * (size_t)w + (size_t)px] = rgb;
+                }
+            }
+            x += 16;
+            continue;
+        }
+        if (ch >= '0' && ch <= '9') {
+            code = (uint16_t)(0x7621u + (unsigned)(ch - '0'));
+        } else if (ch >= 'A' && ch <= 'Z') {
+            code = (uint16_t)(0x7630u + (unsigned)(ch - 'A'));
+        } else if (ch == '!') {
+            code = 0x764Au;
+        } else if (ch == '-' || ch == '/') {
+            code = 0x764Cu;
+        } else if (ch == '.') {
+            code = 0x762Eu;
+        } else {
+            x += 16;
+            continue;
+        }
+        id = (unsigned)code - 0x7600u;
+        if (id < 512u && gfx->glyph_on[id]) {
+            paint_glyph_half(rgba, w, x, y, gfx->glyph[id], 0, rgb);
+            paint_glyph_half(rgba, w, x + 8, y, gfx->glyph[id], 1, rgb);
+        }
+        x += 16;
+    }
+}
+
+static const char *phrase_en(const uint16_t *jis, int n)
+{
+    size_t i;
+    int a = 0;
+    int b = n;
+
+    /* Ending lines pad the phrase with an ideographic space. The
+     * dictionary keys are the words themselves. */
+    while (a < b && (jis[a] == 0x2121u || jis[a] == 0x2126u)) {
+        a++;
+    }
+    while (b > a && (jis[b - 1] == 0x2121u || jis[b - 1] == 0x2126u)) {
+        b--;
+    }
+    n = b - a;
+    jis += a;
+    for (i = 0; i < sizeof k_phrase / sizeof k_phrase[0]; i++) {
+        if (k_phrase[i].n == (unsigned char)n &&
+            memcmp(k_phrase[i].jis, jis, (size_t)n * sizeof(uint16_t)) == 0) {
+            return k_phrase[i].en;
+        }
+    }
+    return NULL;
+}
+
+/* Standard JIS in the text layer (CONFIG, ranking names, the ending
+ * message). Gaiji 0x76/0x77 stays with the glyph painter above. */
+static void overlay_english(const RbGfx *gfx, const uint8_t *text,
+                            uint32_t *rgba, int w)
+{
+    int row;
+
+    for (row = 0; row < 25; row++) {
+        int col = 0;
+
+        while (col < 80) {
+            unsigned off = (unsigned)row * 0xA0u + (unsigned)col * 2u;
+            uint8_t b0 = text[off];
+            uint8_t b1 = text[off + 1];
+            unsigned low;
+            uint16_t run[40];
+            int n = 0;
+            int start = col;
+            int color;
+            uint32_t rgb;
+            const char *en;
+            char folded[96];
+            int flen = 0;
+            int k;
+
+            if ((b0 & 0x80u) != 0) {
+                col++;
+                continue;
+            }
+            if (b1 == 0 && (b0 == 0 || b0 == 0x20u)) {
+                col++;
+                continue;
+            }
+            low = (unsigned)(b0 & 0x7Fu) + 0x20u;
+            if ((low == 0x76u || low == 0x77u) && b1 != 0) {
+                col += 2;
+                continue;
+            }
+            while (col < 80 && n < 40) {
+                unsigned o = (unsigned)row * 0xA0u + (unsigned)col * 2u;
+                uint8_t c0 = text[o];
+                uint8_t c1 = text[o + 1];
+                unsigned j1;
+
+                if ((c0 & 0x80u) != 0) {
+                    break;
+                }
+                if (c1 == 0 && (c0 == 0 || c0 == 0x20u)) {
+                    break;
+                }
+                j1 = (unsigned)(c0 & 0x7Fu) + 0x20u;
+                if ((j1 == 0x76u || j1 == 0x77u) && c1 != 0) {
+                    break;
+                }
+                run[n++] = (uint16_t)((j1 << 8) | c1);
+                col += 2;
+            }
+            if (n == 0) {
+                col++;
+                continue;
+            }
+            en = phrase_en(run, n);
+            if (!en) {
+                int ok = 1;
+
+                for (k = 0; k < n; k++) {
+                    int got = fold_jis(run[k], folded + flen, (int)sizeof folded - flen);
+
+                    if (got < 0) {
+                        ok = 0;
+                        break;
+                    }
+                    flen += got;
+                }
+                if (!ok || flen == 0) {
+                    continue;
+                }
+                folded[flen] = '\0';
+                en = folded;
+            }
+            color = (text[0x2000u + (unsigned)row * 0xA0u + (unsigned)start * 2u] >> 5) & 7;
+            if (color == 0) {
+                color = 7;
+            }
+            rgb = 0xFFu |
+                  ((uint32_t)TEXT_RGB[color][0] << 24) |
+                  ((uint32_t)TEXT_RGB[color][1] << 16) |
+                  ((uint32_t)TEXT_RGB[color][2] << 8);
+            paint_en(gfx, rgba, w, start * 8, row * 16, en, rgb);
+        }
+    }
+}
+
 static void overlay_text(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, int w)
 {
     int row;
@@ -1037,10 +1263,11 @@ static void overlay_text(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, 
                              (b0 & 0x80u) != 0, rgb);
         }
     }
+    overlay_english(gfx, text, rgba, w);
 }
 
 void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,
-                 uint32_t *rgba, int w, int h)
+                 uint32_t *rgba, int w, int h, int blank_sides)
 {
     int y;
     int scroll;
@@ -1065,11 +1292,12 @@ void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,
             int ch;
             uint32_t px = 0xFFu;
 
-            /* Real captures keep the 80 px side columns pure black. GVRAM
-             * is 640 wide and index 0 is the stage color, so those columns
-             * would otherwise show the background and any sprite that
-             * spills past the playfield. Text is painted after this. */
-            if (x < 80 || x >= 560) {
+            /* Stage captures keep the 80 px side columns pure black.
+             * GVRAM is 640 wide and index 0 is the stage color, so those
+             * columns would otherwise show the background. The logo,
+             * intro, title, and menus are drawn across the full width,
+             * so the blanking stays off there. Text is painted after. */
+            if (blank_sides && (x < 80 || x >= 560)) {
                 rgba[(size_t)y * (size_t)w + (size_t)x] = 0x000000FFu;
                 continue;
             }

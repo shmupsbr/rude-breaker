@@ -45,6 +45,9 @@ static int unknown_op;
 static uint16_t unknown_ip;
 
 static uint8_t opn_reg[2][256];
+/* YM2608 prescale. Address writes 0x2D/0x2E/0x2F select 6, 3, or 2.
+ * The timer IRQ period is (1024-TA) * 24 * prescale clocks. */
+static int opn_prescale = 6;
 static uint8_t opn_latch[2];
 static unsigned opn_writes;
 
@@ -1248,6 +1251,16 @@ static int cpu_step(void)
 
         if (port == 0x188u || port == 0x18Cu) {
             opn_latch[port == 0x18Cu] = val;
+            /* Prescale is armed by the address write, same as ym2608. */
+            if (port == 0x188u) {
+                if (val == 0x2Du) {
+                    opn_prescale = 6;
+                } else if (val == 0x2Eu && opn_prescale == 6) {
+                    opn_prescale = 3;
+                } else if (val == 0x2Fu) {
+                    opn_prescale = 2;
+                }
+            }
             opna_write(port, val);
         } else if (port == 0x18Au || port == 0x18Eu) {
             int bank = port == 0x18Eu;
@@ -1434,13 +1447,23 @@ static int timer_samples(void)
 {
     int ta = ((int)opn_reg[0][0x24] << 2) | (opn_reg[0][0x25] & 3);
     int span = 1024 - ta;
+    unsigned prescale = (unsigned)opn_prescale;
+    unsigned num;
     int n;
 
     if (span < 1) {
         span = 1;
     }
-    /* 44100 * 72 * (1024-TA) / 3993600 */
-    n = (int)((31752u * (unsigned)span) / 39936u);
+    if (prescale < 2u) {
+        prescale = 6u;
+    }
+    /* 44100 * 24 * prescale * (1024-TA) / 7987200.
+     * ymfm's OPNA timer is (1024-TA) operator clocks, and each operator
+     * clock is `prescale` master clocks. Prescale 6 is 144 master clocks
+     * per count. FPLAY programs TA=82 and leaves the prescale at 6, so
+     * the tick is 748 samples, about 58.9 Hz, from this audio callback. */
+    num = 44100u * prescale * (unsigned)span;
+    n = (int)(num / 332800u);
     if (n < 8) {
         n = 8;
     }
@@ -1520,6 +1543,7 @@ int fplay_bind_mem(const uint8_t *com, size_t com_n,
     memset(r, 0, sizeof r);
     memset(sreg, 0, sizeof sreg);
     memset(opn_reg, 0, sizeof opn_reg);
+    opn_prescale = 6;
     unknown_op = 0;
     opn_writes = 0;
     mem[0] = 0xF4;

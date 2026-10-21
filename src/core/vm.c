@@ -3993,7 +3993,10 @@ void vm_present(const RbVm *vm, uint32_t *rgba, int w, int h)
     if (!vm) {
         return;
     }
-    gfx_present(vm->gfx, (int)gu16(vm, 0x76), vm->text, rgba, w, h);
+    /* Chunks 2..6 are the stages. Chunk 1 is the logo, title, menus,
+     * ranking, and ending, all drawn across the full 640. */
+    gfx_present(vm->gfx, (int)gu16(vm, 0x76), vm->text, rgba, w, h,
+                vm->view_chunk >= 2 && vm->view_chunk <= 6);
 }
 
 int vm_self_test(RbVm *vm)
