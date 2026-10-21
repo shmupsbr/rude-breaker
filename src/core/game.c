@@ -185,6 +185,8 @@ void game_update(RbGame *g)
                 }
             }
         }
+        /* START is the PC-98 ESC bit. During play it returns to the
+         * title. F10 is the quit bit. */
         if (g->state == RB_STATE_PLAY && btn_pressed(g, RB_BTN_START)) {
             sys_stop_music();
             g->state = RB_STATE_TITLE;
@@ -215,7 +217,7 @@ void game_render(const RbGame *g)
     case RB_STATE_TITLE:
         sys_draw_text(200, 140, "RUDE BREAKER", 0xFFFFFFFFu);
         sys_draw_text(180, 180, "PC-98 clean-room C99 port", 0xFFA0A0A0u);
-        sys_draw_text(200, 240, "PRESS Z / ENTER", 0xFFFFFF00u);
+        sys_draw_text(200, 240, "PRESS Z / SPACE", 0xFFFFFF00u);
         if (g_assets.loaded) {
             snprintf(line, sizeof(line), "SGM1 chunks: %u",
                      (unsigned)g_assets.sgm1.count);

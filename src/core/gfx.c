@@ -513,6 +513,28 @@ void gfx_palette_delta(RbGfx *gfx, const uint8_t *p, uint32_t n)
     }
 }
 
+void gfx_dac_flush(RbGfx *gfx)
+{
+    int idx;
+    int c;
+
+    if (!gfx) {
+        return;
+    }
+    for (idx = 0; idx < 16; idx++) {
+        for (c = 0; c < 3; c++) {
+            int16_t w = gfx->pal[idx][c];
+            uint8_t level;
+
+            if ((w & 0xFF00) != 0) {
+                w = 0x00F0;
+            }
+            level = (uint8_t)(((uint16_t)w & 0xFFu) >> 4);
+            gfx->pal[idx][c] = (int16_t)((int16_t)level << 4);
+        }
+    }
+}
+
 void gfx_palette_step(RbGfx *gfx, uint8_t shift)
 {
     int idx;

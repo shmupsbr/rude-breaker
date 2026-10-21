@@ -35,6 +35,9 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
 void gfx_palette_abs(RbGfx *gfx, const uint8_t *p, uint32_t n);
 void gfx_palette_delta(RbGfx *gfx, const uint8_t *p, uint32_t n);
 void gfx_palette_step(RbGfx *gfx, uint8_t shift);
+/* Loader 0x6C0B analog DAC. A component with a nonzero high byte
+ * becomes 0xF0. The level is the low byte >> 4, stored back << 4. */
+void gfx_dac_flush(RbGfx *gfx);
 
 /* User glyphs registered by opcode 0x33 (INT 18h AH=1Ah). Codes are 0x76xx. */
 void gfx_define_glyph(RbGfx *gfx, uint16_t code, const uint8_t *bits, uint32_t n);

@@ -7,12 +7,13 @@
  * fade enter the real handler at 0x801 so it returns with IRET. The timer
  * IRQ is the ISR at 0x1000, run from the mixer at the YM2608 timer-A rate.
  *
- * OUT 0x188/0x18A (and the second pair 0x18C/0x18E) feed a small OPNA:
- * the three SSG squares plus a sine per keyed FM channel at the f-number
- * the driver wrote. IN 0x188 returns busy-bit clear; the driver's SFMADR
- * spins while that bit is set.
+ * OUT 0x188/0x18A (and the second pair 0x18C/0x18E) go to a YM2608.
+ * IN 0x188 returns busy-bit clear; the driver's SFMADR spins while that
+ * bit is set. The register file is mirrored so the timer period still
+ * comes from 0x24/0x25.
  */
 #include "fplay.h"
+#include "opna.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,16 +48,8 @@ static uint8_t opn_reg[2][256];
 static uint8_t opn_latch[2];
 static unsigned opn_writes;
 
-static uint32_t fm_phase[6];
-static int fm_env[6];
-static int fm_key[6];
-static uint32_t ssg_phase[3];
-static uint32_t noise_phase;
-static uint32_t noise_lfsr = 1;
 static int timer_left;
 static int isr_busy;
-
-static void opn_key(uint8_t v);
 
 static uint8_t fetch8(void)
 {
@@ -1255,15 +1248,14 @@ static int cpu_step(void)
 
         if (port == 0x188u || port == 0x18Cu) {
             opn_latch[port == 0x18Cu] = val;
+            opna_write(port, val);
         } else if (port == 0x18Au || port == 0x18Eu) {
             int bank = port == 0x18Eu;
             uint8_t addr = opn_latch[bank];
 
             opn_reg[bank][addr] = val;
             opn_writes++;
-            if (bank == 0 && addr == 0x28u) {
-                opn_key(val);
-            }
+            opna_write(port, val);
         }
         return 0;
     }
@@ -1438,82 +1430,6 @@ static void enter_iret(uint16_t dest)
     cpu_run_fixed(400000);
 }
 
-static int16_t sine(uint32_t phase)
-{
-    uint32_t q = phase >> 30;
-    uint32_t frac = (phase >> 16) & 0x3FFFu;
-    uint32_t u = (q & 1u) ? (0x3FFFu - frac) : frac;
-    int32_t s = (int32_t)((u * (16384u - u)) >> 12);
-
-    if (q & 2u) {
-        s = -s;
-    }
-    return (int16_t)s;
-}
-
-/* Operator 1..4 TL registers. Slot order is 0, 8, 4, 12 (M1, C1, M2, C2). */
-static int op_tl(int bank, int idx, int op)
-{
-    static const int off[4] = { 0x00, 0x08, 0x04, 0x0C };
-
-    return opn_reg[bank][0x40 + off[op] + idx] & 0x7F;
-}
-
-static int fm_channel(int ch, int *fnum, int *block, int *tl)
-{
-    /* Carriers per algorithm, from the OPN connection table.
-     * Bit 0 is operator 1. Operator 4 reaches the output in every algorithm. */
-    static const uint8_t carrier[8] = {
-        0x08, 0x08, 0x08, 0x08, 0x0A, 0x0E, 0x0E, 0x0F
-    };
-    int bank = ch >= 3;
-    int idx = bank ? ch - 3 : ch;
-    uint8_t a0;
-    uint8_t a4;
-    uint8_t mask;
-    int op;
-    int best = 127;
-
-    if (idx < 0 || idx > 2) {
-        return 0;
-    }
-    a0 = opn_reg[bank][0xA0 + idx];
-    a4 = opn_reg[bank][0xA4 + idx];
-    *fnum = ((a4 & 7) << 8) | a0;
-    *block = (a4 >> 3) & 7;
-    mask = carrier[opn_reg[bank][0xB0 + idx] & 7];
-    for (op = 0; op < 4; op++) {
-        int level;
-
-        if ((mask & (uint8_t)(1u << op)) == 0) {
-            continue;
-        }
-        level = op_tl(bank, idx, op);
-        if (level < best) {
-            best = level;
-        }
-    }
-    *tl = best;
-    /* Key nibble matches the same operator bits. A keyed modulator
-     * with a silent carrier does not sound. */
-    return (fm_key[ch] & mask) != 0 && *fnum != 0;
-}
-
-static void opn_key(uint8_t v)
-{
-    int chn = v & 7;
-    int slot = -1;
-
-    if (chn <= 2) {
-        slot = chn;
-    } else if (chn >= 4 && chn <= 6) {
-        slot = chn - 1;
-    }
-    if (slot >= 0) {
-        fm_key[slot] = (v >> 4) & 0x0F;
-    }
-}
-
 static int timer_samples(void)
 {
     int ta = ((int)opn_reg[0][0x24] << 2) | (opn_reg[0][0x25] & 3);
@@ -1533,84 +1449,7 @@ static int timer_samples(void)
 
 static void mix_frame(int16_t *dst)
 {
-    int ch;
-    int32_t acc = 0;
-    int i;
-    uint8_t mix = opn_reg[0][0x07];
-    uint32_t noise_period = (uint32_t)(opn_reg[0][0x06] & 0x1Fu);
-
-    for (ch = 0; ch < 6; ch++) {
-        int fnum = 0;
-        int block = 0;
-        int tl = 127;
-        int on = fm_channel(ch, &fnum, &block, &tl);
-        /* One sine stands in for the carrier. (127-tl)*8 / 16384 keeps
-         * a full-level channel near 1000, under the mixer rail. */
-        int target = on ? (127 - tl) * 8 : 0;
-        uint32_t inc;
-
-        if (fm_env[ch] < target) {
-            fm_env[ch] += 80;
-            if (fm_env[ch] > target) {
-                fm_env[ch] = target;
-            }
-        } else if (fm_env[ch] > target) {
-            fm_env[ch] -= 40;
-            if (fm_env[ch] < target) {
-                fm_env[ch] = target;
-            }
-        }
-        inc = (uint32_t)fnum * 2577u;
-        if (block > 0) {
-            inc <<= (unsigned)block;
-        }
-        fm_phase[ch] += inc;
-        if (fm_env[ch] > 0) {
-            acc += (sine(fm_phase[ch]) * fm_env[ch]) / 16384;
-        }
-    }
-    if (noise_period == 0) {
-        noise_period = 1;
-    }
-    noise_phase += (124800u << 8) / noise_period;
-    if (noise_phase & 0x80000000u) {
-        unsigned bit = ((noise_lfsr >> 0) ^ (noise_lfsr >> 3)) & 1u;
-
-        noise_lfsr = (noise_lfsr >> 1) | (bit << 16);
-        noise_phase &= 0x7FFFFFFFu;
-    }
-    for (i = 0; i < 3; i++) {
-        unsigned period = (unsigned)opn_reg[0][i * 2] |
-                          ((unsigned)(opn_reg[0][i * 2 + 1] & 0x0Fu) << 8);
-        int vol = opn_reg[0][0x08 + i] & 0x0F;
-        int tone_on = (mix & (1u << i)) == 0;
-        int noise_on = (mix & (1u << (i + 3))) == 0;
-        int gate = 0;
-
-        if (period == 0) {
-            period = 1;
-        }
-        ssg_phase[i] += (uint32_t)((124800ull << 16) / period / 44100ull);
-        if (tone_on && (ssg_phase[i] & 0x80000000u) == 0) {
-            gate = 1;
-        }
-        if (noise_on && (noise_lfsr & 1u)) {
-            gate = 1;
-        }
-        if (vol > 0 && gate && (tone_on || noise_on)) {
-            acc += vol * 80;
-        } else if (vol > 0 && (tone_on || noise_on)) {
-            acc -= vol * 80;
-        }
-    }
-    if (acc > 28000) {
-        acc = 28000;
-    }
-    if (acc < -28000) {
-        acc = -28000;
-    }
-    dst[0] = (int16_t)acc;
-    dst[1] = (int16_t)acc;
+    opna_sample(dst);
 }
 
 static void service_timer(void)
@@ -1619,9 +1458,6 @@ static void service_timer(void)
         return;
     }
     isr_busy = 1;
-    if (opn_reg[0][0x28] != 0) {
-        /* key writes are caught below; nothing to do here */
-    }
     enter_iret(0x1000);
     isr_busy = 0;
 }
@@ -1696,9 +1532,6 @@ int fplay_bind(const char *dir)
     memset(r, 0, sizeof r);
     memset(sreg, 0, sizeof sreg);
     memset(opn_reg, 0, sizeof opn_reg);
-    memset(fm_phase, 0, sizeof fm_phase);
-    memset(fm_env, 0, sizeof fm_env);
-    memset(fm_key, 0, sizeof fm_key);
     unknown_op = 0;
     opn_writes = 0;
     mem[0] = 0xF4;
@@ -1717,6 +1550,7 @@ int fplay_bind(const char *dir)
     flags = IF | 2u;
     r[R_SP] = 0xFFFE;
     ip = 0;
+    opna_reset();
     enter_near(0x0BD0);
     ready = (unknown_op == 0 && mem[0x280] != 0) ? 1 : 0;
     timer_left = timer_samples();
@@ -1733,17 +1567,6 @@ void fplay_command(uint8_t ah, uint8_t al)
     isr_busy = 1;
     r[R_AX] = (uint16_t)(((uint16_t)ah << 8) | al);
     enter_iret(0x0801);
-    /* A key-on written during the call is already in opn_reg. Fold the
-     * last 0x28 the driver stored, in case it wrote the port after the
-     * latch. The command path also pokes the key map from the register
-     * file the driver keeps at CS:0x3F00, which mirrors OUT data. */
-    {
-        uint8_t key = mem[0x3F00u + 0x28u];
-
-        if (key != 0 || mem[0x3EFEu] == 0x28) {
-            opn_key(key);
-        }
-    }
     isr_busy = 0;
 }
 
@@ -1760,11 +1583,7 @@ void fplay_render(int16_t *stereo, int frames)
     }
     for (i = 0; i < frames; i++) {
         if (timer_left <= 0 && !isr_busy) {
-            uint8_t key;
-
             service_timer();
-            key = mem[0x3F00u + 0x28u];
-            opn_key(key);
             timer_left = timer_samples();
         }
         mix_frame(stereo + (size_t)i * 2u);

@@ -98,6 +98,12 @@ typedef struct RB_PACKED RbInput {
 #define RB_BTN_C        0x0040u
 #define RB_BTN_START    0x0080u
 #define RB_BTN_QUIT     0x8000u
+/* PC-98 keys 1..4. The loader ORs these into the high byte of the
+ * game word (0x2000, 0x1000, 0x0800, 0x0400), not into the d-pad. */
+#define RB_BTN_1        0x0100u
+#define RB_BTN_2        0x0200u
+#define RB_BTN_3        0x0400u
+#define RB_BTN_4        0x0800u
 
 /* ---- entities (shared layout for Phase 1 and Phase 2) ------------------- */
 
