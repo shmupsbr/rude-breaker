@@ -42,6 +42,11 @@ void sys_shutdown(void)
     _iocs_g_clr_on();
 }
 
+uint32_t *sys_frame_pixels(void)
+{
+    return NULL;
+}
+
 void sys_clear(uint8_t r, uint8_t g, uint8_t b)
 {
     /* Map RGB to a coarse 16-color index until real palettes are loaded. */

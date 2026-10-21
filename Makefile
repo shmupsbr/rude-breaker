@@ -19,7 +19,8 @@ CORE_SRCS := \
 	src/core/stage.c \
 	src/core/stage_data.c \
 	src/core/assets.c \
-	src/core/vm.c
+	src/core/vm.c \
+	src/core/gfx.c
 
 ifeq ($(PLATFORM),sdl2)
   HAL_SRCS := \
@@ -67,7 +68,7 @@ test-assets:
 
 vm-check: dirs
 	$(CC) $(CFLAGS) -o $(BUILD)/vm_check tools/vm_check.c tools/vm_stub.c \
-		src/core/vm.c src/core/assets.c src/core/collision.c
+		src/core/vm.c src/core/gfx.c src/core/assets.c src/core/collision.c
 
 test-endian: dirs
 	$(CC) $(CFLAGS) -o $(BUILD)/test_endian tools/test_endian.c

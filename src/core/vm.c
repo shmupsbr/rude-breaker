@@ -15,6 +15,7 @@
  */
 #include "vm.h"
 #include "collision.h"
+#include "gfx.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +24,14 @@
 #define ENT_N    256
 #define ENT_STR  0x52
 #define G_SIZE   0x200
+/* Ranking table lives at the pointer in [bp+0x56]. The loader's real
+ * address is outside this window, so the port keeps a private block and
+ * stores its base there. REP MOVSW must not land on the globals. */
+#define RANK_BASE 0x400u
+#define RANK_SIZE 0x100u
+#define TEXT_SIZE 0x4000u
+/* Value `mov ax, ss` yields. Distinct from 0 (script/entity) and 0xA000. */
+#define SEG_SS_VAL 0x0001u
 #define CHUNK_N  40
 #define CHUNK_CAP (256u * 1024u)
 #define SCRATCH  39
@@ -43,6 +52,10 @@ struct RbVm {
     uint32_t clen[CHUNK_N];
     uint8_t ent[ENT_N * ENT_STR];
     uint8_t g[G_SIZE];
+    uint8_t rank[RANK_SIZE];
+    uint8_t text[TEXT_SIZE];
+    uint16_t nat_ds;
+    uint16_t nat_es;
     uint8_t vars[256];
     uint8_t mode[ENT_N];
     uint8_t cof[ENT_N];
@@ -69,6 +82,7 @@ struct RbVm {
     uint16_t load_header;
     uint8_t seen_op[256];
     uint8_t nat_logged;
+    RbGfx *gfx;
 };
 
 /* Quarter sine, game image 0x1848. */
@@ -1043,62 +1057,91 @@ static int decode_ea(const uint8_t *cs, uint32_t len, uint16_t *ip,
     return 0;
 }
 
+/* ES defaults to the script chunk. MOV ES, 0xA000 selects text VRAM.
+ * MOV DS/ES from SS selects the globals plus the ranking block. */
+static void mem_span(RbVm *vm, int ent, int seg, uint16_t addr,
+                     uint8_t **rw, const uint8_t **ro, uint16_t *off, uint32_t *n)
+{
+    *rw = NULL;
+    *ro = NULL;
+    *off = addr;
+    *n = 0;
+    if (seg == SEG_ES && vm->nat_es == 0xA000u) {
+        *rw = vm->text;
+        *n = TEXT_SIZE;
+        return;
+    }
+    if (seg == SEG_CS || (seg == SEG_ES && vm->nat_es == 0)) {
+        uint32_t len = 0;
+
+        *ro = code_of(vm, ent, &len);
+        *n = len;
+        return;
+    }
+    if (seg == SEG_SS ||
+        (seg == SEG_DS && vm->nat_ds == SEG_SS_VAL) ||
+        (seg == SEG_ES && vm->nat_es == SEG_SS_VAL)) {
+        if (addr >= RANK_BASE && (uint32_t)addr < RANK_BASE + RANK_SIZE) {
+            *rw = vm->rank;
+            *off = (uint16_t)(addr - RANK_BASE);
+            *n = RANK_SIZE;
+        } else {
+            *rw = vm->g;
+            *n = G_SIZE;
+        }
+        return;
+    }
+    if (seg == SEG_DS) {
+        *rw = vm->ent;
+        *n = (uint32_t)sizeof vm->ent;
+    }
+}
+
 static int mem_read(RbVm *vm, int ent, int seg, uint16_t addr, int is_byte, uint16_t *out)
 {
-    const uint8_t *p = NULL;
+    uint8_t *rw = NULL;
+    const uint8_t *ro = NULL;
+    uint16_t off = 0;
     uint32_t n = 0;
+    const uint8_t *p;
 
-    if (seg == SEG_CS || seg == SEG_ES) {
-        p = code_of(vm, ent, &n);
-    } else if (seg == SEG_SS) {
-        p = vm->g;
-        n = G_SIZE;
-    } else {
-        p = vm->ent;
-        n = sizeof vm->ent;
-    }
-    if (!p || (uint32_t)addr >= n) {
+    mem_span(vm, ent, seg, addr, &rw, &ro, &off, &n);
+    p = rw ? rw : ro;
+    if (!p || (uint32_t)off >= n) {
         *out = 0;
         return -1;
     }
     if (is_byte) {
-        *out = p[addr];
+        *out = p[off];
         return 0;
     }
-    if ((uint32_t)addr + 1u >= n) {
+    if ((uint32_t)off + 1u >= n) {
         *out = 0;
         return -1;
     }
-    *out = read_u16_le(p + addr);
+    *out = read_u16_le(p + off);
     return 0;
 }
 
 static void mem_write(RbVm *vm, int ent, int seg, uint16_t addr, int is_byte, uint16_t v)
 {
-    uint8_t *p = NULL;
-    (void)ent;
+    uint8_t *rw = NULL;
+    const uint8_t *ro = NULL;
+    uint16_t off = 0;
     uint32_t n = 0;
 
-    if (seg == SEG_SS) {
-        p = vm->g;
-        n = G_SIZE;
-    } else if (seg == SEG_DS) {
-        p = vm->ent;
-        n = sizeof vm->ent;
-    } else {
-        return;
-    }
-    if ((uint32_t)addr >= n) {
+    mem_span(vm, ent, seg, addr, &rw, &ro, &off, &n);
+    if (!rw || (uint32_t)off >= n) {
         return;
     }
     if (is_byte) {
-        p[addr] = (uint8_t)v;
+        rw[off] = (uint8_t)v;
         return;
     }
-    if ((uint32_t)addr + 1u >= n) {
+    if ((uint32_t)off + 1u >= n) {
         return;
     }
-    write_u16_le(p + addr, v);
+    write_u16_le(rw + off, v);
 }
 
 static uint16_t ea_read(RbVm *vm, int ent, const uint16_t *r, const Ea *ea, int is_byte)
@@ -1211,6 +1254,8 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
     }
     memset(r, 0, sizeof r);
     r[6] = (uint16_t)(ent * ENT_STR);
+    vm->nat_ds = 0;
+    vm->nat_es = 0;
     if ((ip0 & 0xFFF0u) == 0x53A0u || ip0 == 0x53ABu || ip0 == 0x53B1u) {
         vm->ship_natives++;
     }
@@ -1225,6 +1270,7 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
         int prefixed = 0;
         int pseg = SEG_DS;
         int prefs = 0;
+        int rep = 0;
         Ea ea;
         uint8_t modrm = 0;
         int is_byte;
@@ -1257,7 +1303,10 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
                 prefixed = 1;
                 pseg = SEG_DS;
                 ip++;
-            } else if (p == 0xF0 || p == 0xF2 || p == 0xF3) {
+            } else if (p == 0xF3) {
+                rep = 1;
+                ip++;
+            } else if (p == 0xF0 || p == 0xF2) {
                 ip++;
             } else {
                 break;
@@ -1410,6 +1459,58 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             int8_t rel = (int8_t)cs[ip++];
 
             if (r[1] == 0) {
+                ip = (uint16_t)(ip + rel);
+            }
+            continue;
+        }
+        /* PUSH/POP ES, CS, SS, DS. The ranking natives at 0x9128 and
+         * 0x91AF stop on these if they are left unimplemented. */
+        if (op == 0x06u || op == 0x0Eu || op == 0x16u || op == 0x1Eu) {
+            uint16_t v = 0;
+
+            if (op == 0x06u) {
+                v = vm->nat_es;
+            } else if (op == 0x16u) {
+                v = SEG_SS_VAL;
+            } else if (op == 0x1Eu) {
+                v = vm->nat_ds;
+            }
+            if (sp <= 0) {
+                return;
+            }
+            stk[--sp] = v;
+            continue;
+        }
+        if (op == 0x07u || op == 0x17u || op == 0x1Fu) {
+            uint16_t v;
+
+            if (sp >= 96) {
+                return;
+            }
+            v = stk[sp++];
+            if (op == 0x07u) {
+                vm->nat_es = v;
+            } else if (op == 0x1Fu) {
+                vm->nat_ds = v;
+            }
+            continue;
+        }
+        if (op == 0xE0u || op == 0xE1u || op == 0xE2u) {
+            int8_t rel;
+            int take;
+
+            if ((uint32_t)ip >= len) {
+                return;
+            }
+            rel = (int8_t)cs[ip++];
+            r[1] = (uint16_t)(r[1] - 1u);
+            take = r[1] != 0;
+            if (op == 0xE0u) {
+                take = take && !zf;
+            } else if (op == 0xE1u) {
+                take = take && zf;
+            }
+            if (take) {
                 ip = (uint16_t)(ip + rel);
             }
             continue;
@@ -1632,17 +1733,37 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             continue;
         }
         if (op == 0x8Eu) {
+            int sreg;
+            uint16_t v;
+
             if (decode_ea(cs, len, &ip, r, prefixed, pseg, &ea, &modrm) != 0) {
                 return;
             }
-            (void)ea_read(vm, ent, r, &ea, 0);
+            sreg = (modrm >> 3) & 7;
+            v = ea_read(vm, ent, r, &ea, 0);
+            if (sreg == 0) {
+                vm->nat_es = v;
+            } else if (sreg == 3) {
+                vm->nat_ds = v;
+            }
             continue;
         }
         if (op == 0x8Cu) {
+            int sreg;
+            uint16_t v = 0;
+
             if (decode_ea(cs, len, &ip, r, prefixed, pseg, &ea, &modrm) != 0) {
                 return;
             }
-            ea_write(vm, ent, r, &ea, 0, 0);
+            sreg = (modrm >> 3) & 7;
+            if (sreg == 0) {
+                v = vm->nat_es;
+            } else if (sreg == 2) {
+                v = SEG_SS_VAL;
+            } else if (sreg == 3) {
+                v = vm->nat_ds;
+            }
+            ea_write(vm, ent, r, &ea, 0, v);
             continue;
         }
         if (op == 0xC6u || op == 0xC7u) {
@@ -1820,6 +1941,30 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             ea_write(vm, ent, r, &ea, is_byte, v);
             continue;
         }
+        if (op == 0xA4u || op == 0xA5u) {
+            int is_byte = op == 0xA4u;
+            int srcseg = prefixed ? pseg : SEG_DS;
+            unsigned step = is_byte ? 1u : 2u;
+
+            /* Direction stays up. CLD/STD are ignored, matching the
+             * ranking copy at 0x9202 (REP MOVSW, no STD). */
+            for (;;) {
+                uint16_t v = 0;
+
+                if (rep && r[1] == 0) {
+                    break;
+                }
+                mem_read(vm, ent, srcseg, r[6], is_byte, &v);
+                mem_write(vm, ent, SEG_ES, r[7], is_byte, v);
+                r[6] = (uint16_t)(r[6] + step);
+                r[7] = (uint16_t)(r[7] + step);
+                if (!rep) {
+                    break;
+                }
+                r[1] = (uint16_t)(r[1] - 1u);
+            }
+            continue;
+        }
         if (op == 0xA0u || op == 0xA1u) {
             uint16_t addr = read_u16_le(cs + ip);
             uint16_t v = 0;
@@ -1906,6 +2051,8 @@ static void play_al(RbVm *vm, uint8_t ah, uint8_t al)
 
 /* ---- scroll ------------------------------------------------------------ */
 
+static void gfx_note_row(RbVm *vm);
+
 static void scroll_4b(RbVm *vm)
 {
     uint16_t span = (uint16_t)(gu16(vm, 0x7E) << 4);
@@ -1940,7 +2087,19 @@ static void scroll_4b(RbVm *vm)
     sgu16(vm, 0x7C, cell);
     if (cell != old) {
         vm->g[0xBE] = 1;
+        gfx_note_row(vm);
     }
+}
+
+/* 0x108E: one map row into the screen slot selected by [bp+0x76]. */
+static void gfx_note_row(RbVm *vm)
+{
+    uint16_t y = gu16(vm, 0x76);
+
+    if (y >= 0x190u) {
+        y = (uint16_t)(y - 0x190u);
+    }
+    gfx_copy_row(vm->gfx, (uint16_t)(y >> 4), (uint16_t)(gu16(vm, 0x7A) >> 4));
 }
 
 static void scroll_4d(RbVm *vm)
@@ -1968,6 +2127,7 @@ static void scroll_4d(RbVm *vm)
         }
         sgu16(vm, 0x7C, (uint16_t)cell);
         sgu16(vm, 0x7A, (uint16_t)(cell << 4));
+        gfx_note_row(vm);
     }
 }
 
@@ -2521,12 +2681,36 @@ static void run_fetch(RbVm *vm, int ent)
             break;
         case 0x31:
         case 0x3E:
-        case 0x3F:
-        case 0x40:
         case 0x47:
             su16(vm, ent, 8, (uint16_t)(di + 2u));
             break;
-        case 0x32:
+        case 0x3F:
+        case 0x40: {
+            uint16_t off = rd16(vm, ent, di);
+            uint32_t n = 0;
+            const uint8_t *p = code_of(vm, ent, &n);
+
+            su16(vm, ent, 8, (uint16_t)(di + 2u));
+            if (p && (uint32_t)off < n) {
+                if (op == 0x3F) {
+                    gfx_palette_abs(vm->gfx, p + off, n - off);
+                } else {
+                    gfx_palette_delta(vm->gfx, p + off, n - off);
+                }
+            }
+            break;
+        }
+        case 0x32: {
+            uint8_t slot = rd8(vm, ent, di);
+            uint8_t rec = rd8(vm, ent, (uint16_t)(di + 1u));
+
+            su16(vm, ent, 8, (uint16_t)(di + 5u));
+            if (ensure_chunk(vm, rec) == 0) {
+                gfx_bind(vm->gfx, slot, vm->chunk[rec], vm->clen[rec]);
+                sgu16(vm, slot, slot);
+            }
+            break;
+        }
         case 0x33:
         case 0x34:
         case 0x48:
@@ -2547,18 +2731,39 @@ static void run_fetch(RbVm *vm, int ent)
             su16(vm, ent, 8, (uint16_t)(di + 11u));
             break;
         case 0x3C:
-        case 0x3D:
+        case 0x3D: {
+            uint16_t at = rd16(vm, ent, di);
+            uint16_t nbytes = rd8(vm, ent, (uint16_t)(di + 2u));
+            uint16_t rows = rd16(vm, ent, (uint16_t)(di + 3u));
+            uint8_t color = rd8(vm, ent, (uint16_t)(di + 5u));
+
+            if (op == 0x3D) {
+                int32_t yy = (int16_t)eu16(vm, ent, rd8(vm, ent, (uint16_t)(di + 1u)));
+                int32_t xx = (int16_t)eu16(vm, ent, rd8(vm, ent, di));
+                int32_t addr = yy * 80 + (xx >> 3);
+
+                if (addr < 0) {
+                    addr = 0;
+                }
+                at = (uint16_t)addr;
+            }
+            gfx_fill(vm->gfx, at, nbytes, rows, color);
+            su16(vm, ent, 8, (uint16_t)(di + 6u));
+            break;
+        }
         case 0x4A:
-            su16(vm, ent, 8, (uint16_t)(di + (op == 0x4A ? 6u : 6u)));
+            su16(vm, ent, 8, (uint16_t)(di + 6u));
             break;
         case 0x41:
+            imm8 = rd8(vm, ent, di);
+            su16(vm, ent, 8, (uint16_t)(di + 1u));
+            gfx_palette_step(vm->gfx, imm8);
+            break;
         case 0x42:
         case 0x46:
             imm8 = rd8(vm, ent, di);
             su16(vm, ent, 8, (uint16_t)(di + 1u));
-            if (op == 0x41) {
-                play_al(vm, 0, imm8);
-            } else if (op == 0x42) {
+            if (op == 0x42) {
                 play_al(vm, 1, imm8);
             } else {
                 play_al(vm, 4, imm8);
@@ -2581,7 +2786,14 @@ static void run_fetch(RbVm *vm, int ent)
             scroll_4b(vm);
             break;
         case 0x4C:
+            if (vm->g[0xC1] == 0) {
+                gfx_compose(vm->gfx);
+            }
+            break;
         case 0x4E:
+            gfx_draw_entities(vm->gfx, vm->ent, ENT_N, ENT_STR,
+                              (const uint8_t *const *)vm->chunk, vm->clen,
+                              vm->cof, (int)gu16(vm, 0x76));
             break;
         case 0x4D:
             scroll_4d(vm);
@@ -2715,6 +2927,11 @@ int vm_create(RbVm **out, const RbAssets *assets)
         return -1;
     }
     vm->assets = assets;
+    vm->gfx = gfx_create();
+    if (!vm->gfx) {
+        free(vm);
+        return -1;
+    }
     vm->chunk[SCRATCH] = (uint8_t *)calloc(1, 64);
     vm->clen[SCRATCH] = 64;
     if (assets) {
@@ -2736,6 +2953,7 @@ void vm_destroy(RbVm *vm)
     for (i = 0; i < CHUNK_N; i++) {
         free(vm->chunk[i]);
     }
+    gfx_destroy(vm->gfx);
     free(vm);
 }
 
@@ -2780,6 +2998,10 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
      * A direct stage entry has to keep that armed value. */
     vm->g[0xD5] = 1;
     vm->g[0xD7] = 1;
+    memset(vm->rank, 0, sizeof vm->rank);
+    memset(vm->text, 0, sizeof vm->text);
+    sgu16(vm, 0x56, (uint16_t)RANK_BASE);
+    gfx_reset(vm->gfx);
     vm->view_chunk = (int)chunk;
     if (ensure_chunk(vm, chunk) != 0 || vm->clen[chunk] < 2u) {
         return;
@@ -2961,6 +3183,19 @@ int vm_quit_requested(const RbVm *vm)
 int vm_boot_requested(const RbVm *vm)
 {
     return vm && vm->boot;
+}
+
+int vm_gfx_active(const RbVm *vm)
+{
+    return vm && gfx_active(vm->gfx);
+}
+
+void vm_present(const RbVm *vm, uint32_t *rgba, int w, int h)
+{
+    if (!vm) {
+        return;
+    }
+    gfx_present(vm->gfx, (int)gu16(vm, 0x76), rgba, w, h);
 }
 
 int vm_self_test(RbVm *vm)

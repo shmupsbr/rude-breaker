@@ -69,6 +69,11 @@ int  vm_collect_sprites(const RbVm *vm, RbVmSprite *out, int max);
 int  vm_quit_requested(const RbVm *vm);
 int  vm_boot_requested(const RbVm *vm);
 
+/* 1 once a stage script has filled or composed the playfield. */
+int  vm_gfx_active(const RbVm *vm);
+/* Write the 640x400 playfield. scroll is applied here. */
+void vm_present(const RbVm *vm, uint32_t *rgba, int w, int h);
+
 /* Host checks: aim step, mover, delay, and a decompressed chunk. */
 int  vm_self_test(RbVm *vm);
 
