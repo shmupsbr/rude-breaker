@@ -15,8 +15,36 @@ uint32_t     *g_rb_pixels   = NULL; /* RGBA8888, native resolution */
 
 static uint32_t g_start_ticks;
 
+static int frames_are_fast(void)
+{
+    const char *v = getenv("RUDEBR_FAST");
+
+    return v && v[0] && strcmp(v, "0") != 0;
+}
+
+void sys_message(const char *title, const char *text)
+{
+    const char *drv;
+
+    fprintf(stderr, "%s\n%s\n", title ? title : "Rude Breaker", text ? text : "");
+    if (frames_are_fast() || getenv("RUDEBR_STOP") || getenv("RUDEBR_TRACE")) {
+        return;
+    }
+    drv = SDL_GetCurrentVideoDriver();
+    if (drv && strcmp(drv, "dummy") == 0) {
+        return;
+    }
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
+                             title ? title : "Rude Breaker",
+                             text ? text : "",
+                             g_rb_window);
+}
+
 int sys_init(const char *title)
 {
+    Uint32 render_flags = SDL_RENDERER_ACCELERATED;
+
+    SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return -1;
@@ -32,9 +60,10 @@ int sys_init(const char *title)
         return -1;
     }
 
-    g_rb_renderer = SDL_CreateRenderer(g_rb_window, -1,
-                                       SDL_RENDERER_ACCELERATED |
-                                       SDL_RENDERER_PRESENTVSYNC);
+    if (!frames_are_fast()) {
+        render_flags |= SDL_RENDERER_PRESENTVSYNC;
+    }
+    g_rb_renderer = SDL_CreateRenderer(g_rb_window, -1, render_flags);
     if (!g_rb_renderer) {
         g_rb_renderer = SDL_CreateRenderer(g_rb_window, -1, 0);
     }
@@ -227,10 +256,17 @@ void sys_draw_text(int16_t x, int16_t y, const char *utf8, uint32_t rgba)
 
 void sys_wait_vblank(void)
 {
-    /* Prefer vsync via Present; also clamp to ~60 Hz if vsync is off. */
+    /* Prefer vsync via Present; also clamp to ~60 Hz if vsync is off.
+     * RUDEBR_FAST skips the clamp so a smoke test can walk a stage
+     * without waiting out 60 Hz. It is not a player control. */
     static uint32_t last;
-    uint32_t now = SDL_GetTicks();
+    uint32_t now;
     const uint32_t frame_ms = 1000u / (uint32_t)RB_TARGET_FPS;
+
+    if (frames_are_fast()) {
+        return;
+    }
+    now = SDL_GetTicks();
     if (last != 0) {
         uint32_t elapsed = now - last;
         if (elapsed < frame_ms) {

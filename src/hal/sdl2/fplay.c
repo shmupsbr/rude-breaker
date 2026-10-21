@@ -1507,7 +1507,7 @@ int fplay_ready(void)
 
 int fplay_bind(const char *dir)
 {
-    char path[512];
+    char path[1024];
     uint8_t *com;
     uint8_t *song;
     size_t com_n = 0;

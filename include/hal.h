@@ -191,6 +191,8 @@ typedef struct RB_PACKED RbSprite {
 
 int  sys_init(const char *title);
 void sys_shutdown(void);
+/* stderr, plus a dialog when a real video driver is up. */
+void sys_message(const char *title, const char *text);
 
 /* Block until the next 60 Hz frame boundary, then present the backbuffer. */
 void sys_wait_vblank(void);

@@ -9,11 +9,12 @@ BUILD    := build
 CC       ?= gcc
 CXX      ?= g++
 CFLAGS   := -std=c99 -Wall -Wextra -Wpedantic -O2 -Iinclude
-CXXFLAGS := -std=c++14 -O2 -w -isystem third_party/ymfm -Isrc/hal/sdl2
+CXXFLAGS := -std=c++14 -O2 -w -isystem third_party/ymfm -Iinclude -Isrc/hal/sdl2
 LDFLAGS  :=
 
 CORE_SRCS := \
 	src/core/main.c \
+	src/core/exepath.c \
 	src/core/game.c \
 	src/core/player.c \
 	src/core/enemy.c \
@@ -35,9 +36,13 @@ ifeq ($(PLATFORM),sdl2)
 	third_party/ymfm/ymfm_ssg.cpp \
 	third_party/ymfm/ymfm_adpcm.cpp \
 	src/hal/sdl2/opna_ymfm.cpp
-  CFLAGS  += $(shell pkg-config --cflags sdl2)
-  LDFLAGS += $(shell pkg-config --libs sdl2)
-  TARGET  := $(BUILD)/rudebreaker
+  SDL2_CFLAGS ?= $(shell pkg-config --cflags sdl2)
+  SDL2_LIBS   ?= $(shell pkg-config --libs sdl2)
+  CFLAGS  += $(SDL2_CFLAGS) -DSDL_MAIN_HANDLED
+  LDFLAGS += $(SDL2_LIBS)
+  # Cross builds pass EXE=.exe so the recipe's -o name matches MinGW.
+  EXE     ?=
+  TARGET  := $(BUILD)/rudebreaker$(EXE)
   LINK    := $(CXX)
 else ifeq ($(PLATFORM),x68k)
   HAL_SRCS := \
@@ -87,8 +92,8 @@ vm-check: dirs
 		src/core/vm.c src/core/gfx.c src/core/assets.c src/core/collision.c
 
 test-endian: dirs
-	$(CC) $(CFLAGS) -o $(BUILD)/test_endian tools/test_endian.c
-	$(BUILD)/test_endian
+	$(CC) $(CFLAGS) -o $(BUILD)/test_endian$(EXE) tools/test_endian.c
+	@if [ -z "$(EXE)" ]; then $(BUILD)/test_endian; else echo "cross compile: skipped running test_endian$(EXE)"; fi
 
 clean:
 	rm -rf $(BUILD)

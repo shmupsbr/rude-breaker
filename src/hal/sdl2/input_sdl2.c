@@ -10,6 +10,7 @@
 #include "hal.h"
 
 #include <SDL.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* Declared in video_sdl2.c */
@@ -89,6 +90,100 @@ static void poll_pad(RbInput *out)
     }
 }
 
+static uint16_t hold_token(const char *s, size_t n)
+{
+    char buf[16];
+    size_t i;
+
+    if (n == 0 || n >= sizeof(buf)) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        char c = s[i];
+
+        if (c >= 'a' && c <= 'z') {
+            c = (char)(c - 'a' + 'A');
+        }
+        buf[i] = c;
+    }
+    buf[n] = 0;
+    if (strcmp(buf, "A") == 0 || strcmp(buf, "FIRE") == 0 ||
+        strcmp(buf, "Z") == 0 || strcmp(buf, "SPACE") == 0) {
+        return RB_BTN_A;
+    }
+    if (strcmp(buf, "B") == 0 || strcmp(buf, "MODE") == 0 ||
+        strcmp(buf, "X") == 0) {
+        return RB_BTN_B;
+    }
+    if (strcmp(buf, "C") == 0 || strcmp(buf, "SHIFT") == 0) {
+        return RB_BTN_C;
+    }
+    if (strcmp(buf, "START") == 0 || strcmp(buf, "ESC") == 0) {
+        return RB_BTN_START;
+    }
+    if (strcmp(buf, "QUIT") == 0 || strcmp(buf, "F10") == 0) {
+        return RB_BTN_QUIT;
+    }
+    if (strcmp(buf, "UP") == 0 || strcmp(buf, "W") == 0) {
+        return RB_BTN_UP;
+    }
+    if (strcmp(buf, "DOWN") == 0 || strcmp(buf, "S") == 0) {
+        return RB_BTN_DOWN;
+    }
+    if (strcmp(buf, "LEFT") == 0 || strcmp(buf, "AKEY") == 0) {
+        return RB_BTN_LEFT;
+    }
+    if (strcmp(buf, "RIGHT") == 0 || strcmp(buf, "D") == 0) {
+        return RB_BTN_RIGHT;
+    }
+    if (strcmp(buf, "1") == 0) {
+        return RB_BTN_1;
+    }
+    if (strcmp(buf, "2") == 0) {
+        return RB_BTN_2;
+    }
+    if (strcmp(buf, "3") == 0) {
+        return RB_BTN_3;
+    }
+    if (strcmp(buf, "4") == 0) {
+        return RB_BTN_4;
+    }
+    return 0;
+}
+
+/* RUDEBR_HOLD is a smoke-test injector (for example A,RIGHT). Dummy
+ * video has no keyboard, and this is not a player control. */
+static uint16_t held_from_env(void)
+{
+    static int ready;
+    static uint16_t bits;
+    const char *s;
+
+    if (ready) {
+        return bits;
+    }
+    ready = 1;
+    s = getenv("RUDEBR_HOLD");
+    while (s && *s) {
+        const char *start;
+        size_t n;
+
+        while (*s == ' ' || *s == '\t' || *s == ',') {
+            s++;
+        }
+        if (!*s) {
+            break;
+        }
+        start = s;
+        while (*s && *s != ',' && *s != ' ' && *s != '\t') {
+            s++;
+        }
+        n = (size_t)(s - start);
+        bits = (uint16_t)(bits | hold_token(start, n));
+    }
+    return bits;
+}
+
 void sys_read_input(RbInput *out)
 {
     SDL_Event ev;
@@ -154,5 +249,18 @@ void sys_read_input(RbInput *out)
         out->buttons |= RB_BTN_4;
     }
     poll_pad(out);
+    out->buttons = (uint16_t)(out->buttons | held_from_env());
+    if (out->buttons & RB_BTN_UP) {
+        out->axis_y = -1;
+    }
+    if (out->buttons & RB_BTN_DOWN) {
+        out->axis_y = 1;
+    }
+    if (out->buttons & RB_BTN_LEFT) {
+        out->axis_x = -1;
+    }
+    if (out->buttons & RB_BTN_RIGHT) {
+        out->axis_x = 1;
+    }
     (void)g_rb_window;
 }

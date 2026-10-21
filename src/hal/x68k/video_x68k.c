@@ -37,6 +37,11 @@ int sys_init(const char *title)
     return 0;
 }
 
+void sys_message(const char *title, const char *text)
+{
+    fprintf(stderr, "%s\n%s\n", title ? title : "Rude Breaker", text ? text : "");
+}
+
 void sys_shutdown(void)
 {
     _iocs_g_clr_on();

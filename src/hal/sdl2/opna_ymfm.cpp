@@ -5,13 +5,13 @@
  */
 #include "opna.h"
 
+#include "exepath.h"
 #include "ymfm_opn.h"
 
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 enum { RHYTHM_N = 8192 };
 
@@ -124,21 +124,12 @@ static int load_rhythm_file(const char *path)
 
 static int rom_beside_exe(char *out, size_t n)
 {
-    char link[1024];
-    ssize_t got;
-    char *slash;
+    char dir[1024];
 
-    got = readlink("/proc/self/exe", link, sizeof link - 1u);
-    if (got <= 0 || (size_t)got >= sizeof link) {
+    if (rb_exe_dir(dir, sizeof dir) != 0) {
         return -1;
     }
-    link[got] = 0;
-    slash = strrchr(link, '/');
-    if (!slash) {
-        return -1;
-    }
-    *slash = 0;
-    if (snprintf(out, n, "%s/ym2608_adpcm_rom.bin", link) >= (int)n) {
+    if (snprintf(out, n, "%s/ym2608_adpcm_rom.bin", dir) >= (int)n) {
         return -1;
     }
     return 0;

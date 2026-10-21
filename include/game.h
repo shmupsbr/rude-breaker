@@ -30,13 +30,15 @@ typedef struct RbGame {
      * and wraps at 400. Row blit stays out of the core. */
     int16_t     scroll_y;
     int16_t     scroll_speed;
-    char        asset_dir[260];
+    char        asset_dir[512];
 } RbGame;
 
 void game_init(RbGame *g, const char *asset_dir);
 void game_update(RbGame *g);
 void game_render(const RbGame *g);
 int  game_wants_quit(const RbGame *g);
+/* 1 after RUDEBR_STOP's event was reached. Players never set that variable. */
+int  game_smoke_done(void);
 
 #ifdef __cplusplus
 }

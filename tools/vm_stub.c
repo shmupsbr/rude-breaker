@@ -35,6 +35,11 @@ void sys_fade_music(uint8_t speed)
     (void)speed;
 }
 
+void sys_message(const char *title, const char *text)
+{
+    fprintf(stderr, "%s\n%s\n", title ? title : "", text ? text : "");
+}
+
 void sys_draw_sprite(const RbSprite *spr)
 {
     (void)spr;

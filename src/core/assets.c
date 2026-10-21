@@ -92,7 +92,7 @@ static void parse_sgm1_toc(RbAssets *a)
 
 int assets_load(RbAssets *a, const char *rudebr_dir)
 {
-    char path[300];
+    char path[1024];
 
     memset(a, 0, sizeof(*a));
     if (!rudebr_dir || !rudebr_dir[0]) {
