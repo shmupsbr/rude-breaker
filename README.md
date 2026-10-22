@@ -171,7 +171,7 @@ controls, and the packaged README section above is the player list.
 
 | Variable | Effect |
 |----------|--------|
-| `RUDEBR_FAST=1` | Skip the PC-98 wait (about 40 logic frames per second). |
+| `RUDEBR_FAST=1` | Skip the PC-98 wait (about 30 logic frames per second). |
 | `RUDEBR_TIMING=1` | Log logic frames per second. Not a player control. |
 | `RUDEBR_TRACE=1` | Log state, ship, chunk, and score. |
 | `RUDEBR_HOLD=A,RIGHT` | Hold those buttons. Tokens: `A` `B` `C` `LEFT` `RIGHT` `UP` `DOWN` `START` `QUIT` `1`–`4`. |

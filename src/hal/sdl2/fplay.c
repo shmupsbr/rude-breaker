@@ -53,6 +53,67 @@ static unsigned opn_writes;
 
 static int timer_left;
 static int isr_busy;
+static uint32_t sample_pos;
+static FILE *note_log;
+
+static void note_log_open(void)
+{
+    const char *path = getenv("RUDEBR_NOTELOG");
+
+    if (!path || !path[0] || note_log) {
+        return;
+    }
+    note_log = fopen(path, "w");
+}
+
+/* FM key-on is register 0x28 with any operator bit set. SSG has no key
+ * gate, so a nonzero volume write (0x08-0x0A) is the note edge. */
+static void note_log_write(int bank, uint8_t addr, uint8_t val)
+{
+    static unsigned ssg_per[3];
+    static unsigned ssg_vol[3];
+
+    if (!note_log) {
+        return;
+    }
+    if (!bank && addr == 0x28u && (val & 0xF0u) != 0) {
+        int slot = val & 7;
+        int ch;
+        int rb;
+        int reg;
+        unsigned fnum;
+        unsigned block;
+
+        /* YM2608 key field is 0,1,2 then 4,5,6. */
+        if (slot == 3 || slot > 6) {
+            return;
+        }
+        ch = (slot < 3) ? slot : (slot - 1);
+        rb = ch >= 3;
+        reg = ch % 3;
+        fnum = opn_reg[rb][0xA0u + reg] |
+               ((unsigned)(opn_reg[rb][0xA4u + reg] & 7u) << 8);
+        block = (opn_reg[rb][0xA4u + reg] >> 3) & 7u;
+        fprintf(note_log, "fm t=%.4f ch=%d fnum=%u block=%u key=%02X\n",
+                (double)sample_pos / 44100.0, ch, fnum, block, val);
+    } else if (!bank && addr >= 0x08u && addr <= 0x0Au) {
+        int ch = (int)addr - 8;
+        unsigned per = opn_reg[0][ch * 2u] |
+                       ((unsigned)opn_reg[0][ch * 2u + 1u] << 8);
+        unsigned vol = val & 0x0Fu;
+
+        if (per == ssg_per[ch] && vol == ssg_vol[ch]) {
+            return;
+        }
+        ssg_per[ch] = per;
+        ssg_vol[ch] = vol;
+        if (vol == 0 || per == 0) {
+            return;
+        }
+        fprintf(note_log, "ssg t=%.4f ch=%d period=%u vol=%u\n",
+                (double)sample_pos / 44100.0, ch, per, vol);
+    }
+}
 
 static uint8_t fetch8(void)
 {
@@ -1268,6 +1329,7 @@ static int cpu_step(void)
 
             opn_reg[bank][addr] = val;
             opn_writes++;
+            note_log_write(bank, addr, val);
             opna_write(port, val);
         }
         return 0;
@@ -1562,6 +1624,8 @@ int fplay_bind_mem(const uint8_t *com, size_t com_n,
     ip = 0;
     opna_autoload_rhythm(rhythm_dir);
     opna_reset();
+    sample_pos = 0;
+    note_log_open();
     enter_near(0x0BD0);
     ready = (unknown_op == 0 && mem[0x280] != 0) ? 1 : 0;
     timer_left = timer_samples();
@@ -1626,6 +1690,7 @@ void fplay_render(int16_t *stereo, int frames)
             timer_left = timer_samples();
         }
         mix_frame(stereo + (size_t)i * 2u);
+        sample_pos++;
         if (timer_left > 0) {
             timer_left--;
         }

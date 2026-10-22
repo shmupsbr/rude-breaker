@@ -75,11 +75,14 @@ static inline void write_u32_le(uint8_t *p, uint32_t v)
 
 #define RB_NATIVE_W     640
 #define RB_NATIVE_H     400
-/* One count of the loader's vsync wait ([bp+0x60], usually 3). Three
- * counts match the PC-9821 capture at about 40 logic frames per second
- * (ship 8 px/frame ~320 px/s, cruise scroll 4 px/frame ~160 px/s,
- * player shots 24 px/frame ~960 px/s). Not the host refresh rate. */
-#define RB_WAIT_HZ      120
+/* One count of the loader's vsync wait ([bp+0x60], usually 3).
+ * The capture's cruise background (4 px per logic frame) moves at
+ * about 122 px/s, and a later 2 px section moves at about 60 px/s,
+ * so a logic frame is about 30.7 Hz. Three counts at 92 Hz sleep
+ * that long. 120 Hz per count was 40 logic Hz, about 1.3x ahead of
+ * the capture. Not the host refresh rate, and not one PC-98 vertical
+ * blank (56.42 Hz) per count: three of those would be ~19 Hz. */
+#define RB_WAIT_HZ      92
 #define RB_TARGET_FPS   RB_WAIT_HZ
 
 /* X68000 Phase-2 outer raster (640x400 centered in 640x480) */

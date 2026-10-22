@@ -357,13 +357,27 @@ static void blit_sprite(RbGfx *gfx, const uint8_t *src, uint32_t len,
         uint8_t r[24];
         uint8_t g[24];
         int col;
-        int py = wrap_y(y + row);
+        int yy = y + row;
 
         decode_plane(src + row * 2, shift, mask);
         if (!mono) {
             decode_plane(src + 32 + row * 2, shift, b);
             decode_plane(src + 64 + row * 2, shift, r);
             decode_plane(src + 96 + row * 2, shift, g);
+        }
+        /* 0x481B writes a row only after DI is inside GVRAM.
+         * A cell that starts above the buffer reaches it by
+         * stepping 80 bytes per scanline. A cell that runs past
+         * 0x7D00 subtracts 0x7D00 once. Wrapping a negative Y
+         * paints that row on the bottom edge. */
+        if (yy < 0) {
+            continue;
+        }
+        if (yy >= RB_GFX_H) {
+            yy -= RB_GFX_H;
+        }
+        if (yy < 0 || yy >= RB_GFX_H) {
+            continue;
         }
         for (col = 0; col < wide; col++) {
             uint8_t idx;
@@ -388,10 +402,12 @@ static void blit_sprite(RbGfx *gfx, const uint8_t *src, uint32_t len,
                     idx |= 8u;
                 }
             }
-            put_idx(gfx, x + col, py, idx);
+            put_idx(gfx, x + col, yy, idx);
         }
     }
-    mark_dirty(gfx, x, wrap_y(y), wide);
+    if (y >= 0) {
+        mark_dirty(gfx, x, y >= RB_GFX_H ? y - RB_GFX_H : y, wide);
+    }
 }
 
 void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,

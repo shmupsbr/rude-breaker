@@ -2164,6 +2164,11 @@ static void play_al(RbVm *vm, uint8_t ah, uint8_t al)
         return;
     }
     if (ah == 1) {
+        const char *log = getenv("RUDEBR_SFXLOG");
+
+        if (log && log[0]) {
+            fprintf(stderr, "sfx %02X\n", al);
+        }
         sys_play_sound(al, 180);
     }
 }
@@ -3817,10 +3822,12 @@ void vm_frame(RbVm *vm)
     if (!vm) {
         return;
     }
-    /* 0x0959 loads AX from [bp+0x14] (loader CS) before the scan.
-     * That segment is assigned by DOS and is not in the image, so
-     * the stand-in is 0 until a new script stores 2. */
-    vm->disp_al = 0;
+    /* 0x2FD0 stores AX=2 only when a script is entered. Handlers
+     * return to 0x2FD6, so AL stays in the CPU across opcodes and
+     * across frames. Opcode 0x3B uses that low 3 bits as the span
+     * shift, and 0x3C/0x3D leave the fill color there. Clearing AL
+     * here forced every later 0x3B to shift 0 and dropped the title
+     * overlays. run_entity sets 2 on the first entry only. */
     for (i = 0; i < ENT_N; i++) {
         run_entity(vm, i);
     }
