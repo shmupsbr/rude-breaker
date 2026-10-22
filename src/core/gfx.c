@@ -11,6 +11,9 @@
 #define MAP_COLS 30
 #define MAP_ROWS 25
 #define MAP_N    (MAP_COLS * MAP_ROWS)
+/* A replaced 16-line row at intro speed 15 sits up to 29 lines before
+ * the GDC start address. Those lines are the bottom of the picture. */
+#define SCROLL_TAIL 32
 
 struct RbGfx {
     uint8_t *pix;
@@ -19,6 +22,10 @@ struct RbGfx {
      * which is what the PC-98 does by rebuilding the hidden page (GRCG
      * tile restore plus the 0xA4/0xA6 page flip) before the sprites. */
     uint8_t *bg;
+    /* Previous pixels of a scroll row that was just replaced. Present
+     * keeps them on the lines the second GDC partition still shows. */
+    uint8_t *hold;
+    uint8_t hold_on[MAP_ROWS];
     int paint_bg;
     uint16_t map[MAP_N];
     const uint8_t *bank[256];
@@ -39,9 +46,11 @@ RbGfx *gfx_create(void)
     }
     gfx->pix = (uint8_t *)calloc((size_t)RB_GFX_W * (size_t)RB_GFX_H, 1);
     gfx->bg = (uint8_t *)calloc((size_t)RB_GFX_W * (size_t)RB_GFX_H, 1);
-    if (!gfx->pix || !gfx->bg) {
+    gfx->hold = (uint8_t *)calloc((size_t)RB_GFX_W * (size_t)RB_GFX_H, 1);
+    if (!gfx->pix || !gfx->bg || !gfx->hold) {
         free(gfx->pix);
         free(gfx->bg);
+        free(gfx->hold);
         free(gfx);
         return NULL;
     }
@@ -56,6 +65,7 @@ void gfx_destroy(RbGfx *gfx)
     }
     free(gfx->pix);
     free(gfx->bg);
+    free(gfx->hold);
     free(gfx);
 }
 
@@ -66,6 +76,10 @@ void gfx_reset(RbGfx *gfx)
     }
     memset(gfx->pix, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
     memset(gfx->bg, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    if (gfx->hold) {
+        memset(gfx->hold, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    }
+    memset(gfx->hold_on, 0, sizeof gfx->hold_on);
     gfx->paint_bg = 1;
     memset(gfx->map, 0, sizeof gfx->map);
     memset(gfx->bank, 0, sizeof gfx->bank);
@@ -201,6 +215,28 @@ void gfx_copy_row(RbGfx *gfx, uint16_t screen_row, uint16_t src_row)
     src = (uint32_t)src_row * 0x3Cu;
     if (src + 0x3Cu > gfx->blen[0x16]) {
         return;
+    }
+    /* 0x108E ORs the new cell into the slot selected by [bp+0x76].
+     * That slot is the one just before the scan start, so partition 2
+     * puts it at the bottom of the screen. The incoming cell belongs
+     * at the top once the start address reaches it. Until then the
+     * bottom has to keep scrolling the cell that was already there.
+     * The first fill of an empty ring has nothing to keep. */
+    if (gfx->hold) {
+        int live = 0;
+
+        for (col = 0; col < MAP_COLS; col++) {
+            if (gfx->map[(size_t)screen_row * MAP_COLS + (size_t)col] != 0) {
+                live = 1;
+                break;
+            }
+        }
+        if (live) {
+            size_t off = (size_t)screen_row * 16u * (size_t)RB_GFX_W;
+
+            memcpy(gfx->hold + off, gfx->bg + off, 16u * (size_t)RB_GFX_W);
+            gfx->hold_on[screen_row] = 1;
+        }
     }
     for (col = 0; col < MAP_COLS; col++) {
         uint16_t w = (uint16_t)map[src] | ((uint16_t)map[src + 1] << 8);
@@ -1313,7 +1349,32 @@ static void overlay_text(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, 
     overlay_english(gfx, text, rgba, w);
 }
 
-void gfx_present(const RbGfx *gfx, int scroll76, int scroll_speed,
+static int sad_dist(int scroll, int src)
+{
+    int dist = scroll - src;
+
+    if (dist < 0) {
+        dist += RB_GFX_H;
+    }
+    return dist;
+}
+
+static int row_in_tail(int scroll, int row)
+{
+    int line;
+    int base = row * 16;
+
+    for (line = 0; line < 16; line++) {
+        int dist = sad_dist(scroll, base + line);
+
+        if (dist >= 1 && dist <= SCROLL_TAIL) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
                  const uint8_t *text, uint32_t *rgba, int w, int h,
                  int blank_sides)
 {
@@ -1349,14 +1410,27 @@ void gfx_present(const RbGfx *gfx, int scroll76, int scroll_speed,
     for (y = 0; y < RB_GFX_H; y++) {
         int src = y + scroll;
         int x;
+        int tail = 0;
 
         if (src >= RB_GFX_H) {
             src -= RB_GFX_H;
+        }
+        /* Partition 2 continues from line 0, so a GVRAM line just
+         * before SAD is the bottom row. A held row still has the cell
+         * from before this slot was replaced. Sprite pixels differ
+         * from the background page and stay. */
+        if (blank_sides && gfx->hold && gfx->hold_on[src >> 4]) {
+            int dist = sad_dist(scroll, src);
+
+            if (dist >= 1 && dist <= SCROLL_TAIL) {
+                tail = 1;
+            }
         }
         for (x = 0; x < RB_GFX_W; x++) {
             uint8_t idx;
             int ch;
             uint32_t px = 0xFFu;
+            size_t at;
 
             /* Stage captures keep the 80 px side columns pure black.
              * GVRAM is 640 wide and index 0 is the stage color, so those
@@ -1367,7 +1441,11 @@ void gfx_present(const RbGfx *gfx, int scroll76, int scroll_speed,
                 rgba[(size_t)y * (size_t)w + (size_t)x] = 0x000000FFu;
                 continue;
             }
-            idx = gfx->pix[(size_t)src * RB_GFX_W + (size_t)x];
+            at = (size_t)src * RB_GFX_W + (size_t)x;
+            idx = gfx->pix[at];
+            if (tail && idx == gfx->bg[at]) {
+                idx = gfx->hold[at];
+            }
             for (ch = 0; ch < 3; ch++) {
                 int v = dac_level(gfx->pal[idx][ch]);
 
@@ -1375,6 +1453,15 @@ void gfx_present(const RbGfx *gfx, int scroll76, int scroll_speed,
             }
             /* pal[][0] is red, [1] green, [2] blue, matching ports AC/AA/AE. */
             rgba[(size_t)y * (size_t)w + (size_t)x] = px;
+        }
+    }
+    if (blank_sides) {
+        int row;
+
+        for (row = 0; row < MAP_ROWS; row++) {
+            if (gfx->hold_on[row] && !row_in_tail(scroll, row)) {
+                gfx->hold_on[row] = 0;
+            }
         }
     }
     overlay_text(gfx, text, rgba, w);

@@ -1626,6 +1626,16 @@ int fplay_bind_mem(const uint8_t *com, size_t com_n,
         copy = MEM_N - 0x4000u;
     }
     memcpy(mem + 0x4000, song, copy);
+    /* Effect 0x1D is the power-up sting (bytecode 43 1D ahead of the
+     * +100 / power-byte native). Its voice is slot 8, FM type 4, which
+     * is the same oscillator as the score tick 0x25 and the same work
+     * slot as the player shot 0x16. Those fire while the item is
+     * collected and replace the sting before it can sound. Point this
+     * one voice at slot 9 and FM type 3 so it overlaps the music. */
+    if (mem[0x75E6] == 0x01 && mem[0x75E7] == 0x07 && mem[0x75EE] == 0x04) {
+        mem[0x75E7] = 0x06;
+        mem[0x75EE] = 0x03;
+    }
     flags = IF | 2u;
     r[R_SP] = 0xFFFE;
     ip = 0;
