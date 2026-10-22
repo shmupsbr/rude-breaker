@@ -55,14 +55,15 @@ static int timer_left;
 static int isr_busy;
 static uint32_t sample_pos;
 static FILE *note_log;
-/* BGM track changes fade the outgoing music out, then hold silence,
- * for three seconds before the next track starts. SFX (AH=1) does
- * not. The first track, and a repeat of the same id, start at once. */
+/* BGM track changes fade the outgoing music over two seconds, then
+ * hold three seconds of silence, then start the next track. SFX (AH=1)
+ * does not wait. The first track, and a repeat of the same id, start
+ * at once. */
 static int bgm_track = -1;
 static int pending_track = -2;
 static int pause_left;
 static int fade_left;
-static const int PAUSE_N = 44100 * 3;
+static const int PAUSE_N = 44100 * 5;
 static const int FADE_N = 44100 * 2;
 
 static void note_log_open(void)

@@ -53,9 +53,9 @@ static uint32_t g_accum;
 static int32_t g_hold_l;
 static int32_t g_hold_r;
 static int g_live;
-/* DC block at 20 Hz, then a 200 Hz low shelf of +50% (out = x + 0.5*lp).
- * ymfm's mix carries a few thousand counts of offset; shelving that
- * offset eats the headroom and does not reach a speaker. */
+/* DC block at 20 Hz, then the 200 Hz band added in full (out = x + lp).
+ * The previous shelf added that band at 0.5. ymfm's mix carries a few
+ * thousand counts of offset; shelving that offset eats the headroom. */
 static float g_bass_l;
 static float g_bass_r;
 static float g_hp_l;
@@ -312,9 +312,8 @@ extern "C" void opna_sample(int16_t *stereo)
     }
     g_hold_l = left;
     g_hold_r = right;
-    /* High-pass the offset, then out = x + 0.5*lp200. Unity through the
-     * mids, about +50% on the lows. The hold stays raw so a repeated
-     * output sample is not shelved twice. */
+    /* High-pass the offset, then out = x + lp200. The hold stays raw so
+     * a repeated output sample is not shelved twice. */
     {
         float xl = (float)left;
         float xr = (float)right;
@@ -327,7 +326,7 @@ extern "C" void opna_sample(int16_t *stereo)
         g_hp_r = hpr;
         g_bass_l += BASS_A * (hpl - g_bass_l);
         g_bass_r += BASS_A * (hpr - g_bass_r);
-        stereo[0] = limit16(hpl + 0.5f * g_bass_l);
-        stereo[1] = limit16(hpr + 0.5f * g_bass_r);
+        stereo[0] = limit16(hpl + g_bass_l);
+        stereo[1] = limit16(hpr + g_bass_r);
     }
 }
