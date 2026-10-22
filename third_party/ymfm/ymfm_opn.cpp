@@ -491,6 +491,14 @@ void ssg_resampler<OutputType, FirstOutput, MixTo1>::write_to_output(OutputType 
 	{
 		// mixing to one, apply a 2/3 factor to prevent overflow
 		output->data[FirstOutput] = (sum0 + sum1 + sum2) * 2 / (3 * divisor);
+		// YM2608's output is wide enough to also keep each SSG channel,
+		// scaled the same way, so a tone lowpass can skip noise.
+		if ((int)(sizeof(output->data) / sizeof(output->data[0])) > FirstOutput + 3)
+		{
+			output->data[FirstOutput + 1] = sum0 * 2 / (3 * divisor);
+			output->data[FirstOutput + 2] = sum1 * 2 / (3 * divisor);
+			output->data[FirstOutput + 3] = sum2 * 2 / (3 * divisor);
+		}
 	}
 	else
 	{
@@ -1402,20 +1410,11 @@ void ym2608::clock_fm_and_adpcm()
 	// clock the ADPCM-B engine every cycle
 	m_adpcm_b.clock();
 
-	// FM channel 5 and the ADPCM-A rhythm are the drum kit. Both are
-	// mixed at 2/3. The other FM channels stay at unity. OPNA FM is
-	// 13-bit with no intermediate clipping.
-	m_fm.output(m_last_fm.clear(), 1, 32767, fmmask & ~0x20u);
-	{
-		fm_engine::output_data side;
+	// update the FM content; OPNA is 13-bit with no intermediate clipping
+	m_fm.output(m_last_fm.clear(), 1, 32767, fmmask);
 
-		m_fm.output(side.clear(), 1, 32767, fmmask & 0x20u);
-		m_last_fm.data[0] += side.data[0] * 2 / 3;
-		m_last_fm.data[1] += side.data[1] * 2 / 3;
-		m_adpcm_a.output(side.clear(), 0x3f);
-		m_last_fm.data[0] += side.data[0] * 2 / 3;
-		m_last_fm.data[1] += side.data[1] * 2 / 3;
-	}
+	// mix in the ADPCM and clamp
+	m_adpcm_a.output(m_last_fm, 0x3f);
 	m_adpcm_b.output(m_last_fm, 1);
 	m_last_fm.clamp16();
 }

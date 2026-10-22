@@ -55,10 +55,11 @@ static int timer_left;
 static int isr_busy;
 static uint32_t sample_pos;
 static FILE *note_log;
-/* BGM track changes fade the outgoing music over two seconds, then
- * hold three seconds of silence, then start the next track. SFX (AH=1)
- * does not wait. The first track, and a repeat of the same id, start
- * at once. */
+/* From stage 2 on, a BGM change fades the outgoing track over two
+ * seconds, holds three seconds of silence, then starts the next track.
+ * Title (13), weapon select (14), and the step into stage 1 do not
+ * wait. SFX (AH=1) never waits. The first track, and a repeat of the
+ * same id, start at once. */
 static int bgm_track = -1;
 static int pending_track = -2;
 static int pause_left;
@@ -106,6 +107,9 @@ static void note_log_write(int bank, uint8_t addr, uint8_t val)
         block = (opn_reg[rb][0xA4u + reg] >> 3) & 7u;
         fprintf(note_log, "fm t=%.4f ch=%d fnum=%u block=%u key=%02X\n",
                 (double)sample_pos / 44100.0, ch, fnum, block, val);
+    } else if (!bank && addr == 0x07u) {
+        fprintf(note_log, "ssg t=%.4f mixer=%02X\n",
+                (double)sample_pos / 44100.0, val);
     } else if (!bank && addr >= 0x08u && addr <= 0x0Au) {
         int ch = (int)addr - 8;
         unsigned per = opn_reg[0][ch * 2u] |
@@ -1639,6 +1643,7 @@ int fplay_bind_mem(const uint8_t *com, size_t com_n,
     pending_track = -2;
     pause_left = 0;
     fade_left = 0;
+    opna_melody_lpf(0);
     note_log_open();
     enter_near(0x0BD0);
     ready = (unknown_op == 0 && mem[0x280] != 0) ? 1 : 0;
@@ -1676,6 +1681,18 @@ int fplay_bind(const char *dir)
     return rc;
 }
 
+/* 13 is the title and 14 is weapon select. The gap belongs to a
+ * stage track handing off to the next stage. */
+static int gap_between_stages(void)
+{
+    return bgm_track >= 0 && bgm_track != 13 && bgm_track != 14;
+}
+
+static void apply_melody_lpf(void)
+{
+    opna_melody_lpf(bgm_track == 13);
+}
+
 static void begin_pause(void)
 {
     if (pause_left > 0) {
@@ -1701,7 +1718,7 @@ void fplay_command(uint8_t ah, uint8_t al)
     /* AH=0 starts a BGM track. A different track waits out the fade
      * instead of cutting the one that is playing. */
     if (ah == 0) {
-        if (bgm_track >= 0 && (int)al != bgm_track) {
+        if (gap_between_stages() && (int)al != bgm_track) {
             pending_track = (int)al;
             begin_pause();
             return;
@@ -1711,10 +1728,11 @@ void fplay_command(uint8_t ah, uint8_t al)
         pending_track = -2;
         run_player(0, al);
         bgm_track = (int)al;
+        apply_melody_lpf();
         return;
     }
-    /* AH=3 stops. Fade first when a track is still in the chip. */
-    if (ah == 3 && bgm_track >= 0) {
+    /* AH=3 stops. Fade first when a stage track is still in the chip. */
+    if (ah == 3 && gap_between_stages()) {
         pending_track = -1;
         begin_pause();
         return;
@@ -1724,6 +1742,7 @@ void fplay_command(uint8_t ah, uint8_t al)
         fade_left = 0;
         pending_track = -2;
         bgm_track = -1;
+        apply_melody_lpf();
     }
     run_player(ah, al);
 }
@@ -1764,9 +1783,11 @@ void fplay_render(int16_t *stereo, int frames)
                 pending_track = -2;
                 if (next >= 0) {
                     bgm_track = next;
+                    apply_melody_lpf();
                     run_player(0, (uint8_t)next);
                 } else if (next == -1) {
                     bgm_track = -1;
+                    apply_melody_lpf();
                     run_player(3, 0);
                 }
             }

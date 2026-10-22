@@ -365,14 +365,17 @@ static void blit_sprite(RbGfx *gfx, const uint8_t *src, uint32_t len,
             decode_plane(src + 64 + row * 2, shift, r);
             decode_plane(src + 96 + row * 2, shift, g);
         }
-        /* 0x481B's normal path (cell origin at line <= 384) writes
-         * 16 scanlines and does not wrap. A row past 0x7D00 falls
-         * in the 768-byte gap and is not scanned out. Wrapping it
-         * back to y=0 paints that row on the other edge of the
-         * screen. The one wrap that does belong to a cell is the
-         * DI >= 0x7D00 subtract in the setup, before this blit. */
-        if (yy < 0 || yy >= RB_GFX_H) {
+        /* GVRAM is a 400-line ring. 0x49C5 subtracts 0x7D00 when a
+         * scanline crosses it, which is this y-400. Present is what
+         * clips to the screen, using the GDC start address, so the
+         * wrapped rows come back on the other side of the seam.
+         * A negative line is not part of the ring; wrapping it
+         * landed a stray strip on the bottom edge. */
+        if (yy < 0) {
             continue;
+        }
+        while (yy >= RB_GFX_H) {
+            yy -= RB_GFX_H;
         }
         for (col = 0; col < wide; col++) {
             uint8_t idx;

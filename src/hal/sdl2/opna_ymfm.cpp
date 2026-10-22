@@ -62,9 +62,12 @@ static float g_hp_l;
 static float g_hp_r;
 static float g_x1_l;
 static float g_x1_r;
-static float g_ssg1;
-static float g_ssg2;
+static float g_ssg_lp[2][2];
+static int g_ssg_lp_on[2];
 static float g_ssg_a;
+static int g_melody_lpf;
+/* SSG mixer, register 0x07. Bits 0-2 tone off, bits 3-5 noise off. */
+static uint8_t g_ssg_mix = 0x3Fu;
 static const float BASS_A = 0.028093f;
 static const float HP_R = 0.997152f;
 
@@ -246,13 +249,21 @@ extern "C" void opna_reset(void)
     g_hp_r = 0;
     g_x1_l = 0;
     g_x1_r = 0;
-    g_ssg1 = 0;
-    g_ssg2 = 0;
-    /* Two one-pole lows at 450 Hz, clocked at the chip rate. The title
-     * SSG square's third harmonic sits on B5 and was masking the FM
-     * lead. The bass fundamental is well below the corner. */
+    memset(g_ssg_lp, 0, sizeof g_ssg_lp);
+    g_ssg_lp_on[0] = 0;
+    g_ssg_lp_on[1] = 0;
+    g_melody_lpf = 0;
+    g_ssg_mix = 0x3Fu;
+    /* Two one-pole lows at 450 Hz, clocked at the chip rate. Track 13's
+     * SSG squares put a third harmonic on B5. Noise and the other
+     * tracks are not passed through it. */
     g_ssg_a = 1.0f - expf(-2.0f * 3.14159265f * 450.0f / (float)g_chip_rate);
     g_live = 1;
+}
+
+extern "C" void opna_melody_lpf(int enable)
+{
+    g_melody_lpf = enable ? 1 : 0;
 }
 
 extern "C" void opna_write(uint16_t port, uint8_t value)
@@ -270,6 +281,9 @@ extern "C" void opna_write(uint16_t port, uint8_t value)
         /* YM2608 rhythm (ADPCM-A) lives at low-port addresses 0x10-0x1F. */
         if (g_addr_latch[0] >= 0x10u && g_addr_latch[0] <= 0x1Fu) {
             g_rhythm_writes++;
+        }
+        if (g_addr_latch[0] == 0x07u) {
+            g_ssg_mix = value;
         }
     } else if (port == 0x18Cu) {
         off = 2;
@@ -302,12 +316,46 @@ extern "C" void opna_sample(int16_t *stereo)
         ymfm::ym2608::output_data out;
 
         g_chip.generate(&out, 1);
-        /* FM stays wide. The mono SSG (slot 2) is low-passed here, once
-         * per chip sample, so a held output sample is not filtered again. */
-        g_ssg1 += g_ssg_a * ((float)out.data[2] - g_ssg1);
-        g_ssg2 += g_ssg_a * (g_ssg1 - g_ssg2);
-        left = out.data[0] + (int32_t)g_ssg2;
-        right = out.data[1] + (int32_t)g_ssg2;
+        /* data[2] is the mixed SSG. data[3..5] are channels 0..2 with
+         * the same scale. The title melody's squares are channels 0
+         * and 1 with noise disabled. A noise channel (the explosion)
+         * and channel 2 (the bass) are added raw. */
+        {
+            int32_t ssg = out.data[2];
+
+            if (g_melody_lpf) {
+                int ch;
+
+                ssg = 0;
+                for (ch = 0; ch < 3; ch++) {
+                    int32_t s = out.data[3 + ch];
+                    int noise = (g_ssg_mix & (uint8_t)(1u << (3 + ch))) == 0;
+
+                    if (ch < 2 && !noise) {
+                        float x = (float)s;
+
+                        if (!g_ssg_lp_on[ch]) {
+                            g_ssg_lp[ch][0] = x;
+                            g_ssg_lp[ch][1] = x;
+                            g_ssg_lp_on[ch] = 1;
+                        }
+                        g_ssg_lp[ch][0] += g_ssg_a * (x - g_ssg_lp[ch][0]);
+                        g_ssg_lp[ch][1] += g_ssg_a * (g_ssg_lp[ch][0] - g_ssg_lp[ch][1]);
+                        ssg += (int32_t)g_ssg_lp[ch][1];
+                    } else {
+                        if (ch < 2) {
+                            g_ssg_lp_on[ch] = 0;
+                        }
+                        ssg += s;
+                    }
+                }
+            } else {
+                g_ssg_lp_on[0] = 0;
+                g_ssg_lp_on[1] = 0;
+            }
+            left = out.data[0] + ssg;
+            right = out.data[1] + ssg;
+        }
         g_accum -= OUT_RATE;
     }
     g_hold_l = left;
