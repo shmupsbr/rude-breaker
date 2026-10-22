@@ -37,6 +37,11 @@ int sys_init(const char *title)
     return 0;
 }
 
+void sys_message(const char *title, const char *text)
+{
+    fprintf(stderr, "%s\n%s\n", title ? title : "Rude Breaker", text ? text : "");
+}
+
 void sys_shutdown(void)
 {
     _iocs_g_clr_on();
@@ -109,10 +114,17 @@ void sys_draw_text(int16_t x, int16_t y, const char *utf8, uint32_t rgba)
     _iocs_b_print((const unsigned char *)utf8);
 }
 
-void sys_wait_vblank(void)
+void sys_wait_vblank(unsigned counts)
 {
-    /* Official vertical display wait — no busy-spin timing loops. */
-    _iocs_vdisp_wait();
+    unsigned i;
+
+    /* X68000 vertical wait stands in for one PC-98 wait count. */
+    if (counts == 0u) {
+        counts = 1u;
+    }
+    for (i = 0; i < counts; i++) {
+        _iocs_vdisp_wait();
+    }
 }
 
 void sys_present(void)

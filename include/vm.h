@@ -59,6 +59,12 @@ void vm_destroy(RbVm *vm);
 
 /* stage is 1..5 and selects SGM1 chunk (stage + 1). */
 void vm_reset_play(RbVm *vm, uint16_t stage);
+/* SGM1 chunk 1 header 0: logo, title, and attract. */
+void vm_reset_boot(RbVm *vm);
+/* Wait counts at [bp+0x60]. Zero becomes one (the following vsync edge). */
+unsigned vm_vsync_count(const RbVm *vm);
+/* Clear the "header 0 was loaded" flag after the host has noticed it. */
+void vm_ack_boot(RbVm *vm);
 void vm_set_hiscore(RbVm *vm, uint32_t score);
 void vm_set_input(RbVm *vm, const RbInput *in);
 void vm_frame(RbVm *vm);

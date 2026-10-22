@@ -3,6 +3,7 @@
  */
 #include "hal.h"
 #include "fplay.h"
+#include "opna.h"
 
 #include <SDL.h>
 #include <stdio.h>
@@ -45,9 +46,24 @@ static void open_device(void)
     g_opened = 1;
 }
 
+void sys_set_rhythm_override(const char *path)
+{
+    opna_set_rhythm_override(path);
+}
+
 int sys_audio_bind(const char *dir)
 {
     int rc = fplay_bind(dir);
+
+    open_device();
+    return rc;
+}
+
+int sys_audio_bind_mem(const uint8_t *com, size_t com_n,
+                       const uint8_t *song, size_t song_n,
+                       const char *rhythm_dir)
+{
+    int rc = fplay_bind_mem(com, com_n, song, song_n, rhythm_dir);
 
     open_device();
     return rc;

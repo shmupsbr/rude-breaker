@@ -85,6 +85,10 @@ struct RbVm {
     uint16_t text_di;
     uint16_t text_saved;
     uint16_t text_attr;
+    /* AL across the entity scan. Frame start stands in for loader CS.
+     * A script's first entry (0x2FD0) stores 2. Opcode 0x3B masks it. */
+    uint8_t disp_al;
+    uint8_t script_entered[ENT_N];
     RbGfx *gfx;
 };
 
@@ -200,6 +204,7 @@ static void clear_slot(RbVm *vm, int i)
     memset(slot_ptr(vm, i), 0, ENT_STR);
     vm->mode[i] = MODE_FETCH;
     vm->origin[i] = 0;
+    vm->script_entered[i] = 0;
 }
 
 /* ---- LZ77 (loader 0x6ACD) ---------------------------------------------- */
@@ -1207,7 +1212,19 @@ static void ea_write(RbVm *vm, int ent, uint16_t *r, const Ea *ea, int is_byte, 
     mem_write(vm, ent, ea->seg, ea->addr, is_byte, v);
 }
 
-static void flags_logic(uint16_t result, int width, int *cf, int *zf, int *sf, int *of)
+/* PF is even parity of the low 8 bits, including a 16-bit result. */
+static int parity_even(uint16_t result)
+{
+    uint8_t b = (uint8_t)result;
+
+    b = (uint8_t)(b ^ (b >> 4));
+    b = (uint8_t)(b ^ (b >> 2));
+    b = (uint8_t)(b ^ (b >> 1));
+    return (b & 1u) == 0;
+}
+
+static void flags_logic(uint16_t result, int width, int *cf, int *zf, int *sf,
+                        int *of, int *pf)
 {
     *cf = 0;
     *of = 0;
@@ -1218,10 +1235,11 @@ static void flags_logic(uint16_t result, int width, int *cf, int *zf, int *sf, i
     } else {
         *sf = (result & 0x8000u) != 0;
     }
+    *pf = parity_even(result);
 }
 
 static uint16_t flags_add(uint16_t a, uint16_t b, int cin, int width,
-                           int *cf, int *zf, int *sf, int *of)
+                           int *cf, int *zf, int *sf, int *of, int *pf)
 {
     uint32_t mask = (width == 8) ? 0xFFu : 0xFFFFu;
     uint32_t sign = (width == 8) ? 0x80u : 0x8000u;
@@ -1232,11 +1250,12 @@ static uint16_t flags_add(uint16_t a, uint16_t b, int cin, int width,
     *zf = r == 0;
     *sf = (r & sign) != 0;
     *of = ((~(a ^ b)) & (a ^ r) & sign) != 0;
+    *pf = parity_even((uint16_t)r);
     return (uint16_t)r;
 }
 
 static uint16_t flags_sub(uint16_t a, uint16_t b, int cin, int width,
-                           int *cf, int *zf, int *sf, int *of)
+                           int *cf, int *zf, int *sf, int *of, int *pf)
 {
     uint32_t mask = (width == 8) ? 0xFFu : 0xFFFFu;
     uint32_t sign = (width == 8) ? 0x80u : 0x8000u;
@@ -1253,10 +1272,11 @@ static uint16_t flags_sub(uint16_t a, uint16_t b, int cin, int width,
     *zf = r == 0;
     *sf = (r & sign) != 0;
     *of = ((a ^ b) & (a ^ r) & sign) != 0;
+    *pf = parity_even((uint16_t)r);
     return (uint16_t)r;
 }
 
-static int jcc(uint8_t cond, int cf, int zf, int sf, int of)
+static int jcc(uint8_t cond, int cf, int zf, int sf, int of, int pf)
 {
     switch (cond & 0x0Eu) {
     case 0x00: return of;
@@ -1264,7 +1284,7 @@ static int jcc(uint8_t cond, int cf, int zf, int sf, int of)
     case 0x04: return zf;
     case 0x06: return cf || zf;
     case 0x08: return sf;
-    case 0x0A: return 0;
+    case 0x0A: return pf;
     case 0x0C: return sf != of;
     case 0x0E: return zf || (sf != of);
     default: return 0;
@@ -1280,6 +1300,8 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
     int zf = 1;
     int sf = 0;
     int of = 0;
+    int pf = 1;
+    int df = 0;
     uint16_t ip = ip0;
     uint32_t len = 0;
     const uint8_t *cs = code_of(vm, ent, &len);
@@ -1342,7 +1364,10 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             } else if (p == 0xF3) {
                 rep = 1;
                 ip++;
-            } else if (p == 0xF0 || p == 0xF2) {
+            } else if (p == 0xF2) {
+                rep = 2;
+                ip++;
+            } else if (p == 0xF0) {
                 ip++;
             } else {
                 break;
@@ -1381,7 +1406,7 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             uint16_t old = r[op - 0x40u];
             int ocf = cf;
 
-            r[op - 0x40u] = flags_add(old, 1, 0, 16, &cf, &zf, &sf, &of);
+            r[op - 0x40u] = flags_add(old, 1, 0, 16, &cf, &zf, &sf, &of, &pf);
             cf = ocf;
             continue;
         }
@@ -1389,7 +1414,7 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             uint16_t old = r[op - 0x48u];
             int ocf = cf;
 
-            r[op - 0x48u] = flags_sub(old, 1, 0, 16, &cf, &zf, &sf, &of);
+            r[op - 0x48u] = flags_sub(old, 1, 0, 16, &cf, &zf, &sf, &of, &pf);
             cf = ocf;
             continue;
         }
@@ -1452,7 +1477,12 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             cf = 1;
             continue;
         }
-        if (op == 0xFCu || op == 0xFDu) {
+        if (op == 0xFCu) {
+            df = 0;
+            continue;
+        }
+        if (op == 0xFDu) {
+            df = 1;
             continue;
         }
         if (op == 0xEBu || (op >= 0x70u && op <= 0x7Fu)) {
@@ -1464,7 +1494,7 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             }
             rel = (int8_t)cs[ip++];
             if (op != 0xEBu) {
-                take = jcc((uint8_t)(op & 0x0Fu), cf, zf, sf, of);
+                take = jcc((uint8_t)(op & 0x0Fu), cf, zf, sf, of, pf);
                 if (op & 1) {
                     take = !take;
                 }
@@ -1571,31 +1601,31 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             }
             switch (alu) {
             case 0:
-                res = flags_add(a, b, 0, width, &cf, &zf, &sf, &of);
+                res = flags_add(a, b, 0, width, &cf, &zf, &sf, &of, &pf);
                 break;
             case 1:
                 res = (uint16_t)(a | b);
-                flags_logic(res, width, &cf, &zf, &sf, &of);
+                flags_logic(res, width, &cf, &zf, &sf, &of, &pf);
                 break;
             case 2:
-                res = flags_add(a, b, cf, width, &cf, &zf, &sf, &of);
+                res = flags_add(a, b, cf, width, &cf, &zf, &sf, &of, &pf);
                 break;
             case 3:
-                res = flags_sub(a, b, cf, width, &cf, &zf, &sf, &of);
+                res = flags_sub(a, b, cf, width, &cf, &zf, &sf, &of, &pf);
                 break;
             case 4:
                 res = (uint16_t)(a & b);
-                flags_logic(res, width, &cf, &zf, &sf, &of);
+                flags_logic(res, width, &cf, &zf, &sf, &of, &pf);
                 break;
             case 5:
-                res = flags_sub(a, b, 0, width, &cf, &zf, &sf, &of);
+                res = flags_sub(a, b, 0, width, &cf, &zf, &sf, &of, &pf);
                 break;
             case 6:
                 res = (uint16_t)(a ^ b);
-                flags_logic(res, width, &cf, &zf, &sf, &of);
+                flags_logic(res, width, &cf, &zf, &sf, &of, &pf);
                 break;
             default:
-                (void)flags_sub(a, b, 0, width, &cf, &zf, &sf, &of);
+                (void)flags_sub(a, b, 0, width, &cf, &zf, &sf, &of, &pf);
                 continue;
             }
             if (dir_to_reg) {
@@ -1621,19 +1651,19 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             a = (uint8_t)r[0];
             alu = op >> 3;
             if (op == 0xA8u) {
-                flags_logic((uint16_t)(a & imm), 8, &cf, &zf, &sf, &of);
+                flags_logic((uint16_t)(a & imm), 8, &cf, &zf, &sf, &of, &pf);
                 continue;
             }
             switch (alu) {
-            case 0: res = flags_add(a, imm, 0, 8, &cf, &zf, &sf, &of); break;
-            case 1: res = (uint16_t)(a | imm); flags_logic(res, 8, &cf, &zf, &sf, &of); break;
-            case 2: res = flags_add(a, imm, cf, 8, &cf, &zf, &sf, &of); break;
-            case 3: res = flags_sub(a, imm, cf, 8, &cf, &zf, &sf, &of); break;
-            case 4: res = (uint16_t)(a & imm); flags_logic(res, 8, &cf, &zf, &sf, &of); break;
-            case 5: res = flags_sub(a, imm, 0, 8, &cf, &zf, &sf, &of); break;
-            case 6: res = (uint16_t)(a ^ imm); flags_logic(res, 8, &cf, &zf, &sf, &of); break;
+            case 0: res = flags_add(a, imm, 0, 8, &cf, &zf, &sf, &of, &pf); break;
+            case 1: res = (uint16_t)(a | imm); flags_logic(res, 8, &cf, &zf, &sf, &of, &pf); break;
+            case 2: res = flags_add(a, imm, cf, 8, &cf, &zf, &sf, &of, &pf); break;
+            case 3: res = flags_sub(a, imm, cf, 8, &cf, &zf, &sf, &of, &pf); break;
+            case 4: res = (uint16_t)(a & imm); flags_logic(res, 8, &cf, &zf, &sf, &of, &pf); break;
+            case 5: res = flags_sub(a, imm, 0, 8, &cf, &zf, &sf, &of, &pf); break;
+            case 6: res = (uint16_t)(a ^ imm); flags_logic(res, 8, &cf, &zf, &sf, &of, &pf); break;
             default:
-                (void)flags_sub(a, imm, 0, 8, &cf, &zf, &sf, &of);
+                (void)flags_sub(a, imm, 0, 8, &cf, &zf, &sf, &of, &pf);
                 continue;
             }
             reg_set_lo(r, 0, (uint8_t)res);
@@ -1652,19 +1682,19 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             a = r[0];
             alu = op >> 3;
             if (op == 0xA9u) {
-                flags_logic((uint16_t)(a & imm), 16, &cf, &zf, &sf, &of);
+                flags_logic((uint16_t)(a & imm), 16, &cf, &zf, &sf, &of, &pf);
                 continue;
             }
             switch (alu) {
-            case 0: res = flags_add(a, imm, 0, 16, &cf, &zf, &sf, &of); break;
-            case 1: res = (uint16_t)(a | imm); flags_logic(res, 16, &cf, &zf, &sf, &of); break;
-            case 2: res = flags_add(a, imm, cf, 16, &cf, &zf, &sf, &of); break;
-            case 3: res = flags_sub(a, imm, cf, 16, &cf, &zf, &sf, &of); break;
-            case 4: res = (uint16_t)(a & imm); flags_logic(res, 16, &cf, &zf, &sf, &of); break;
-            case 5: res = flags_sub(a, imm, 0, 16, &cf, &zf, &sf, &of); break;
-            case 6: res = (uint16_t)(a ^ imm); flags_logic(res, 16, &cf, &zf, &sf, &of); break;
+            case 0: res = flags_add(a, imm, 0, 16, &cf, &zf, &sf, &of, &pf); break;
+            case 1: res = (uint16_t)(a | imm); flags_logic(res, 16, &cf, &zf, &sf, &of, &pf); break;
+            case 2: res = flags_add(a, imm, cf, 16, &cf, &zf, &sf, &of, &pf); break;
+            case 3: res = flags_sub(a, imm, cf, 16, &cf, &zf, &sf, &of, &pf); break;
+            case 4: res = (uint16_t)(a & imm); flags_logic(res, 16, &cf, &zf, &sf, &of, &pf); break;
+            case 5: res = flags_sub(a, imm, 0, 16, &cf, &zf, &sf, &of, &pf); break;
+            case 6: res = (uint16_t)(a ^ imm); flags_logic(res, 16, &cf, &zf, &sf, &of, &pf); break;
             default:
-                (void)flags_sub(a, imm, 0, 16, &cf, &zf, &sf, &of);
+                (void)flags_sub(a, imm, 0, 16, &cf, &zf, &sf, &of, &pf);
                 continue;
             }
             r[0] = res;
@@ -1699,16 +1729,16 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             regn = 0;
             (void)regn;
             switch (alu) {
-            case 0: res = flags_add(a, imm, 0, width, &cf, &zf, &sf, &of); break;
+            case 0: res = flags_add(a, imm, 0, width, &cf, &zf, &sf, &of, &pf); break;
             case 1: res = (uint16_t)((a | imm) & (is_byte ? 0xFFu : 0xFFFFu));
-                flags_logic(res, width, &cf, &zf, &sf, &of); break;
-            case 2: res = flags_add(a, imm, cf, width, &cf, &zf, &sf, &of); break;
-            case 3: res = flags_sub(a, imm, cf, width, &cf, &zf, &sf, &of); break;
-            case 4: res = (uint16_t)(a & imm); flags_logic(res, width, &cf, &zf, &sf, &of); break;
-            case 5: res = flags_sub(a, imm, 0, width, &cf, &zf, &sf, &of); break;
-            case 6: res = (uint16_t)(a ^ imm); flags_logic(res, width, &cf, &zf, &sf, &of); break;
+                flags_logic(res, width, &cf, &zf, &sf, &of, &pf); break;
+            case 2: res = flags_add(a, imm, cf, width, &cf, &zf, &sf, &of, &pf); break;
+            case 3: res = flags_sub(a, imm, cf, width, &cf, &zf, &sf, &of, &pf); break;
+            case 4: res = (uint16_t)(a & imm); flags_logic(res, width, &cf, &zf, &sf, &of, &pf); break;
+            case 5: res = flags_sub(a, imm, 0, width, &cf, &zf, &sf, &of, &pf); break;
+            case 6: res = (uint16_t)(a ^ imm); flags_logic(res, width, &cf, &zf, &sf, &of, &pf); break;
             default:
-                (void)flags_sub(a, imm, 0, width, &cf, &zf, &sf, &of);
+                (void)flags_sub(a, imm, 0, width, &cf, &zf, &sf, &of, &pf);
                 continue;
             }
             ea_write(vm, ent, r, &ea, is_byte, res);
@@ -1724,7 +1754,7 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             regn = (modrm >> 3) & 7;
             a = ea_read(vm, ent, r, &ea, is_byte);
             b = is_byte ? reg_lo(r, regn) : r[regn];
-            flags_logic((uint16_t)(a & b), is_byte ? 8 : 16, &cf, &zf, &sf, &of);
+            flags_logic((uint16_t)(a & b), is_byte ? 8 : 16, &cf, &zf, &sf, &of, &pf);
             continue;
         }
         if (op == 0x86u || op == 0x87u) {
@@ -1834,11 +1864,11 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             a = ea_read(vm, ent, r, &ea, is_byte);
             ocf = cf;
             if (regn == 0) {
-                res = flags_add(a, 1, 0, width, &cf, &zf, &sf, &of);
+                res = flags_add(a, 1, 0, width, &cf, &zf, &sf, &of, &pf);
                 cf = ocf;
                 ea_write(vm, ent, r, &ea, is_byte, res);
             } else if (regn == 1) {
-                res = flags_sub(a, 1, 0, width, &cf, &zf, &sf, &of);
+                res = flags_sub(a, 1, 0, width, &cf, &zf, &sf, &of, &pf);
                 cf = ocf;
                 ea_write(vm, ent, r, &ea, is_byte, res);
             } else if (regn == 2 && !is_byte) {
@@ -1881,7 +1911,7 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
                     ip = (uint16_t)(ip + 2u);
                 }
                 a = ea_read(vm, ent, r, &ea, is_byte);
-                flags_logic((uint16_t)(a & imm), width, &cf, &zf, &sf, &of);
+                flags_logic((uint16_t)(a & imm), width, &cf, &zf, &sf, &of, &pf);
                 continue;
             }
             a = ea_read(vm, ent, r, &ea, is_byte);
@@ -1889,7 +1919,7 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
                 res = is_byte ? (uint16_t)(~a & 0xFFu) : (uint16_t)~a;
                 ea_write(vm, ent, r, &ea, is_byte, res);
             } else if (regn == 3) {
-                res = flags_sub(0, a, 0, width, &cf, &zf, &sf, &of);
+                res = flags_sub(0, a, 0, width, &cf, &zf, &sf, &of, &pf);
                 ea_write(vm, ent, r, &ea, is_byte, res);
             } else if (regn == 4 || regn == 5) {
                 if (is_byte) {
@@ -1974,30 +2004,70 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             }
             zf = v == 0;
             sf = (v & sign) != 0;
+            pf = parity_even(v);
             ea_write(vm, ent, r, &ea, is_byte, v);
             continue;
         }
-        if (op == 0xA4u || op == 0xA5u) {
-            int is_byte = op == 0xA4u;
+        if (op == 0xA4u || op == 0xA5u || op == 0xA6u || op == 0xA7u ||
+            op == 0xAAu || op == 0xABu || op == 0xACu || op == 0xADu ||
+            op == 0xAEu || op == 0xAFu) {
+            int byteop = (op & 1u) == 0;
             int srcseg = prefixed ? pseg : SEG_DS;
-            unsigned step = is_byte ? 1u : 2u;
+            int step = byteop ? 1 : 2;
+            int width = byteop ? 8 : 16;
+            int compare = (op == 0xA6u || op == 0xA7u ||
+                           op == 0xAEu || op == 0xAFu);
 
-            /* Direction stays up. CLD/STD are ignored, matching the
-             * ranking copy at 0x9202 (REP MOVSW, no STD). */
+            /* DF selects the pointer step. Ranking 0x9202 is REP MOVSW
+             * with DF clear, so the copy still walks upward. REP and
+             * REPNE both count CX on MOVS/STOS/LODS. CMPS and SCAS
+             * also stop on ZF (REPE when ZF clears, REPNE when it sets). */
+            if (df) {
+                step = -step;
+            }
             for (;;) {
-                uint16_t v = 0;
+                uint16_t sv = 0;
+                uint16_t dv = 0;
 
                 if (rep && r[1] == 0) {
                     break;
                 }
-                mem_read(vm, ent, srcseg, r[6], is_byte, &v);
-                mem_write(vm, ent, SEG_ES, r[7], is_byte, v);
-                r[6] = (uint16_t)(r[6] + step);
-                r[7] = (uint16_t)(r[7] + step);
+                if (op == 0xA4u || op == 0xA5u) {
+                    mem_read(vm, ent, srcseg, r[6], byteop, &sv);
+                    mem_write(vm, ent, SEG_ES, r[7], byteop, sv);
+                    r[6] = (uint16_t)(r[6] + step);
+                    r[7] = (uint16_t)(r[7] + step);
+                } else if (op == 0xA6u || op == 0xA7u) {
+                    mem_read(vm, ent, srcseg, r[6], byteop, &sv);
+                    mem_read(vm, ent, SEG_ES, r[7], byteop, &dv);
+                    (void)flags_sub(sv, dv, 0, width, &cf, &zf, &sf, &of, &pf);
+                    r[6] = (uint16_t)(r[6] + step);
+                    r[7] = (uint16_t)(r[7] + step);
+                } else if (op == 0xAAu || op == 0xABu) {
+                    sv = byteop ? (uint16_t)(r[0] & 0xFFu) : r[0];
+                    mem_write(vm, ent, SEG_ES, r[7], byteop, sv);
+                    r[7] = (uint16_t)(r[7] + step);
+                } else if (op == 0xACu || op == 0xADu) {
+                    mem_read(vm, ent, srcseg, r[6], byteop, &sv);
+                    if (byteop) {
+                        reg_set_lo(r, 0, (uint8_t)sv);
+                    } else {
+                        r[0] = sv;
+                    }
+                    r[6] = (uint16_t)(r[6] + step);
+                } else {
+                    mem_read(vm, ent, SEG_ES, r[7], byteop, &dv);
+                    sv = byteop ? (uint16_t)(r[0] & 0xFFu) : r[0];
+                    (void)flags_sub(sv, dv, 0, width, &cf, &zf, &sf, &of, &pf);
+                    r[7] = (uint16_t)(r[7] + step);
+                }
                 if (!rep) {
                     break;
                 }
                 r[1] = (uint16_t)(r[1] - 1u);
+                if (compare && ((rep == 1 && !zf) || (rep == 2 && zf))) {
+                    break;
+                }
             }
             continue;
         }
@@ -2094,6 +2164,11 @@ static void play_al(RbVm *vm, uint8_t ah, uint8_t al)
         return;
     }
     if (ah == 1) {
+        const char *log = getenv("RUDEBR_SFXLOG");
+
+        if (log && log[0]) {
+            fprintf(stderr, "sfx %02X\n", al);
+        }
         sys_play_sound(al, 180);
     }
 }
@@ -2533,7 +2608,10 @@ static void op_page(RbVm *vm, uint8_t rec)
     if (!plane) {
         return;
     }
-    gfx_clear_frame(vm->gfx);
+    /* 0x6AA4 expands each plane from DI=0 and stops at the first 00.
+     * An empty stream writes nothing, so the plane already in GVRAM
+     * stays. Clearing here dropped record 9's blue and red (the title
+     * frame) when record 10 arrived with those two streams empty. */
     for (p = 0; p < 4; p++) {
         uint32_t used = 0;
         uint32_t n;
@@ -3195,13 +3273,14 @@ static void run_fetch(RbVm *vm, int ent)
             su16(vm, ent, 8, (uint16_t)(di + 12u));
             break;
         case 0x3B: {
-            /* 0x3F0A builds the address from X>>3 and then AND AL,7.
-             * The dispatcher never loads AL, so the original shift is
-             * whatever the previous opcode left behind. The bits the
-             * address throw away are the pixel alignment, and that is
-             * the shift this blit exists to apply. */
+            /* 0x3F0A builds the address from X>>3 (those bits are
+             * discarded) and then AND AL,7. AL is the dispatcher's,
+             * not X. A fresh script entered through 0x2FD0 with AL=2.
+             * Handlers return to 0x2FD6, so AL survives the timeslice. */
             uint16_t xw = eu16(vm, ent, rd8(vm, ent, di));
+            uint8_t shift = (uint8_t)(vm->disp_al & 7u);
 
+            vm->disp_al = shift;
             op_span(vm, (uint8_t)gu16(vm, rd8(vm, ent, (uint16_t)(di + 6u))),
                     rd16(vm, ent, (uint16_t)(di + 7u)),
                     gv_from_xy(xw,
@@ -3209,7 +3288,7 @@ static void run_fetch(RbVm *vm, int ent)
                     rd16(vm, ent, (uint16_t)(di + 2u)),
                     rd16(vm, ent, (uint16_t)(di + 4u)),
                     rd16(vm, ent, (uint16_t)(di + 9u)),
-                    (uint8_t)(xw & 7u));
+                    shift);
             su16(vm, ent, 8, (uint16_t)(di + 11u));
             break;
         }
@@ -3242,6 +3321,9 @@ static void run_fetch(RbVm *vm, int ent)
                 }
                 at = (uint16_t)addr;
             }
+            /* 0x3F73 moves the fill color into AL before the far call.
+             * That call can change AL; the port keeps the color. */
+            vm->disp_al = color;
             gfx_fill(vm->gfx, at, nbytes, rows, color);
             su16(vm, ent, 8, (uint16_t)(di + 6u));
             break;
@@ -3377,6 +3459,12 @@ static void run_entity(RbVm *vm, int ent)
         }
         return;
     }
+    if (!vm->script_entered[ent]) {
+        /* 0x2FD0 stores AX=2 before the first opcode. Later frames
+         * resume at 0x2FD6 and keep whatever this scan left in AL. */
+        vm->disp_al = 2;
+        vm->script_entered[ent] = 1;
+    }
     run_fetch(vm, ent);
 }
 
@@ -3415,6 +3503,19 @@ static uint16_t held_from(const RbInput *in)
     }
     if (in->buttons & RB_BTN_QUIT) {
         h |= 0x8000u;
+    }
+    /* Loader 0x78B5: key 1..4 are bits of byte 0, not the d-pad. */
+    if (in->buttons & RB_BTN_1) {
+        h |= 0x2000u;
+    }
+    if (in->buttons & RB_BTN_2) {
+        h |= 0x1000u;
+    }
+    if (in->buttons & RB_BTN_3) {
+        h |= 0x0800u;
+    }
+    if (in->buttons & RB_BTN_4) {
+        h |= 0x0400u;
     }
     return h;
 }
@@ -3458,6 +3559,58 @@ void vm_destroy(RbVm *vm)
     free(vm);
 }
 
+/* Chunk 1 header 0 is the boot script (word at offset 0, documented 0x78B0).
+ * Stage entry stays on vm_reset_play so the march does not run the attract. */
+void vm_reset_boot(RbVm *vm)
+{
+    uint16_t ip;
+
+    if (!vm) {
+        return;
+    }
+    memset(vm->ent, 0, sizeof vm->ent);
+    memset(vm->g, 0, sizeof vm->g);
+    memset(vm->vars, 0, sizeof vm->vars);
+    memset(vm->mode, 0, sizeof vm->mode);
+    memset(vm->origin, 0, sizeof vm->origin);
+    memset(vm->script_entered, 0, sizeof vm->script_entered);
+    vm->disp_al = 0;
+    vm->spawns = 0;
+    vm->step_faults = 0;
+    vm->op_miss = 0;
+    vm->nat_miss = 0;
+    vm->aim_ops = 0;
+    vm->ship_natives = 0;
+    vm->option_natives = 0;
+    vm->loads = 0;
+    vm->quit = 0;
+    vm->boot = 0;
+    vm->rng_mix = 0x1234u;
+    vm->rng_cf = 0;
+    sgu16(vm, 0x5C, 0x1234u);
+    sgu16(vm, 0x62, 3);
+    sgu16(vm, 0x60, 3);
+    memset(vm->rank, 0, sizeof vm->rank);
+    memset(vm->text, 0, sizeof vm->text);
+    vm->text_di = 0;
+    vm->text_saved = 0;
+    vm->text_attr = 0x5756u;
+    sgu16(vm, 0x56, (uint16_t)RANK_BASE);
+    gfx_reset(vm->gfx);
+    install_boot_font(vm);
+    vm->view_chunk = 1;
+    if (ensure_chunk(vm, 1) != 0 || vm->clen[1] < 2u) {
+        return;
+    }
+    ip = read_u16_le(vm->chunk[1]);
+    clear_slot(vm, 0);
+    su16(vm, 0, 0, 0x4000u);
+    su16(vm, 0, 8, ip);
+    vm->cof[0] = 1;
+    vm->origin[0] = ip;
+    vm->mode[0] = MODE_FETCH;
+}
+
 void vm_reset_play(RbVm *vm, uint16_t stage)
 {
     unsigned chunk;
@@ -3478,6 +3631,8 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
     memset(vm->vars, 0, sizeof vm->vars);
     memset(vm->mode, 0, sizeof vm->mode);
     memset(vm->origin, 0, sizeof vm->origin);
+    memset(vm->script_entered, 0, sizeof vm->script_entered);
+    vm->disp_al = 0;
     vm->spawns = 0;
     vm->step_faults = 0;
     vm->op_miss = 0;
@@ -3638,9 +3793,10 @@ void vm_debug_origins(const RbVm *vm)
     }
 }
 
-/* 0x5EF5: OUT 0x64, then a wait until [bp+0x60]+[bp+0x5E] is not above
- * [bp+0x5C]. The timer IRQ is what makes that compare finish; the stores
- * after the wait are the part the scripts can observe. */
+/* 0x5EF5: OUT 0x64, then spin until the vsync counter [bp+0x5C] has
+ * advanced by [bp+0x60]. That counter is also the RNG seed, so the port
+ * does not bump it. The host timer in sys_wait_vblank sleeps the same
+ * count. The stores below are what later script reads can observe. */
 static void hook_5ef5(RbVm *vm)
 {
     uint16_t old = gu16(vm, 0x5E);
@@ -3650,14 +3806,15 @@ static void hook_5ef5(RbVm *vm)
     sgu16(vm, 0x66, (uint16_t)(limit - old));
 }
 
-/* 0x6C0B: if [bp+0xB8] is set, write the staged palette to the DAC and
- * clear the flag. The software DAC is already the palette opcodes wrote;
- * present reads it. */
+/* 0x6C0B: if [bp+0xB8] is set, write the staged palette through the
+ * analog DAC (ports 0xA8/0xAA/0xAC/0xAE) and clear the flag. Byte
+ * [0x6BD0] selects the digital combine; this image never stores it. */
 static void hook_6c0b(RbVm *vm)
 {
     if (vm->g[0xB8] == 0) {
         return;
     }
+    gfx_dac_flush(vm->gfx);
     vm->g[0xB8] = 0;
 }
 
@@ -3668,6 +3825,12 @@ void vm_frame(RbVm *vm)
     if (!vm) {
         return;
     }
+    /* 0x2FD0 stores AX=2 only when a script is entered. Handlers
+     * return to 0x2FD6, so AL stays in the CPU across opcodes and
+     * across frames. Opcode 0x3B uses that low 3 bits as the span
+     * shift, and 0x3C/0x3D leave the fill color there. Clearing AL
+     * here forced every later 0x3B to shift 0 and dropped the title
+     * overlays. run_entity sets 2 on the first entry only. */
     for (i = 0; i < ENT_N; i++) {
         run_entity(vm, i);
     }
@@ -3802,6 +3965,24 @@ int vm_collect_sprites(const RbVm *vm, RbVmSprite *out, int max)
     return n;
 }
 
+unsigned vm_vsync_count(const RbVm *vm)
+{
+    unsigned n;
+
+    if (!vm) {
+        return 1;
+    }
+    n = gu16(vm, 0x60);
+    return n == 0u ? 1u : n;
+}
+
+void vm_ack_boot(RbVm *vm)
+{
+    if (vm) {
+        vm->boot = 0;
+    }
+}
+
 int vm_quit_requested(const RbVm *vm)
 {
     return vm && vm->quit;
@@ -3822,7 +4003,11 @@ void vm_present(const RbVm *vm, uint32_t *rgba, int w, int h)
     if (!vm) {
         return;
     }
-    gfx_present(vm->gfx, (int)gu16(vm, 0x76), vm->text, rgba, w, h);
+    /* Chunks 2..6 are the stages. Chunk 1 is the logo, title, menus,
+     * ranking, and ending, all drawn across the full 640. */
+    gfx_present(vm->gfx, (int)gu16(vm, 0x76), (int)(int16_t)gu16(vm, 0x84),
+                vm->text, rgba, w, h,
+                vm->view_chunk >= 2 && vm->view_chunk <= 6);
 }
 
 int vm_self_test(RbVm *vm)

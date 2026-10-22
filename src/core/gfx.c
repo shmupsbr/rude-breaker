@@ -14,6 +14,12 @@
 
 struct RbGfx {
     uint8_t *pix;
+    /* Background page. Fills, tiles, and GRCG blits land here. Each
+     * entity draw copies this over pix and stamps sprites only onto pix,
+     * which is what the PC-98 does by rebuilding the hidden page (GRCG
+     * tile restore plus the 0xA4/0xA6 page flip) before the sprites. */
+    uint8_t *bg;
+    int paint_bg;
     uint16_t map[MAP_N];
     const uint8_t *bank[256];
     uint32_t blen[256];
@@ -32,10 +38,14 @@ RbGfx *gfx_create(void)
         return NULL;
     }
     gfx->pix = (uint8_t *)calloc((size_t)RB_GFX_W * (size_t)RB_GFX_H, 1);
-    if (!gfx->pix) {
+    gfx->bg = (uint8_t *)calloc((size_t)RB_GFX_W * (size_t)RB_GFX_H, 1);
+    if (!gfx->pix || !gfx->bg) {
+        free(gfx->pix);
+        free(gfx->bg);
         free(gfx);
         return NULL;
     }
+    gfx->paint_bg = 1;
     return gfx;
 }
 
@@ -45,6 +55,7 @@ void gfx_destroy(RbGfx *gfx)
         return;
     }
     free(gfx->pix);
+    free(gfx->bg);
     free(gfx);
 }
 
@@ -54,6 +65,8 @@ void gfx_reset(RbGfx *gfx)
         return;
     }
     memset(gfx->pix, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    memset(gfx->bg, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    gfx->paint_bg = 1;
     memset(gfx->map, 0, sizeof gfx->map);
     memset(gfx->bank, 0, sizeof gfx->bank);
     memset(gfx->blen, 0, sizeof gfx->blen);
@@ -74,12 +87,45 @@ void gfx_bind(RbGfx *gfx, uint8_t slot, const uint8_t *data, uint32_t len)
     gfx->active = 1;
 }
 
+static size_t pix_at(int x, int y)
+{
+    return (size_t)y * (size_t)RB_GFX_W + (size_t)x;
+}
+
 static void put_idx(RbGfx *gfx, int x, int y, uint8_t idx)
 {
+    size_t at;
+
     if ((unsigned)x >= (unsigned)RB_GFX_W || (unsigned)y >= (unsigned)RB_GFX_H) {
         return;
     }
-    gfx->pix[(size_t)y * (size_t)RB_GFX_W + (size_t)x] = idx;
+    at = pix_at(x, y);
+    gfx->pix[at] = idx;
+    if (gfx->paint_bg) {
+        gfx->bg[at] = idx;
+    }
+}
+
+/* GRCG read-modify-write of one pixel. `planes` is the index bits. */
+static void rmw_idx(RbGfx *gfx, int x, int y, uint8_t planes, int set)
+{
+    size_t at;
+    uint8_t v;
+
+    if ((unsigned)x >= (unsigned)RB_GFX_W || (unsigned)y >= (unsigned)RB_GFX_H) {
+        return;
+    }
+    at = pix_at(x, y);
+    v = gfx->paint_bg ? gfx->bg[at] : gfx->pix[at];
+    if (set) {
+        v = (uint8_t)(v | planes);
+    } else {
+        v = (uint8_t)(v & (uint8_t)~planes);
+    }
+    gfx->pix[at] = v;
+    if (gfx->paint_bg) {
+        gfx->bg[at] = v;
+    }
 }
 
 static int wrap_y(int y)
@@ -311,13 +357,25 @@ static void blit_sprite(RbGfx *gfx, const uint8_t *src, uint32_t len,
         uint8_t r[24];
         uint8_t g[24];
         int col;
-        int py = wrap_y(y + row);
+        int yy = y + row;
 
         decode_plane(src + row * 2, shift, mask);
         if (!mono) {
             decode_plane(src + 32 + row * 2, shift, b);
             decode_plane(src + 64 + row * 2, shift, r);
             decode_plane(src + 96 + row * 2, shift, g);
+        }
+        /* GVRAM is a 400-line ring. 0x49C5 subtracts 0x7D00 when a
+         * scanline crosses it, which is this y-400. Present is what
+         * clips to the screen, using the GDC start address, so the
+         * wrapped rows come back on the other side of the seam.
+         * A negative line is not part of the ring; wrapping it
+         * landed a stray strip on the bottom edge. */
+        if (yy < 0) {
+            continue;
+        }
+        while (yy >= RB_GFX_H) {
+            yy -= RB_GFX_H;
         }
         for (col = 0; col < wide; col++) {
             uint8_t idx;
@@ -342,10 +400,12 @@ static void blit_sprite(RbGfx *gfx, const uint8_t *src, uint32_t len,
                     idx |= 8u;
                 }
             }
-            put_idx(gfx, x + col, py, idx);
+            put_idx(gfx, x + col, yy, idx);
         }
     }
-    mark_dirty(gfx, x, wrap_y(y), wide);
+    if (y >= 0) {
+        mark_dirty(gfx, x, y >= RB_GFX_H ? y - RB_GFX_H : y, wide);
+    }
 }
 
 void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
@@ -357,6 +417,11 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
     if (!gfx || !ent || !chunk || !clen || !cof) {
         return;
     }
+    /* Rebuild the shown page from the sprite-free background, then stamp
+     * this frame's sprites. Scroll lives in the GVRAM address, so a sprite
+     * that holds still on screen still moves through the buffer. */
+    memcpy(gfx->pix, gfx->bg, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    gfx->paint_bg = 0;
     for (i = 0; i < ent_n; i++) {
         const uint8_t *slot = ent + (size_t)i * (size_t)stride;
         uint16_t type = (uint16_t)slot[0] | ((uint16_t)slot[1] << 8);
@@ -374,21 +439,17 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
         const uint8_t *sheet;
         int row;
 
-        /* The original 0x4E skips type bit 0x200. Option followers set that
-         * bit and still carry a pattern, so the port draws them. */
-        if (type == 0) {
+        /* Opcode 0x4E (0x420E): the low byte of the type must be nonzero,
+         * and bit 0x200 hides the sprite. Options set that bit while they
+         * are parked (mode byte off, and for the whole respawn after a
+         * death) so the original does not draw them. */
+        if ((type & 0x00FFu) == 0 || (type & 0x0200u) != 0) {
             continue;
         }
         wcells = slot[0x4C];
         hcells = slot[0x4D];
         if (wcells == 0 || hcells == 0) {
             continue;
-        }
-        if (wcells > 8) {
-            wcells = 8;
-        }
-        if (hcells > 8) {
-            hcells = 8;
         }
         x = (int16_t)((uint16_t)slot[0x22] | ((uint16_t)slot[0x23] << 8));
         y = (int16_t)((uint16_t)slot[0x24] | ((uint16_t)slot[0x25] << 8));
@@ -446,6 +507,7 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
             }
         }
     }
+    gfx->paint_bg = 1;
 }
 
 static int pal_byte(const uint8_t **pp, const uint8_t *end, int *out)
@@ -513,6 +575,22 @@ void gfx_palette_delta(RbGfx *gfx, const uint8_t *p, uint32_t n)
     }
 }
 
+/* 0x6C0B samples the palette out to the DAC. It does not write the
+ * words back: a fade with shift 0 accumulates in the low nibble, and
+ * storing (low >> 4) << 4 would clear that nibble every frame. */
+void gfx_dac_flush(RbGfx *gfx)
+{
+    (void)gfx;
+}
+
+static int dac_level(int16_t w)
+{
+    if ((w & 0xFF00) != 0) {
+        return 15;
+    }
+    return (int)(((uint16_t)w & 0xFFu) >> 4);
+}
+
 void gfx_palette_step(RbGfx *gfx, uint8_t shift)
 {
     int idx;
@@ -564,6 +642,7 @@ void gfx_clear_frame(RbGfx *gfx)
         return;
     }
     memset(gfx->pix, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    memset(gfx->bg, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
     gfx->active = 1;
 }
 
@@ -587,10 +666,12 @@ void gfx_merge_plane(RbGfx *gfx, int plane, const uint8_t *src, uint32_t n)
         if (y >= RB_GFX_H) {
             break;
         }
+        /* 0x6ACD writes the bytes it has and leaves the rest of the
+         * plane. A 0 bit clears that plane; a 1 bit sets it. */
         for (p = 0; p < 8; p++) {
-            if ((src[i] >> (7 - p)) & 1) {
-                gfx->pix[(size_t)y * RB_GFX_W + (size_t)(x + p)] |= bit;
-            }
+            int on = (src[i] >> (7 - p)) & 1;
+
+            rmw_idx(gfx, x + p, y, bit, on);
         }
     }
     gfx->active = 1;
@@ -702,17 +783,7 @@ void gfx_blit_grid(RbGfx *gfx, const uint8_t *bank, uint32_t blen,
  * 0-bit leaves the pixel alone. Tile 0 therefore clears; tile 1 sets. */
 static void grcg_bit(RbGfx *gfx, int x, int y, uint8_t planes, int set)
 {
-    uint8_t *px;
-
-    if ((unsigned)x >= (unsigned)RB_GFX_W || (unsigned)y >= (unsigned)RB_GFX_H) {
-        return;
-    }
-    px = &gfx->pix[(size_t)y * (size_t)RB_GFX_W + (size_t)x];
-    if (set) {
-        *px = (uint8_t)(*px | planes);
-    } else {
-        *px = (uint8_t)(*px & (uint8_t)~planes);
-    }
+    rmw_idx(gfx, x, y, planes, set);
 }
 
 static void span_skip(const uint8_t **p, const uint8_t *end, uint32_t n)
@@ -883,17 +954,11 @@ void gfx_blit_span(RbGfx *gfx, const uint8_t *src, uint32_t slen,
                     x = (int)(at % 80u) * 8;
                     y = (int)(at / 80u);
                     for (p = 0; p < 8; p++) {
-                        uint8_t *px;
-
                         if (y >= RB_GFX_H) {
                             break;
                         }
-                        px = &gfx->pix[(size_t)y * RB_GFX_W + (size_t)(x + p)];
-                        if ((byte >> (7 - p)) & 1) {
-                            *px = (uint8_t)(*px | bit[plane]);
-                        } else {
-                            *px = (uint8_t)(*px & (uint8_t)~bit[plane]);
-                        }
+                        rmw_idx(gfx, x + p, y, bit[plane],
+                                (byte >> (7 - p)) & 1);
                     }
                 }
                 base = (uint16_t)(base + 0x50u);
@@ -946,6 +1011,232 @@ static void paint_glyph_half(uint32_t *rgba, int w, int x, int y,
     }
 }
 
+/* Boot-font stand-in for the PC-98 kanji the text layer would show.
+ * The phrases are the JIS codes draw_text leaves in VRAM. */
+#include "text_en.inc"
+
+static const char *const KANA[] = {
+    "A", "A", "I", "I", "U", "U", "E", "E", "O", "O",
+    "KA", "GA", "KI", "GI", "KU", "GU", "KE", "GE", "KO", "GO",
+    "SA", "ZA", "SHI", "JI", "SU", "ZU", "SE", "ZE", "SO", "ZO",
+    "TA", "DA", "CHI", "DI", "", "TSU", "DU", "TE", "DE", "TO", "DO",
+    "NA", "NI", "NU", "NE", "NO",
+    "HA", "BA", "PA", "HI", "BI", "PI", "FU", "BU", "PU", "HE", "BE", "PE",
+    "HO", "BO", "PO",
+    "MA", "MI", "MU", "ME", "MO",
+    "YA", "YA", "YU", "YU", "YO", "YO",
+    "RA", "RI", "RU", "RE", "RO",
+    "WA", "WA", "WI", "WE", "WO", "N"
+};
+
+static int fold_jis(uint16_t jis, char *dst, int cap)
+{
+    unsigned j1 = (unsigned)(jis >> 8);
+    unsigned j2 = (unsigned)(jis & 0xFFu);
+    const char *s = NULL;
+    char one[2];
+
+    if (jis == 0x2121u || jis == 0x2126u) {
+        s = " ";
+    } else if (jis == 0x2132u) {
+        s = "_";
+    } else if (j1 == 0x23u && j2 >= 0x21u && j2 < 0x7Fu) {
+        one[0] = (char)j2;
+        if (one[0] >= 'a' && one[0] <= 'z') {
+            one[0] = (char)(one[0] - 32);
+        }
+        one[1] = '\0';
+        s = one;
+    } else if ((j1 == 0x24u || j1 == 0x25u) &&
+               j2 >= 0x21u && j2 < 0x21u + (sizeof KANA / sizeof KANA[0])) {
+        s = KANA[j2 - 0x21u];
+    }
+    if (!s) {
+        return -1;
+    }
+    {
+        int n = (int)strlen(s);
+
+        if (n >= cap) {
+            return -1;
+        }
+        memcpy(dst, s, (size_t)n);
+        return n;
+    }
+}
+
+static void paint_en(const RbGfx *gfx, uint32_t *rgba, int w, int x, int y,
+                     const char *s, uint32_t rgb)
+{
+    for (; *s; s++) {
+        int ch = (unsigned char)*s;
+        uint16_t code = 0;
+        unsigned id;
+        int col;
+
+        if (x >= w - 1) {
+            return;
+        }
+        if (ch >= 'a' && ch <= 'z') {
+            ch -= 32;
+        }
+        if (ch == ' ') {
+            x += 16;
+            continue;
+        }
+        if (ch == '_') {
+            for (col = 1; col < 14; col++) {
+                int px = x + col;
+                int py = y + 14;
+
+                if ((unsigned)px < (unsigned)w && (unsigned)py < (unsigned)RB_GFX_H) {
+                    rgba[(size_t)py * (size_t)w + (size_t)px] = rgb;
+                }
+            }
+            x += 16;
+            continue;
+        }
+        if (ch >= '0' && ch <= '9') {
+            code = (uint16_t)(0x7621u + (unsigned)(ch - '0'));
+        } else if (ch >= 'A' && ch <= 'Z') {
+            code = (uint16_t)(0x7630u + (unsigned)(ch - 'A'));
+        } else if (ch == '!') {
+            code = 0x764Au;
+        } else if (ch == '-' || ch == '/') {
+            code = 0x764Cu;
+        } else if (ch == '.') {
+            code = 0x762Eu;
+        } else {
+            x += 16;
+            continue;
+        }
+        id = (unsigned)code - 0x7600u;
+        if (id < 512u && gfx->glyph_on[id]) {
+            paint_glyph_half(rgba, w, x, y, gfx->glyph[id], 0, rgb);
+            paint_glyph_half(rgba, w, x + 8, y, gfx->glyph[id], 1, rgb);
+        }
+        x += 16;
+    }
+}
+
+static const char *phrase_en(const uint16_t *jis, int n)
+{
+    size_t i;
+    int a = 0;
+    int b = n;
+
+    /* Ending lines pad the phrase with an ideographic space. The
+     * dictionary keys are the words themselves. */
+    while (a < b && (jis[a] == 0x2121u || jis[a] == 0x2126u)) {
+        a++;
+    }
+    while (b > a && (jis[b - 1] == 0x2121u || jis[b - 1] == 0x2126u)) {
+        b--;
+    }
+    n = b - a;
+    jis += a;
+    for (i = 0; i < sizeof k_phrase / sizeof k_phrase[0]; i++) {
+        if (k_phrase[i].n == (unsigned char)n &&
+            memcmp(k_phrase[i].jis, jis, (size_t)n * sizeof(uint16_t)) == 0) {
+            return k_phrase[i].en;
+        }
+    }
+    return NULL;
+}
+
+/* Standard JIS in the text layer (CONFIG, ranking names, the ending
+ * message). Gaiji 0x76/0x77 stays with the glyph painter above. */
+static void overlay_english(const RbGfx *gfx, const uint8_t *text,
+                            uint32_t *rgba, int w)
+{
+    int row;
+
+    for (row = 0; row < 25; row++) {
+        int col = 0;
+
+        while (col < 80) {
+            unsigned off = (unsigned)row * 0xA0u + (unsigned)col * 2u;
+            uint8_t b0 = text[off];
+            uint8_t b1 = text[off + 1];
+            unsigned low;
+            uint16_t run[40];
+            int n = 0;
+            int start = col;
+            int color;
+            uint32_t rgb;
+            const char *en;
+            char folded[96];
+            int flen = 0;
+            int k;
+
+            if ((b0 & 0x80u) != 0) {
+                col++;
+                continue;
+            }
+            if (b1 == 0 && (b0 == 0 || b0 == 0x20u)) {
+                col++;
+                continue;
+            }
+            low = (unsigned)(b0 & 0x7Fu) + 0x20u;
+            if ((low == 0x76u || low == 0x77u) && b1 != 0) {
+                col += 2;
+                continue;
+            }
+            while (col < 80 && n < 40) {
+                unsigned o = (unsigned)row * 0xA0u + (unsigned)col * 2u;
+                uint8_t c0 = text[o];
+                uint8_t c1 = text[o + 1];
+                unsigned j1;
+
+                if ((c0 & 0x80u) != 0) {
+                    break;
+                }
+                if (c1 == 0 && (c0 == 0 || c0 == 0x20u)) {
+                    break;
+                }
+                j1 = (unsigned)(c0 & 0x7Fu) + 0x20u;
+                if ((j1 == 0x76u || j1 == 0x77u) && c1 != 0) {
+                    break;
+                }
+                run[n++] = (uint16_t)((j1 << 8) | c1);
+                col += 2;
+            }
+            if (n == 0) {
+                col++;
+                continue;
+            }
+            en = phrase_en(run, n);
+            if (!en) {
+                int ok = 1;
+
+                for (k = 0; k < n; k++) {
+                    int got = fold_jis(run[k], folded + flen, (int)sizeof folded - flen);
+
+                    if (got < 0) {
+                        ok = 0;
+                        break;
+                    }
+                    flen += got;
+                }
+                if (!ok || flen == 0) {
+                    continue;
+                }
+                folded[flen] = '\0';
+                en = folded;
+            }
+            color = (text[0x2000u + (unsigned)row * 0xA0u + (unsigned)start * 2u] >> 5) & 7;
+            if (color == 0) {
+                color = 7;
+            }
+            rgb = 0xFFu |
+                  ((uint32_t)TEXT_RGB[color][0] << 24) |
+                  ((uint32_t)TEXT_RGB[color][1] << 16) |
+                  ((uint32_t)TEXT_RGB[color][2] << 8);
+            paint_en(gfx, rgba, w, start * 8, row * 16, en, rgb);
+        }
+    }
+}
+
 static void overlay_text(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, int w)
 {
     int row;
@@ -988,10 +1279,12 @@ static void overlay_text(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, 
                              (b0 & 0x80u) != 0, rgb);
         }
     }
+    overlay_english(gfx, text, rgba, w);
 }
 
-void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,
-                 uint32_t *rgba, int w, int h)
+void gfx_present(const RbGfx *gfx, int scroll76, int scroll_speed,
+                 const uint8_t *text, uint32_t *rgba, int w, int h,
+                 int blank_sides)
 {
     int y;
     int scroll;
@@ -999,11 +1292,29 @@ void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,
     if (!gfx || !rgba || w < RB_GFX_W || h < RB_GFX_H) {
         return;
     }
-    scroll = scroll76;
-    if (scroll < 0) {
-        scroll = 0;
+    /* 0x0FB9. On a stage, partition 1 starts at
+     * SAD = wrap([bp+0x76] + [bp+0x84] - 1) and runs to the end of the
+     * 32000-byte page. Partition 2 continues from address 0. The logo
+     * and title leave both scroll words at the init zero, where that
+     * formula wraps to line 399 and rotates the frame by one row.
+     * Those screens are not a scrolling field, so they start at 0. */
+    if (blank_sides) {
+        scroll = scroll76 + scroll_speed - 1;
+        while (scroll < 0) {
+            scroll += RB_GFX_H;
+        }
+        while (scroll >= RB_GFX_H) {
+            scroll -= RB_GFX_H;
+        }
+    } else {
+        scroll = scroll76;
+        if (scroll < 0) {
+            scroll = 0;
+        }
+        while (scroll >= RB_GFX_H) {
+            scroll -= RB_GFX_H;
+        }
     }
-    scroll %= RB_GFX_H;
     for (y = 0; y < RB_GFX_H; y++) {
         int src = y + scroll;
         int x;
@@ -1012,19 +1323,23 @@ void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,
             src -= RB_GFX_H;
         }
         for (x = 0; x < RB_GFX_W; x++) {
-            uint8_t idx = gfx->pix[(size_t)src * RB_GFX_W + (size_t)x];
+            uint8_t idx;
             int ch;
             uint32_t px = 0xFFu;
 
+            /* Stage captures keep the 80 px side columns pure black.
+             * GVRAM is 640 wide and index 0 is the stage color, so those
+             * columns would otherwise show the background. The logo,
+             * intro, title, and menus are drawn across the full width,
+             * so the blanking stays off there. Text is painted after. */
+            if (blank_sides && (x < 80 || x >= 560)) {
+                rgba[(size_t)y * (size_t)w + (size_t)x] = 0x000000FFu;
+                continue;
+            }
+            idx = gfx->pix[(size_t)src * RB_GFX_W + (size_t)x];
             for (ch = 0; ch < 3; ch++) {
-                int v = gfx->pal[idx][ch] >> 4;
+                int v = dac_level(gfx->pal[idx][ch]);
 
-                if (v < 0) {
-                    v = 0;
-                }
-                if (v > 15) {
-                    v = 15;
-                }
                 px |= (uint32_t)(v * 17) << (8 + (2 - ch) * 8);
             }
             /* pal[][0] is red, [1] green, [2] blue, matching ports AC/AA/AE. */

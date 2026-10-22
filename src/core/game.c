@@ -2,6 +2,7 @@
  * Game state machine. Platform-agnostic; talks to hardware only via hal.h.
  */
 #include "game.h"
+#include "diskimg.h"
 #include "player.h"
 #include "enemy.h"
 #include "collision.h"
@@ -11,12 +12,158 @@
 #include "vm.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static RbEnemyPool  g_enemies;
 static RbBulletPool g_bullets;
 static RbAssets     g_assets;
 static RbVm        *g_vm;
+static int          g_smoke_stop;
+static int          g_ship_based;
+static int16_t      g_ship_base_x;
+static int          g_saw_move;
+static int          g_saw_clear;
+static int          g_saw_over;
+static int          g_data_missing;
+
+static int env_on(const char *name)
+{
+    const char *v = getenv(name);
+
+    return v && v[0] && strcmp(v, "0") != 0;
+}
+
+static int env_is(const char *name, const char *want)
+{
+    const char *v = getenv(name);
+
+    return v && want && strcmp(v, want) == 0;
+}
+
+static const char *state_name(RbGameState st)
+{
+    switch (st) {
+    case RB_STATE_BOOT:    return "boot";
+    case RB_STATE_TITLE:   return "title";
+    case RB_STATE_PLAY:    return "play";
+    case RB_STATE_RANKING: return "ranking";
+    case RB_STATE_QUIT:    return "quit";
+    default:               return "other";
+    }
+}
+
+static void smoke_trace(const RbGame *g, const char *why)
+{
+    if (!env_on("RUDEBR_TRACE")) {
+        return;
+    }
+    if (g_vm && (g->state == RB_STATE_PLAY || g->state == RB_STATE_RANKING)) {
+        RbVmInfo info;
+
+        vm_info(g_vm, &info);
+        fprintf(stderr,
+                "trace: %s state=%s stage=%u ship=%d,%d chunk=%u rec=%u hdr=%u c5=%u frame=%u score=%u\n",
+                why, state_name(g->state), (unsigned)g->stage,
+                (int)info.ship_x, (int)info.ship_y,
+                (unsigned)info.chunk, (unsigned)info.load_record,
+                (unsigned)info.load_header,
+                (unsigned)vm_global_u8(g_vm, 0xC5),
+                (unsigned)g->frame, (unsigned)info.score);
+        return;
+    }
+    fprintf(stderr, "trace: %s state=%s frame=%u\n",
+            why, state_name(g->state), (unsigned)g->frame);
+}
+
+static const char *got(const void *p)
+{
+    return p ? "found" : "MISSING";
+}
+
+static void report_missing(const RbDisk *disk)
+{
+    char body[1600];
+    const char *where = (disk && disk->label[0]) ? disk->label : "(unknown)";
+
+    snprintf(body, sizeof(body),
+             "%s:\n%s\n\n"
+             "Copy these files from your own Rude Breaker disk into that folder,\n"
+             "or drop the disk image there (or pass the image as the program argument).\n"
+             "A PC-98 image works: .hdm, .fdi, .d88, .hdi, .nhd, or a zip of one of those.\n"
+             "The program reads the files out of the FAT filesystem, including a RUDEBR folder.\n\n"
+             "  SGM1.DAT     required   %s\n"
+             "  FPLAY.COM    required   %s\n"
+             "  SONG.DAT     required   %s\n"
+             "  RBRANK.DAT   optional   %s\n\n"
+             "SGC.COM, READJS.COM, and RUDEBR.BAT are on the disk and are not read.\n"
+             "ym2608_adpcm_rom.bin is optional (8192 bytes, CRC32 23c9e0d8).\n",
+             (disk && disk->saw_image) ? "Opened disk image" : "Folder",
+             where,
+             got(disk ? disk->sgm1 : NULL),
+             got(disk ? disk->fplay : NULL),
+             got(disk ? disk->song : NULL),
+             (disk && disk->rank) ? "found" : "absent");
+    sys_message("Rude Breaker — disk files needed", body);
+}
+
+static void watch_smoke(RbGame *g)
+{
+    const char *frames = getenv("RUDEBR_FRAMES");
+
+    if (g_vm && g->state == RB_STATE_PLAY) {
+        RbVmInfo info;
+
+        vm_info(g_vm, &info);
+        if (!g_ship_based && info.chunk >= 2 &&
+            (info.ship_x != 0 || info.ship_y != 0)) {
+            g_ship_based = 1;
+            g_ship_base_x = info.ship_x;
+        } else if (g_ship_based && !g_saw_move &&
+                   info.ship_x >= (int16_t)(g_ship_base_x + 8)) {
+            g_saw_move = 1;
+            fprintf(stderr, "smoke: stage1 x=%d from %d frame=%u\n",
+                    (int)info.ship_x, (int)g_ship_base_x, (unsigned)g->frame);
+            if (env_is("RUDEBR_STOP", "stage1")) {
+                g_smoke_stop = 1;
+                g->state = RB_STATE_QUIT;
+            }
+        }
+        if (!g_saw_clear && vm_global_u8(g_vm, 0xC5) >= 2 && info.chunk >= 3) {
+            g_saw_clear = 1;
+            fprintf(stderr, "smoke: stage-clear c5=%u chunk=%u frame=%u\n",
+                    (unsigned)vm_global_u8(g_vm, 0xC5), (unsigned)info.chunk,
+                    (unsigned)g->frame);
+            if (env_is("RUDEBR_STOP", "clear")) {
+                g_smoke_stop = 1;
+                g->state = RB_STATE_QUIT;
+            }
+        }
+        if (!g_saw_over && g->frame > 30 && info.chunk == 1 &&
+            info.load_record == 1 && info.load_header == 2) {
+            g_saw_over = 1;
+            fprintf(stderr, "smoke: game-over frame=%u score=%u\n",
+                    (unsigned)g->frame, (unsigned)info.score);
+            if (env_is("RUDEBR_STOP", "over")) {
+                g_smoke_stop = 1;
+                g->state = RB_STATE_QUIT;
+            }
+        }
+    }
+    if (env_is("RUDEBR_STOP", "title") && g->frame >= 1 &&
+        g->state == RB_STATE_TITLE) {
+        g_smoke_stop = 1;
+        g->state = RB_STATE_QUIT;
+    }
+    if (frames && frames[0] && g->state != RB_STATE_QUIT) {
+        unsigned long lim = strtoul(frames, NULL, 10);
+
+        if (lim > 0 && g->frame >= lim) {
+            fprintf(stderr, "smoke: frame limit %lu\n", lim);
+            g->state = RB_STATE_QUIT;
+        }
+    }
+}
 
 static int btn_pressed(const RbGame *g, uint16_t mask)
 {
@@ -55,41 +202,138 @@ static void begin_stage(RbGame *g, uint16_t stage, int fresh_ship)
     }
 }
 
-void game_init(RbGame *g, const char *asset_dir)
+void game_init(RbGame *g, const RbDisk *disk)
 {
+    int scaffold = env_on("RUDEBR_SCAFFOLD");
+    int have = disk && disk->ok;
+
     memset(g, 0, sizeof(*g));
     g->state = RB_STATE_BOOT;
     g->hiscore = 0;
     g->stage = 1;
     g->scroll_y = 0;
     g->scroll_speed = 0;
-    if (asset_dir) {
-        snprintf(g->asset_dir, sizeof(g->asset_dir), "%s", asset_dir);
+    if (disk && disk->label[0]) {
+        snprintf(g->asset_dir, sizeof(g->asset_dir), "%s", disk->label);
     }
 
     player_reset(&g->player);
     enemy_pool_init(&g_enemies);
     bullet_pool_init(&g_bullets);
 
-    sys_audio_bind(g->asset_dir);
-    if (assets_load(&g_assets, g->asset_dir) == 0) {
-        fprintf(stderr, "assets: loaded SGM1 (%u chunks, %zu bytes) from %s\n",
-                (unsigned)g_assets.sgm1.count, g_assets.sgm1_size, g->asset_dir);
-        if (vm_create(&g_vm, &g_assets) != 0) {
-            fprintf(stderr, "vm: create failed, using the scaffold director\n");
-            g_vm = NULL;
+    if (!have) {
+        if (scaffold) {
+            fprintf(stderr, "rudebreaker: scaffold mode (RUDEBR_SCAFFOLD)\n");
+            g->state = RB_STATE_TITLE;
+            return;
         }
-    } else {
-        fprintf(stderr, "assets: optional load failed for %s (running without ROM data)\n",
-                g->asset_dir);
+        g_data_missing = 1;
+        g->state = RB_STATE_QUIT;
+        report_missing(disk);
+        return;
     }
 
+    if (sys_audio_bind_mem(disk->fplay, disk->fplay_n, disk->song, disk->song_n,
+                           disk->rhythm_dir) == 0 &&
+        assets_load_mem(&g_assets, disk->sgm1, disk->sgm1_n,
+                        disk->song, disk->song_n,
+                        disk->rank, disk->rank_n) == 0) {
+        fprintf(stderr, "assets: loaded SGM1 (%u chunks, %zu bytes) from %s\n",
+                (unsigned)g_assets.sgm1.count, g_assets.sgm1_size, g->asset_dir);
+        fprintf(stderr, "rudebreaker: SGM1.DAT, FPLAY.COM, and SONG.DAT found\n");
+        if (vm_create(&g_vm, &g_assets) != 0) {
+            fprintf(stderr, "vm: create failed\n");
+            g_vm = NULL;
+            g_data_missing = 1;
+            g->state = RB_STATE_QUIT;
+            return;
+        }
+    } else {
+        g_data_missing = 1;
+        g->state = RB_STATE_QUIT;
+        report_missing(disk);
+        return;
+    }
+
+    vm_reset_boot(g_vm);
+    vm_set_hiscore(g_vm, g->hiscore);
     g->state = RB_STATE_TITLE;
+    if (env_on("RUDEBR_TRACE") || getenv("RUDEBR_STOP")) {
+        fprintf(stderr, "smoke: title\n");
+    }
+    smoke_trace(g, "boot");
+}
+
+int game_data_missing(void)
+{
+    return g_data_missing;
+}
+
+int game_smoke_done(void)
+{
+    return g_smoke_stop;
 }
 
 int game_wants_quit(const RbGame *g)
 {
     return g->state == RB_STATE_QUIT || (g->input.buttons & RB_BTN_QUIT);
+}
+
+unsigned game_vsyncs(const RbGame *g)
+{
+    (void)g;
+    if (g_vm) {
+        return vm_vsync_count(g_vm);
+    }
+    return 3;
+}
+
+/* One VM frame. Chunk 1 header 0 is the logo, title, and menu. A stage
+ * chunk (2..6) is play. Header 0 loaded again returns to the title
+ * without resetting the script that just loaded it. */
+static void step_script(RbGame *g)
+{
+    RbInput in = g->input;
+    RbVmInfo info;
+
+    /* RUDEBR_HOLD latches fire from frame 1. The title prompt looks for
+     * a later edge, so drop fire for one frame every 30 while the boot
+     * chunk is still up. Real keyboards already produce that edge. */
+    if (env_on("RUDEBR_HOLD")) {
+        vm_info(g_vm, &info);
+        if (info.chunk < 2 && (g->frame % 30u) == 0u) {
+            in.buttons = (uint16_t)(in.buttons & (uint16_t)~RB_BTN_A);
+        }
+    }
+    if (env_on("RUDEBR_SUSTAIN")) {
+        vm_sustain_ship(g_vm);
+    }
+    vm_set_input(g_vm, &in);
+    vm_frame(g_vm);
+    vm_info(g_vm, &info);
+    g->score = info.score;
+    if (info.hiscore > g->hiscore) {
+        g->hiscore = info.hiscore;
+    }
+    g->scroll_y = info.scroll_y;
+    g->scroll_speed = info.speed;
+    g->player.lives = info.lives;
+    g->player.pos.x = info.ship_x;
+    g->player.pos.y = info.ship_y;
+    if (info.chunk >= 2 && info.chunk <= 6) {
+        g->stage = (uint16_t)(info.chunk - 1u);
+        if (g->state == RB_STATE_TITLE || g->state == RB_STATE_RANKING) {
+            g->state = RB_STATE_PLAY;
+        }
+    }
+    if (vm_quit_requested(g_vm)) {
+        g->state = RB_STATE_QUIT;
+    } else if (vm_boot_requested(g_vm)) {
+        vm_ack_boot(g_vm);
+        if (g->state != RB_STATE_QUIT) {
+            g->state = RB_STATE_TITLE;
+        }
+    }
 }
 
 void game_update(RbGame *g)
@@ -102,7 +346,9 @@ void game_update(RbGame *g)
         break;
 
     case RB_STATE_TITLE:
-        if (btn_pressed(g, RB_BTN_START) || btn_pressed(g, RB_BTN_A)) {
+        if (g_vm) {
+            step_script(g);
+        } else if (btn_pressed(g, RB_BTN_START) || btn_pressed(g, RB_BTN_A)) {
             g->score = 0;
             begin_stage(g, 1, 1);
             g->state = RB_STATE_PLAY;
@@ -112,34 +358,11 @@ void game_update(RbGame *g)
 
     case RB_STATE_PLAY:
         if (g_vm) {
-            RbVmInfo info;
-
             /* One forward scan. A child spawned this frame runs only if
-             * its slot is still ahead of the parent. */
-            vm_set_input(g_vm, &g->input);
-            vm_frame(g_vm);
-            vm_info(g_vm, &info);
-            g->score = info.score;
-            if (info.hiscore > g->hiscore) {
-                g->hiscore = info.hiscore;
-            }
-            g->scroll_y = info.scroll_y;
-            g->scroll_speed = info.speed;
-            g->player.lives = info.lives;
-            g->player.pos.x = info.ship_x;
-            g->player.pos.y = info.ship_y;
-            if (info.chunk >= 2 && info.chunk <= 6) {
-                g->stage = (uint16_t)(info.chunk - 1u);
-            }
-            if (vm_quit_requested(g_vm)) {
-                g->state = RB_STATE_QUIT;
-            } else if (vm_boot_requested(g_vm) || info.lives <= 0) {
-                sys_stop_music();
-                if (g->score > g->hiscore) {
-                    g->hiscore = g->score;
-                }
-                g->state = info.lives <= 0 ? RB_STATE_RANKING : RB_STATE_TITLE;
-            }
+             * its slot is still ahead of the parent. RUDEBR_SUSTAIN is a
+             * smoke-test switch; the frame loop itself never calls it.
+             * Lives and the escape bit stay inside the script. */
+            step_script(g);
         } else {
             /* Scaffold path used only when SGM1 failed to load. */
             player_update(&g->player, &g->input);
@@ -185,7 +408,9 @@ void game_update(RbGame *g)
                 }
             }
         }
-        if (g->state == RB_STATE_PLAY && btn_pressed(g, RB_BTN_START)) {
+        /* Scaffold only. With the VM running, Escape is the PC-98 bit
+         * the script already read this frame. F10 is the quit bit. */
+        if (!g_vm && g->state == RB_STATE_PLAY && btn_pressed(g, RB_BTN_START)) {
             sys_stop_music();
             g->state = RB_STATE_TITLE;
         }
@@ -203,6 +428,10 @@ void game_update(RbGame *g)
     }
 
     g->input_prev = g->input;
+    watch_smoke(g);
+    if (env_on("RUDEBR_TRACE") && (g->frame == 1 || (g->frame % 120u) == 0)) {
+        smoke_trace(g, "frame");
+    }
 }
 
 void game_render(const RbGame *g)
@@ -213,16 +442,18 @@ void game_render(const RbGame *g)
 
     switch (g->state) {
     case RB_STATE_TITLE:
+        if (g_vm) {
+            uint32_t *frame = sys_frame_pixels();
+
+            if (frame) {
+                vm_present(g_vm, frame, RB_NATIVE_W, RB_NATIVE_H);
+            }
+            break;
+        }
         sys_draw_text(200, 140, "RUDE BREAKER", 0xFFFFFFFFu);
         sys_draw_text(180, 180, "PC-98 clean-room C99 port", 0xFFA0A0A0u);
-        sys_draw_text(200, 240, "PRESS Z / ENTER", 0xFFFFFF00u);
-        if (g_assets.loaded) {
-            snprintf(line, sizeof(line), "SGM1 chunks: %u",
-                     (unsigned)g_assets.sgm1.count);
-            sys_draw_text(200, 280, line, 0xFF80FF80u);
-        } else {
-            sys_draw_text(160, 280, "No assets (scaffold mode)", 0xFFFF8080u);
-        }
+        sys_draw_text(200, 240, "PRESS Z / SPACE", 0xFFFFFF00u);
+        sys_draw_text(160, 280, "No assets (scaffold mode)", 0xFFFF8080u);
         break;
 
     case RB_STATE_PLAY:
@@ -277,7 +508,7 @@ void game_render(const RbGame *g)
         sys_draw_text(240, 160, "GAME OVER", 0xFFFF4040u);
         snprintf(line, sizeof(line), "SCORE %u", (unsigned)g->score);
         sys_draw_text(240, 200, line, 0xFFFFFFFFu);
-        sys_draw_text(200, 260, "PRESS Z / ENTER", 0xFFFFFF00u);
+        sys_draw_text(200, 260, "PRESS Z / SPACE", 0xFFFFFF00u);
         break;
 
     default:

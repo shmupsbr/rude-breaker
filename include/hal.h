@@ -75,7 +75,15 @@ static inline void write_u32_le(uint8_t *p, uint32_t v)
 
 #define RB_NATIVE_W     640
 #define RB_NATIVE_H     400
-#define RB_TARGET_FPS   60
+/* One count of the loader's vsync wait ([bp+0x60], usually 3).
+ * The capture's cruise background (4 px per logic frame) moves at
+ * about 122 px/s, and a later 2 px section moves at about 60 px/s,
+ * so a logic frame is about 30.7 Hz. Three counts at 92 Hz sleep
+ * that long. 120 Hz per count was 40 logic Hz, about 1.3x ahead of
+ * the capture. Not the host refresh rate, and not one PC-98 vertical
+ * blank (56.42 Hz) per count: three of those would be ~19 Hz. */
+#define RB_WAIT_HZ      92
+#define RB_TARGET_FPS   RB_WAIT_HZ
 
 /* X68000 Phase-2 outer raster (640x400 centered in 640x480) */
 #define RB_X68K_OUTER_H 480
@@ -98,6 +106,12 @@ typedef struct RB_PACKED RbInput {
 #define RB_BTN_C        0x0040u
 #define RB_BTN_START    0x0080u
 #define RB_BTN_QUIT     0x8000u
+/* PC-98 keys 1..4. The loader ORs these into the high byte of the
+ * game word (0x2000, 0x1000, 0x0800, 0x0400), not into the d-pad. */
+#define RB_BTN_1        0x0100u
+#define RB_BTN_2        0x0200u
+#define RB_BTN_3        0x0400u
+#define RB_BTN_4        0x0800u
 
 /* ---- entities (shared layout for Phase 1 and Phase 2) ------------------- */
 
@@ -185,9 +199,12 @@ typedef struct RB_PACKED RbSprite {
 
 int  sys_init(const char *title);
 void sys_shutdown(void);
+/* stderr, plus a dialog when a real video driver is up. */
+void sys_message(const char *title, const char *text);
 
-/* Block until the next 60 Hz frame boundary, then present the backbuffer. */
-void sys_wait_vblank(void);
+/* Sleep `counts` PC-98 wait ticks (1/RB_WAIT_HZ each). A zero count still
+ * waits one tick, which is the GDC edge that follows the counter. */
+void sys_wait_vblank(unsigned counts);
 void sys_present(void);
 
 void sys_clear(uint8_t r, uint8_t g, uint8_t b);
@@ -204,6 +221,13 @@ int  sys_play_music(uint16_t track_id);
 void sys_stop_music(void);
 /* Open FPLAY.COM and SONG.DAT from a RUDEBR directory. 0 on success. */
 int  sys_audio_bind(const char *dir);
+/* Same player, from buffers already read out of a directory or a disk image. */
+int  sys_audio_bind_mem(const uint8_t *com, size_t com_n,
+                        const uint8_t *song, size_t song_n,
+                        const char *rhythm_dir);
+/* Optional path to ym2608_adpcm_rom.bin. NULL clears it. The file is
+ * not shipped; a missing ROM leaves ADPCM-A silent. */
+void sys_set_rhythm_override(const char *path);
 /* Opcode 0x46, INT 7Fh AH=4. speed is the fade step the driver stores. */
 void sys_fade_music(uint8_t speed);
 

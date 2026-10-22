@@ -25,9 +25,31 @@ int sys_audio_bind(const char *dir)
     return 0;
 }
 
+int sys_audio_bind_mem(const uint8_t *com, size_t com_n,
+                       const uint8_t *song, size_t song_n,
+                       const char *rhythm_dir)
+{
+    (void)com;
+    (void)com_n;
+    (void)song;
+    (void)song_n;
+    (void)rhythm_dir;
+    return 0;
+}
+
+void sys_set_rhythm_override(const char *path)
+{
+    (void)path;
+}
+
 void sys_fade_music(uint8_t speed)
 {
     (void)speed;
+}
+
+void sys_message(const char *title, const char *text)
+{
+    fprintf(stderr, "%s\n%s\n", title ? title : "", text ? text : "");
 }
 
 void sys_draw_sprite(const RbSprite *spr)

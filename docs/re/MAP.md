@@ -87,7 +87,7 @@ State pointer `BP` is `0x34C`. `SS=DS=ES=CS` for the loader. The game later rece
 | `0xE20` | `rng_seed` | INT 1Ch tick into `CS:0xE7E`. | high |
 | `0xE4E` | `rng_mix` | 16-bit mixer over `[bp+0x5C]`, `[bp+0x64]`, `CS:0xE7E`. | high |
 | `0xE80` | `sincos` | Quadrant lookup at `CS:0x1848`. | medium |
-| `0xFB9` | `crtc_set_scroll` | GDC ports `0xA2` (register) / `0xA0` (data), regs `0x70`–`0x77`. Vertical constant `0x190` (400). | high |
+| `0xFB9` | `crtc_set_scroll` | GDC ports `0xA2` (register) / `0xA0` (data), regs `0x70`–`0x77`. SAD2 is 0 and SL2 is `0x190` (400). Partition 1 starts at `wrap([bp+0x76] + [bp+0x84] - 1)`. The logo and title leave both words at the init zero, where that formula is line 399, so those screens start at `[bp+0x76]`. | high |
 | `0x108E` | `scroll_row_update` | Called when a scroll step crosses a cell row. | medium |
 | `0x10D2` | `compose_sprites` | Sprite compose. Skipped when `[bp+0xC1] != 0`. | medium |
 | `0x1132` | `draw_entity` | Blit one entity. GVRAM `A800`, GRCG, cell = coordinate >> 4. | high |
@@ -179,19 +179,25 @@ Copies 16 bytes from BIOS `0000:052A` and ORs a second sample. Held bits land in
 
 Joystick (INT 7Bh, if `[0x3BE]` bit `0x400`): AL bit0 → BX bit0, bit1 → bit3, bit2 → bit1, bit3 → bit2, bit4 → `0x10`, bit5 → `0x20`. If `[0x3BE]` bit `0x200`, button bits `0x10` and `0x20` are swapped.
 
-Direction of the **game** nibble, confirmed by the ship velocity table (medium for the physical PC-98 key, high for the bit):
+The loader tests the 16-byte BIOS sample at `0000:052A` (copied to CS:`0x7836`). Key code N sets bit `N&7` of byte `N>>3`. Names are the PC-98 make codes (DOSBox-X `keyboard.cpp`), matched to the tests at `0x78B5`.
 
-| Bit | Meaning |
-|-----|---------|
-| `0x0001` | up |
-| `0x0002` | left |
-| `0x0004` | right |
-| `0x0008` | down |
-| `0x0010` / `0x0020` | buttons (swappable) |
-| `0x0040` | special, forced into the edge |
-| `0x8000` | quit. The frame loop tests this on the edge word. |
+| Bit | Keys | Confidence |
+|-----|------|------------|
+| `0x0001` | up, keypad 8 | high |
+| `0x0002` | left, keypad 4 | high |
+| `0x0004` | right, keypad 6 | high |
+| `0x0008` | down, keypad 2 | high |
+| `0x0010` | Z, Space, keypad 0 (fire). Swappable with `0x0020` when `[0x3BE]` bit `0x200` is set. | high |
+| `0x0020` | Return, X, N, M (mode) | high |
+| `0x0040` | Shift. Forced into the edge every frame it is held. | high |
+| `0x0080` | Escape. Not the frame-loop quit. | high |
+| `0x0400` | 4 | high |
+| `0x0800` | 3 | high |
+| `0x1000` | 2 | high |
+| `0x2000` | 1 | high |
+| `0x8000` | f·10. The frame loop tests this on the edge word. | high |
 
-Which matrix bit is which key cap is **low** confidence. The port maps the HAL d-pad onto this nibble and does not invent PC-98 key names.
+SDL2 uses those keys, plus WASD as an extra cluster that is not on the PC-98 matrix. A gamepad's d-pad and left stick feed the direction bits, south is fire, east is mode, west is Shift's bit, Start is Escape's bit, and Back is f·10. Startup runs chunk 1 header 0 (logo, title, attract, menu). Z, Space, or the gamepad south button is the trigger that script reads. Escape is delivered as bit `0x0080` and is not a host-side return to a C title. F10 quits.
 
 ## Video
 
@@ -203,7 +209,8 @@ The PC-98 ports stay out of the core. The SDL2 build blits a 640×400 buffer fro
 | Graphics | `A800` and the other planes, GRCG ports `0x7C` / `0x7E` | high |
 | CRTC scroll | ports `0xA0` / `0xA2`, `crtc_set_scroll` | high |
 | Page flip | ports `0xA4` / `0xA6`, byte `[bp+0xBA]`. Opcode `0x31` calls loader `0x6AA4`, which expands one SGM1 record as four LZ streams into `A800` / `B000` / `B800` / `E000`. | high |
-| Vsync | port `0x60` bit `0x20` | high |
+| Vsync | port `0x60` bit `0x20`. The loader hook `0x5EF5` waits until `[bp+0x5C]` advances by `[bp+0x60]` (usually 3). The port sleeps that many 1/92 s counts (~30.7 logic Hz) and does not lock to the host refresh. The capture's 4 px cruise scroll measures about 122 px/s. | high |
+| Side margins | 80 px each side of the 480 px stage playfield. Stage captures are pure black there, so present forces those columns black only while the view chunk is 2..6. The logo, intro, title, and menus keep the full 640. Text is painted after the blanking. | high |
 | Playfield height | `0x190` = 400 | high |
 | Horizontal cell limit | constants `0x18` / `0x19` inside the blit | medium |
 
@@ -222,9 +229,11 @@ The PC-98 ports stay out of the core. The SDL2 build blits a 640×400 buffer fro
 
 Init is the near call at `0xBD0`. It walks the track pointers until a zero word and stores the count in byte `0x280`. This `SONG.DAT` has 48 tracks. The COM image is 16138 bytes and ends at `0x400A`; the song overwrites that tail. The driver's shadow register file at CS:`0x3F00` and the address latch at CS:`0x3EFE` sit below the song, so they survive the copy. Channel work RAM is 16×`0x40` bytes at `0x400`, inside the COM image.
 
-The timer ISR is `0x1000`. `SETTIM` (`0x23C1`) writes YM2608 timer A (`0x24`, `0x25`) and `0x27 = 0x35`. The SDL2 mixer runs that ISR when the timer period elapses and then resynthesizes. The bytecode VM does not tick it. FM writes use ports `0x188` (address) and `0x18A` (data), and the second pair `0x18C` / `0x18E`. A status read returns bit 7 clear. The driver's address routine spins while that bit is set.
+The timer ISR is `0x1000`. `SETTIM` (`0x23C1`) writes YM2608 timer A (`0x24`, `0x25`) and `0x27 = 0x35`. Init calls it with AX=`0x52`, so timer A is 82 and the prescale stays at the power-on value 6 (address writes `0x2D`/`0x2E`/`0x2F` select 6/3/2, matching ym2608). The period is `(1024-82)*24*6` master clocks: 748 samples at 44100 Hz, about 58.9 Hz. The SDL2 mixer runs that ISR from the audio callback when the period elapses, then resynthesizes. The bytecode VM does not tick it. FM writes use ports `0x188` (address) and `0x18A` (data), and the second pair `0x18C` / `0x18E`. A status read returns bit 7 clear. The driver's address routine spins while that bit is set.
 
-The mixer is one sine per keyed FM channel, at the f-number in `A0`/`A4`, plus the three SSG squares and the noise LFSR. Total level is the loudest carrier selected by the algorithm in `B0` (operator 4 in algorithms 0–3, operators 2 and 4 in 4, operators 2–4 in 5 and 6, all four in 7). It is not a four-operator voice. Stage 1's root plays track 1 (`42 01` at chunk 2 `0x7900`). Track 0 renders silence.
+The SDL2 build synthesizes those port writes with Aaron Giles' ymfm (`third_party/ymfm`, BSD-3-Clause). The chip is a YM2608 at 7987200 Hz, medium fidelity (clock/24), resampled to 44100 Hz. FM is stereo; the SSG comes back in the third output slot and is added to both channels. ADPCM-A is summed into the FM pair. Its samples are the optional `ym2608_adpcm_rom.bin` (8192 bytes, CRC32 `23c9e0d8`), loaded from `--ym2608-rom`, `RUDEBR_YM2608_ROM`, the executable's directory, or the asset directory. The file is Yamaha copyright and is not in the repo. A missing file leaves the external read at 0. Tracks 0–47 of this `SONG.DAT`, started with AH=0 or AH=1, write no low-port address in `0x10`–`0x1F` and fetch no ADPCM byte, so the stage BGM does not use the rhythm channels. A direct key of those channels does fetch the ROM. Status reads stay bit 7 clear, which is ymfm's default busy flag, so SFMADR does not spin. The timer period is still read from the mirrored `0x24`/`0x25` bytes; the bytecode VM does not tick the player. Stage 1's root plays track 1 (`42 01` at chunk 2 `0x7900`). Track 0 is the driver's silent slot.
+
+Two seconds at 44100 Hz, after a stop, with no sample touching the int16 rails: track 0 peak 0; tracks 1–11 peaks 1163, 15335, 19641, 16832, 3704, 12549, 12402, 12724, 14568, 18459, 4333. Track 1 (stage 1) has 9315 zero crossings in that window. Effect `0x0A` over track 1 peaks at 18916. Effect `0x25` alone peaks at 11073 with 65 crossings. A PC-9821 Ce capture of the original (`https://www.youtube.com/watch?v=7aTWukf4GP0`) could not be downloaded from this environment: YouTube answered "Sign in to confirm you're not a bot", and the public Invidious and Piped frontends refused the same id. Those levels were not compared against that recording.
 
 Bytecode opcodes, game image `0x4054`–`0x40CD`:
 
@@ -340,7 +349,7 @@ Play runs the bytecode VM in `src/core/vm.c` when SGM1 loads. The scaffold direc
 | Opcodes `0x00`–`0x50`, sub-ops through `0x2A`, ALU, compare, RNG, sincos, atan, aim | `vm_frame` | high for the dispatch, medium where a native island uses an unhandled 80186 opcode |
 | Ship script `0x4F6E`, shot controller `0x62E3` and children `0x6331` / `0x6498` | the VM. Fire is held bit `0x10`. | high |
 | Native ship move `0x53AB` (chunk 1 `0x53B1`), tables `0x54B8` / `0x54F8` / `0x5538`, clamp | interpreted from the chunk | high |
-| Option followers. Stage-chunk entry `0x59CB` does `OR word [si], 0x200` and `X = ship X - 16` at `0x59FF`. The twin at `0x5F7B` uses `X + 16`. Chunk 1's `OR` is the byte at `0x5A05`. | interpreted. Chunk 1 at `0x9507` arms `[bp+0xD5]` to 1 before a stage load; a direct stage entry keeps that. `gfx_draw_entities` draws type bit `0x200`. Opcode `0x4E` skips that bit. | high |
+| Option followers. The drawn pods are bytecode origins `0x5641` and `0x5CF4` (natives `0x59CB` / `0x5F7B` only place them). While `[bp+0xD5]` is 1 their type is `0x8010`. The first death at `0x5038` clears `D5` and stores `DF=0x40`; each pod then `OR`s type bit `0x200` and yields until `D5` returns. | interpreted. Chunk 1 at `0x9507` arms `[bp+0xD5]` to 1 before a stage load. `gfx_draw_entities` matches opcode `0x4E` at `0x420E`: skip a type whose low byte is 0, and skip bit `0x200`. Parked options and the hidden ship therefore leave the screen. The death burst is script `0x55F2` (type `0x8004`, patterns `0x7278`) plus debris `0x428D` stepped by native `0x42FC`. SFX `0x1E` is opcode `0x43`. No palette-flash opcode sits in that path, and chunk 2 never stores `[bp+0x62]`; the second death decrements `D2` and sets `CB`. | high |
 | Proxy `0x5641`, opcode `0x50` mask `0x00E0`, damage 4, and the script tail after that hit | the VM. `rb_hit_test` is the five compares. | high for the test. The tail runs when `[bp+0xD5]` is not 0. |
 | Enemy shots whose type matches mask `0x00C0`, ship damage 6 | the ship script's opcode `0x50` | high |
 | Score +10 on an hp change (`0x71DC`) | the native, inside the VM | high |
@@ -353,20 +362,20 @@ Play runs the bytecode VM in `src/core/vm.c` when SGM1 loads. The scaffold direc
 | Opcode `0x32` binds an SGM1 record to a `[bp+slot]` bank and does not switch the script. Stage 1 binds sprite records 12, 13, 16, 17, 18, 19, tiles record 25 at `[bp+0x26]`, and the map record 31 at `[bp+0x16]`. | `gfx_bind` | high |
 | Fill `0x3C` / `0x3D` (GRCG color at loader `0x77D4`) | `gfx_fill`. Stage 1's root fills 80×400 with color 0. | high |
 | Palette `0x3F` (absolute, `0x6BD1`), `0x40` (deltas, `0x6CAB`), `0x41` (step, `0x6D00`) | `gfx_palette_*`. `0x41` is not a music call. Levels are stored `<< 4` and expanded with `v * 17`. | high |
-| Scroll row `0x108E`, compose `0x4C` (`0x10D2`), entity draw `0x4E` (`0x1132`) | `gfx_copy_row`, `gfx_compose`, `gfx_draw_entities`. Tiles are 96 bytes, planes blue/red/green, intensity left 0. Sprites are 128 bytes: mask, blue, red, green. Bit 7 is the left pixel. The playfield is 30×16 pixels inset by 80. Present reads line `(y + [bp+0x76]) mod 400`. | high for the stage-1 path. |
+| Scroll row `0x108E`, compose `0x4C` (`0x10D2`), entity draw `0x4E` (`0x1132`) | `gfx_copy_row`, `gfx_compose`, `gfx_draw_entities`. Tiles are 96 bytes, planes blue/red/green, intensity left 0. Sprites are 128 bytes: mask, blue, red, green. Bit 7 is the left pixel. The playfield is 30×16 pixels inset by 80. On a stage, present reads line `(y + wrap([bp+0x76] + [bp+0x84] - 1)) mod 400`. Setup `0x1132` subtracts `0x190` once when the sprite line is at least 400. Blit `0x481B` writes 16 scanlines without a per-line wrap when the cell origin is at line 384 or earlier (`DI <= 0x7800`). Past that, `0x49C5` subtracts `0x7D00` per scanline, the ring wrap. Present maps the ring to the screen with the start address above, which is the clip. A negative sprite line stays undrawn. | high for the stage-1 path. |
 | Text `0x47` (`0x40D0`), digits `0x48` / `0x49` / `0x4A` | `draw_text` at `0x12C5` and the digit writer at `0x1554`. A zero digit is two spaces of word `0x2020` until `BL` is set; `0x4A` sets `BL` only before the last of eight digits. Gaiji `0x76xx` come from record 11 (32 bytes each, registered like INT 18h AH=1Ah at `0x1592`). Opcode `0x33` is that registration. Direct stage entry installs glyphs 1..63 as codes `0x7621`..`0x765F`, the same range chunk 1's `33 24 01 3F 21 76` would leave behind. Stage 1 writes the HUD at `0x76A9`, the green title at `0x761D`, hiscore at text `0x010C`, score at `0x00D8`. The SDL `SCORE` / `STAGE` strings are not drawn once GVRAM is active. | high |
-| Page flip `0x31` (`0x3D1A`) | `op_page`. AL=3 on the loader call, so `[bp+0x30]` (`0x6AA4`) runs four times through `0x6ACD` into the four planes. A plane ends at the next `00`. The software buffer keeps the first 32000 bytes and still consumes that terminator, so the following stream is not read as an empty plane. | high |
-| Blits `0x34`–`0x3B` | Tile grid `0x6D40`, shifted tile `0x6DCD`, sprite grid `0x6D89`, and the plain `MOVSW` copy at `0x7448` when the shift is 0 and only one of BH/BL has bit `0x10`. `0x7428` calls `0x7541` when AL is nonzero or both of those bits are set. That path is GRCG RMW: a mask of 1-bits clears planes, then each BL plane bit (`0x01` blue, `0x02` red, `0x04` green, `0x08` intensity) paints under tile `0xFF`. A nonzero shift slides the mask right and spills one byte. Opcode `0x3A` passes the immediate shift byte. Opcode `0x3B`'s `AND AL,7` reads the AL the dispatcher left behind; the port passes the entity X low 3 bits instead. Stage 1's playfield is still `0x4C` / `0x4E`. | high for the copy and the mask. The `0x3B` shift is the port's substitute. |
-| Frame tail `0x5EF5`, `0x0FB9`, `0x6C0B` | After the entity scan. `0x5EF5` latches `[bp+0x5C]` into `[bp+0x5E]` and the difference into `[bp+0x66]`. The original loop compares those words without changing them, so the port does not spin and does not rewrite the RNG seed. `0x0FB9` copies the scroll speed into `[bp+0x84]`. Its GDC writes are display-only. `0x6C0B` clears `[bp+0xB8]` after palette opcodes `0x3F` / `0x40` / `0x41` set it. The DAC ports `0xA8` / `0xAA` / `0xAC` / `0xAE` are not written; present reads the software palette. | high for the latch and the speed copy. The DAC write is skipped. |
-| Opcodes `0x42`–`0x46` | INT 7Fh through the SDL2 copy of `FPLAY.COM`. See Sound. `0x42` is music, `0x43` is an immediate effect, `0x45` stops, `0x46` fades. | high for the command bytes. The FM voice is one sine per channel. |
+| Page flip `0x31` (`0x3D1A`) | `op_page`. AL=3 on the loader call, so `[bp+0x30]` (`0x6AA4`) runs four times through `0x6ACD` into the four planes. A plane ends at the next `00`. An empty stream writes nothing, so the plane already in GVRAM stays: record 9's blue and red remain when record 10 arrives with those two streams empty. The software buffer keeps the first 32000 bytes and still consumes that terminator, so the following stream is not read as an empty plane. | high |
+| Blits `0x34`–`0x3B` | Tile grid `0x6D40`, shifted tile `0x6DCD`, sprite grid `0x6D89`, and the plain `MOVSW` copy at `0x7448` when the shift is 0 and only one of BH/BL has bit `0x10`. `0x7428` calls `0x7541` when AL is nonzero or both of those bits are set. That path is GRCG RMW: a mask of 1-bits clears planes, then each BL plane bit (`0x01` blue, `0x02` red, `0x04` green, `0x08` intensity) paints under tile `0xFF`. A nonzero shift slides the mask right and spills one byte. Opcode `0x3A` passes the immediate shift byte. Opcode `0x3B` does `AND AL,7` on the dispatcher's AL. A script's first entry is `0x2FD0`, which stores AL=2. Handlers return to `0x2FD6`, so AL survives later opcodes and later frames. `0x3C` / `0x3D` store the fill color into AL before the far fill, and the port does not fold that call's AL back. Zeroing AL at the start of every frame forced the title's shifted spans (the machinery grid and the gleam) to shift 0. Stage 1's playfield is still `0x4C` / `0x4E`. | high |
+| Frame tail `0x5EF5`, `0x0FB9`, `0x6C0B` | After the entity scan. `0x5EF5` latches `[bp+0x5C]` into `[bp+0x5E]` and the difference into `[bp+0x66]`, after spinning until the vsync counter has moved by `[bp+0x60]`. The port sleeps that count at 1/92 s per tick and does not rewrite the RNG seed. On the capture a logic frame at count 3 is about 30.7 Hz: cruise scroll of 4 px/frame measures about 122 px/s, a later 2 px/frame section about 60 px/s, the ship steps 8 px (~245 px/s), and player shots step 24 px (~736 px/s). `0x0FB9` copies the scroll speed into `[bp+0x84]`. Its GDC writes are display-only. `0x6C0B` runs when `[bp+0xB8]` is set, samples the analog DAC, and clears the flag. A component whose high byte is nonzero is output as `0x0F`; otherwise the level is the low byte `>> 4`. The palette words are not written back. A shift-0 fade accumulates in that low nibble, and storing the sampled level would clear it every frame and leave the playfield black under the text HUD. The SDL present uses the same sample. The digital combine that tests byte `[0x6BD0]` is not taken; that byte is only compared, never stored, in this image. | high |
+| Opcodes `0x42`–`0x46` | INT 7Fh through the SDL2 copy of `FPLAY.COM`. See Sound. `0x42` is music, `0x43` is an immediate effect, `0x45` stops, `0x46` fades. The voice is ymfm's YM2608 (four operators, the real algorithms, envelopes, and SSG). ADPCM-A plays when the external rhythm ROM matches the CRC; otherwise those reads stay 0. | high for the commands and the chip. |
+| Game-image x86 flags | `JP` / `JNP` follow PF (even parity of the low 8 bits). `F2` is REPNE and `F3` is REPE; the last prefix wins. `STD` / `CLD` set DF, and MOVS, CMPS, SCAS, STOS, and LODS step with it. CMPS and SCAS stop REPE when ZF clears and REPNE when ZF sets. MOVS, STOS, and LODS count CX only. DF starts clear, so the ranking `REP MOVSW` at `0x9202` still copies upward. | high |
 | Ranking `0x9128` / `0x9156` / `0x91AF` / `0x9213` / `0x923A` | PUSH/POP ES and DS, `LOOP`, `MOV` to a segment, and `REP MOVSW`. `[bp+0x56]` points at a private 256-byte block (`0x400`), not at the globals. Text VRAM is a side buffer. Confirming the name (an edge, not a held button) falls through `0x9AD1` into `0x78C6` and reloads the stage selected by `[bp+0xC5]`. | high |
 
 Records after chunk 6 use the same LZ77, one stream per call to `0x6ACD`. A single stream stops at the first `00`. Record 10 is 12983 bytes and that first byte is `00`, so one stream returns 0 bytes. That is not a short file and not a 2-byte header. Opcode `0x31` runs four streams in a row. Record 10 is then an empty blue plane, an empty red plane, a 32000-byte green plane (9164 nonzero), and a 32000-byte intensity plane (4518 nonzero), and the compressed bytes are all consumed. Records 7 and 8 are four full 32000-byte planes. Record 9 is two full planes and then two empty ones. Record 11 is one stream of 8192 bytes, the 256×32 gaiji sheet. Records 12–23 are 32768 (256×128 sprites), 24–29 are 36864 (384×96 tiles), 31 is 28800 (480×30 map words). Opcode `0x32` still uses one stream, so binding record 10 that way stays empty. The stage-1 camera starts on the last rows, which are sparse stars, and the dense tiles sit further up the map.
 
 ## Next
 
-1. The FM mixer is one sine per channel at the loudest carrier's total level, plus the SSG squares. A four-operator phase-modulation voice is not implemented. The driver's timer-A rate and register writes are.
-2. Opcode `0x3B`'s `AND AL,7` uses the AL the dispatcher left in the register. The port passes the entity's X low 3 bits.
-3. `0x6C0B` does not write the PC-98 DAC ports. Present uses the software palette.
-4. In the game VM, `JP` / `JNP` stay false, `F2` REPNZ is skipped, and `STD` leaves DF clear. The FPLAY interpreter implements parity, string repeat, and DF.
-5. Physical keycap names. The HAL bits are remapped, not renamed.
+1. ADPCM-B sample memory. The rhythm ROM above covers ADPCM-A only, and only when the user supplies the file.
+2. The digital DAC combine inside `0x6C0B` when byte `[0x6BD0]` is nonzero. This image never stores that byte.
+3. The dispatcher's AL at the start of a frame is the loader CS low byte. The port uses 0 until a script's first entry stores 2.
+4. The PC-9821 Ce recording was not fetched, so scroll, HUD, palette, and the stage-1 arrangement were not checked against that capture.

@@ -1,0 +1,94 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Packages for a static SDL2 (X11 + ALSA)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config zip curl ca-certificates \
+            libx11-dev libxext-dev libxcursor-dev libxrandr-dev \
+            libxi-dev libxfixes-dev libxrender-dev libasound2-dev
+      - name: Build the Linux zip
+        run: bash tools/package_dist.sh linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rudebreaker-linux-x86_64
+          path: dist/rudebreaker-linux-x86_64.zip
+          if-no-files-found: error
+
+  windows:
+    name: Windows x86_64 (MinGW)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: MinGW toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential mingw-w64 zip curl ca-certificates
+      - name: Build the Windows zip
+        run: bash tools/package_dist.sh windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rudebreaker-windows-x86_64
+          path: dist/rudebreaker-windows-x86_64.zip
+          if-no-files-found: error
+
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the macOS zip
+        run: bash tools/package_dist.sh macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rudebreaker-macos-${{ runner.arch }}
+          path: dist/rudebreaker-macos-*.zip
+          if-no-files-found: error
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Collect zips
+        run: |
+          mkdir -p dist
+          find artifacts -name '*.zip' -exec cp {} dist/ \;
+          find dist -name '*.zip' -print
+          find dist -name '*.zip' -exec unzip -Z1 {} \;
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.zip
+          generate_release_notes: true
+          body: |
+            Playable builds of the Rude Breaker port. The zip does not include
+            the game disk or the Yamaha YM2608 rhythm ROM.
+
+            Copy SGM1.DAT, FPLAY.COM, and SONG.DAT from your own disk into the
+            same folder as the program. RBRANK.DAT is optional. SGC.COM,
+            READJS.COM, and RUDEBR.BAT are not read. ym2608_adpcm_rom.bin
+            (8192 bytes, CRC32 23c9e0d8) is optional, beside the program.
+
+            Controls are in the README inside each zip.

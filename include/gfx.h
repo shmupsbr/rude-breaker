@@ -35,6 +35,9 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
 void gfx_palette_abs(RbGfx *gfx, const uint8_t *p, uint32_t n);
 void gfx_palette_delta(RbGfx *gfx, const uint8_t *p, uint32_t n);
 void gfx_palette_step(RbGfx *gfx, uint8_t shift);
+/* Loader 0x6C0B. The analog DAC reads the palette; it does not
+ * store the sampled level back into the fade words. */
+void gfx_dac_flush(RbGfx *gfx);
 
 /* User glyphs registered by opcode 0x33 (INT 18h AH=1Ah). Codes are 0x76xx. */
 void gfx_define_glyph(RbGfx *gfx, uint16_t code, const uint8_t *bits, uint32_t n);
@@ -57,7 +60,10 @@ void gfx_blit_span(RbGfx *gfx, const uint8_t *src, uint32_t slen,
                    uint8_t src_planes, uint8_t dst_planes, uint8_t shift);
 
 int  gfx_active(const RbGfx *gfx);
-void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,
-                 uint32_t *rgba, int w, int h);
+/* blank_sides forces the 80 px columns black. The stage playfield does
+ * that; the logo, title, and menus are drawn across the full 640. */
+void gfx_present(const RbGfx *gfx, int scroll76, int scroll_speed,
+                 const uint8_t *text, uint32_t *rgba, int w, int h,
+                 int blank_sides);
 
 #endif /* RUDEBREAKER_GFX_H */
