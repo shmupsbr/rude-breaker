@@ -37,6 +37,8 @@ typedef struct RbGame {
 void game_init(RbGame *g, const RbDisk *disk);
 void game_update(RbGame *g);
 void game_render(const RbGame *g);
+/* 1 once, after an update that loaded the next stage. */
+int  game_take_stage_gap(void);
 /* How many PC-98 wait counts this logic frame should sleep. */
 unsigned game_vsyncs(const RbGame *g);
 int  game_wants_quit(const RbGame *g);

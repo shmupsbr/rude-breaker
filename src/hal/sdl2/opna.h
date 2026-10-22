@@ -16,10 +16,7 @@ extern "C" {
 
 void opna_reset(void);
 void opna_write(uint16_t port, uint8_t value);
-/* 450 Hz lowpass on track 13's SSG tone channels 0 and 1. Noise and
- * every other track, including sound effects, stay unfiltered. */
-void opna_melody_lpf(int enable);
-/* One 44100 Hz stereo frame. FM is data[0]/data[1]; SSG is mixed from data[2].
+/* One 44100 Hz stereo frame. FM is data[0]/data[1]; SSG is data[2].
  * ADPCM-A is already summed into the FM pair. */
 void opna_sample(int16_t *stereo);
 

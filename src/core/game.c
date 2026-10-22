@@ -288,6 +288,11 @@ unsigned game_vsyncs(const RbGame *g)
     return 3;
 }
 
+int game_take_stage_gap(void)
+{
+    return g_vm && vm_take_stage_gap(g_vm);
+}
+
 /* One VM frame. Chunk 1 header 0 is the logo, title, and menu. A stage
  * chunk (2..6) is play. Header 0 loaded again returns to the title
  * without resetting the script that just loaded it. */

@@ -147,6 +147,16 @@ int main(int argc, char **argv)
     while (!game_wants_quit(&game)) {
         sys_read_input(&game.input);
         game_update(&game);
+        /* Stage-to-stage only. The picture already on screen stays up
+         * and the music keeps playing; the VM has taken the one step
+         * that loaded the next stage. RUDEBR_FAST is the smoke switch. */
+        if (game_take_stage_gap()) {
+            const char *fast = getenv("RUDEBR_FAST");
+
+            if (!fast || !fast[0] || strcmp(fast, "0") == 0) {
+                sys_idle(2000);
+            }
+        }
         game_render(&game);
         sys_wait_vblank(game_vsyncs(&game));
         sys_present();

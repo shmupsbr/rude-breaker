@@ -340,6 +340,17 @@ void sys_wait_vblank(unsigned counts)
     }
 }
 
+void sys_idle(unsigned ms)
+{
+    while (ms > 0u) {
+        unsigned step = ms > 50u ? 50u : ms;
+
+        SDL_PumpEvents();
+        SDL_Delay(step);
+        ms -= step;
+    }
+}
+
 void sys_present(void)
 {
     if (!g_rb_texture || !g_rb_renderer || !g_rb_pixels) {
