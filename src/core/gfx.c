@@ -365,17 +365,12 @@ static void blit_sprite(RbGfx *gfx, const uint8_t *src, uint32_t len,
             decode_plane(src + 64 + row * 2, shift, r);
             decode_plane(src + 96 + row * 2, shift, g);
         }
-        /* 0x481B writes a row only after DI is inside GVRAM.
-         * A cell that starts above the buffer reaches it by
-         * stepping 80 bytes per scanline. A cell that runs past
-         * 0x7D00 subtracts 0x7D00 once. Wrapping a negative Y
-         * paints that row on the bottom edge. */
-        if (yy < 0) {
-            continue;
-        }
-        if (yy >= RB_GFX_H) {
-            yy -= RB_GFX_H;
-        }
+        /* 0x481B's normal path (cell origin at line <= 384) writes
+         * 16 scanlines and does not wrap. A row past 0x7D00 falls
+         * in the 768-byte gap and is not scanned out. Wrapping it
+         * back to y=0 paints that row on the other edge of the
+         * screen. The one wrap that does belong to a cell is the
+         * DI >= 0x7D00 subtract in the setup, before this blit. */
         if (yy < 0 || yy >= RB_GFX_H) {
             continue;
         }
@@ -668,10 +663,12 @@ void gfx_merge_plane(RbGfx *gfx, int plane, const uint8_t *src, uint32_t n)
         if (y >= RB_GFX_H) {
             break;
         }
+        /* 0x6ACD writes the bytes it has and leaves the rest of the
+         * plane. A 0 bit clears that plane; a 1 bit sets it. */
         for (p = 0; p < 8; p++) {
-            if ((src[i] >> (7 - p)) & 1) {
-                rmw_idx(gfx, x + p, y, bit, 1);
-            }
+            int on = (src[i] >> (7 - p)) & 1;
+
+            rmw_idx(gfx, x + p, y, bit, on);
         }
     }
     gfx->active = 1;
@@ -1282,8 +1279,9 @@ static void overlay_text(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, 
     overlay_english(gfx, text, rgba, w);
 }
 
-void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,
-                 uint32_t *rgba, int w, int h, int blank_sides)
+void gfx_present(const RbGfx *gfx, int scroll76, int scroll_speed,
+                 const uint8_t *text, uint32_t *rgba, int w, int h,
+                 int blank_sides)
 {
     int y;
     int scroll;
@@ -1291,11 +1289,29 @@ void gfx_present(const RbGfx *gfx, int scroll76, const uint8_t *text,
     if (!gfx || !rgba || w < RB_GFX_W || h < RB_GFX_H) {
         return;
     }
-    scroll = scroll76;
-    if (scroll < 0) {
-        scroll = 0;
+    /* 0x0FB9. On a stage, partition 1 starts at
+     * SAD = wrap([bp+0x76] + [bp+0x84] - 1) and runs to the end of the
+     * 32000-byte page. Partition 2 continues from address 0. The logo
+     * and title leave both scroll words at the init zero, where that
+     * formula wraps to line 399 and rotates the frame by one row.
+     * Those screens are not a scrolling field, so they start at 0. */
+    if (blank_sides) {
+        scroll = scroll76 + scroll_speed - 1;
+        while (scroll < 0) {
+            scroll += RB_GFX_H;
+        }
+        while (scroll >= RB_GFX_H) {
+            scroll -= RB_GFX_H;
+        }
+    } else {
+        scroll = scroll76;
+        if (scroll < 0) {
+            scroll = 0;
+        }
+        while (scroll >= RB_GFX_H) {
+            scroll -= RB_GFX_H;
+        }
     }
-    scroll %= RB_GFX_H;
     for (y = 0; y < RB_GFX_H; y++) {
         int src = y + scroll;
         int x;

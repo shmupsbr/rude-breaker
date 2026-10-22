@@ -2608,7 +2608,10 @@ static void op_page(RbVm *vm, uint8_t rec)
     if (!plane) {
         return;
     }
-    gfx_clear_frame(vm->gfx);
+    /* 0x6AA4 expands each plane from DI=0 and stops at the first 00.
+     * An empty stream writes nothing, so the plane already in GVRAM
+     * stays. Clearing here dropped record 9's blue and red (the title
+     * frame) when record 10 arrived with those two streams empty. */
     for (p = 0; p < 4; p++) {
         uint32_t used = 0;
         uint32_t n;
@@ -4002,7 +4005,8 @@ void vm_present(const RbVm *vm, uint32_t *rgba, int w, int h)
     }
     /* Chunks 2..6 are the stages. Chunk 1 is the logo, title, menus,
      * ranking, and ending, all drawn across the full 640. */
-    gfx_present(vm->gfx, (int)gu16(vm, 0x76), vm->text, rgba, w, h,
+    gfx_present(vm->gfx, (int)gu16(vm, 0x76), (int)(int16_t)gu16(vm, 0x84),
+                vm->text, rgba, w, h,
                 vm->view_chunk >= 2 && vm->view_chunk <= 6);
 }
 

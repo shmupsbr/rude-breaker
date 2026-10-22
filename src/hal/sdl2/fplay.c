@@ -55,6 +55,15 @@ static int timer_left;
 static int isr_busy;
 static uint32_t sample_pos;
 static FILE *note_log;
+/* BGM track changes fade the outgoing music out, then hold silence,
+ * for three seconds before the next track starts. SFX (AH=1) does
+ * not. The first track, and a repeat of the same id, start at once. */
+static int bgm_track = -1;
+static int pending_track = -2;
+static int pause_left;
+static int fade_left;
+static const int PAUSE_N = 44100 * 3;
+static const int FADE_N = 44100 * 2;
 
 static void note_log_open(void)
 {
@@ -1625,6 +1634,10 @@ int fplay_bind_mem(const uint8_t *com, size_t com_n,
     opna_autoload_rhythm(rhythm_dir);
     opna_reset();
     sample_pos = 0;
+    bgm_track = -1;
+    pending_track = -2;
+    pause_left = 0;
+    fade_left = 0;
     note_log_open();
     enter_near(0x0BD0);
     ready = (unknown_op == 0 && mem[0x280] != 0) ? 1 : 0;
@@ -1662,15 +1675,56 @@ int fplay_bind(const char *dir)
     return rc;
 }
 
+static void begin_pause(void)
+{
+    if (pause_left > 0) {
+        return;
+    }
+    pause_left = PAUSE_N;
+    fade_left = FADE_N;
+}
+
+static void run_player(uint8_t ah, uint8_t al)
+{
+    isr_busy = 1;
+    r[R_AX] = (uint16_t)(((uint16_t)ah << 8) | al);
+    enter_iret(0x0801);
+    isr_busy = 0;
+}
+
 void fplay_command(uint8_t ah, uint8_t al)
 {
     if (!ready || isr_busy) {
         return;
     }
-    isr_busy = 1;
-    r[R_AX] = (uint16_t)(((uint16_t)ah << 8) | al);
-    enter_iret(0x0801);
-    isr_busy = 0;
+    /* AH=0 starts a BGM track. A different track waits out the fade
+     * instead of cutting the one that is playing. */
+    if (ah == 0) {
+        if (bgm_track >= 0 && (int)al != bgm_track) {
+            pending_track = (int)al;
+            begin_pause();
+            return;
+        }
+        pause_left = 0;
+        fade_left = 0;
+        pending_track = -2;
+        run_player(0, al);
+        bgm_track = (int)al;
+        return;
+    }
+    /* AH=3 stops. Fade first when a track is still in the chip. */
+    if (ah == 3 && bgm_track >= 0) {
+        pending_track = -1;
+        begin_pause();
+        return;
+    }
+    if (ah == 3) {
+        pause_left = 0;
+        fade_left = 0;
+        pending_track = -2;
+        bgm_track = -1;
+    }
+    run_player(ah, al);
 }
 
 void fplay_render(int16_t *stereo, int frames)
@@ -1690,6 +1744,32 @@ void fplay_render(int16_t *stereo, int frames)
             timer_left = timer_samples();
         }
         mix_frame(stereo + (size_t)i * 2u);
+        if (pause_left > 0) {
+            int16_t *fr = stereo + (size_t)i * 2u;
+            int gain = fade_left;
+
+            if (gain < 0) {
+                gain = 0;
+            }
+            fr[0] = (int16_t)((int32_t)fr[0] * gain / FADE_N);
+            fr[1] = (int16_t)((int32_t)fr[1] * gain / FADE_N);
+            if (fade_left > 0) {
+                fade_left--;
+            }
+            pause_left--;
+            if (pause_left == 0 && !isr_busy) {
+                int next = pending_track;
+
+                pending_track = -2;
+                if (next >= 0) {
+                    bgm_track = next;
+                    run_player(0, (uint8_t)next);
+                } else if (next == -1) {
+                    bgm_track = -1;
+                    run_player(3, 0);
+                }
+            }
+        }
         sample_pos++;
         if (timer_left > 0) {
             timer_left--;

@@ -1402,11 +1402,20 @@ void ym2608::clock_fm_and_adpcm()
 	// clock the ADPCM-B engine every cycle
 	m_adpcm_b.clock();
 
-	// update the FM content; OPNA is 13-bit with no intermediate clipping
-	m_fm.output(m_last_fm.clear(), 1, 32767, fmmask);
+	// FM channel 5 and the ADPCM-A rhythm are the drum kit. Both are
+	// mixed at 2/3. The other FM channels stay at unity. OPNA FM is
+	// 13-bit with no intermediate clipping.
+	m_fm.output(m_last_fm.clear(), 1, 32767, fmmask & ~0x20u);
+	{
+		fm_engine::output_data side;
 
-	// mix in the ADPCM and clamp
-	m_adpcm_a.output(m_last_fm, 0x3f);
+		m_fm.output(side.clear(), 1, 32767, fmmask & 0x20u);
+		m_last_fm.data[0] += side.data[0] * 2 / 3;
+		m_last_fm.data[1] += side.data[1] * 2 / 3;
+		m_adpcm_a.output(side.clear(), 0x3f);
+		m_last_fm.data[0] += side.data[0] * 2 / 3;
+		m_last_fm.data[1] += side.data[1] * 2 / 3;
+	}
 	m_adpcm_b.output(m_last_fm, 1);
 	m_last_fm.clamp16();
 }

@@ -8,6 +8,7 @@
 #include "exepath.h"
 #include "ymfm_opn.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -61,6 +62,9 @@ static float g_hp_l;
 static float g_hp_r;
 static float g_x1_l;
 static float g_x1_r;
+static float g_ssg1;
+static float g_ssg2;
+static float g_ssg_a;
 static const float BASS_A = 0.028093f;
 static const float HP_R = 0.997152f;
 
@@ -73,6 +77,24 @@ static int16_t sat16(int32_t v)
         return (int16_t)-32768;
     }
     return (int16_t)v;
+}
+
+/* Linear through 24000, then a soft knee so the bass shelf cannot
+ * hard-clip a transient. Quiet material is unchanged. */
+static int16_t limit16(float v)
+{
+    float a = v < 0.0f ? -v : v;
+    float s = v < 0.0f ? -1.0f : 1.0f;
+
+    if (a > 24000.0f) {
+        float over = (a - 24000.0f) / 8767.0f;
+
+        if (over > 8.0f) {
+            over = 8.0f;
+        }
+        a = 24000.0f + 8767.0f * (1.0f - expf(-over));
+    }
+    return sat16((int32_t)(s * a));
 }
 
 static uint32_t crc32_ieee(const uint8_t *p, size_t n)
@@ -224,6 +246,12 @@ extern "C" void opna_reset(void)
     g_hp_r = 0;
     g_x1_l = 0;
     g_x1_r = 0;
+    g_ssg1 = 0;
+    g_ssg2 = 0;
+    /* Two one-pole lows at 450 Hz, clocked at the chip rate. The title
+     * SSG square's third harmonic sits on B5 and was masking the FM
+     * lead. The bass fundamental is well below the corner. */
+    g_ssg_a = 1.0f - expf(-2.0f * 3.14159265f * 450.0f / (float)g_chip_rate);
     g_live = 1;
 }
 
@@ -274,9 +302,12 @@ extern "C" void opna_sample(int16_t *stereo)
         ymfm::ym2608::output_data out;
 
         g_chip.generate(&out, 1);
-        /* FM stereo plus the mono SSG, which ymfm leaves in slot 2. */
-        left = out.data[0] + out.data[2];
-        right = out.data[1] + out.data[2];
+        /* FM stays wide. The mono SSG (slot 2) is low-passed here, once
+         * per chip sample, so a held output sample is not filtered again. */
+        g_ssg1 += g_ssg_a * ((float)out.data[2] - g_ssg1);
+        g_ssg2 += g_ssg_a * (g_ssg1 - g_ssg2);
+        left = out.data[0] + (int32_t)g_ssg2;
+        right = out.data[1] + (int32_t)g_ssg2;
         g_accum -= OUT_RATE;
     }
     g_hold_l = left;
@@ -296,9 +327,7 @@ extern "C" void opna_sample(int16_t *stereo)
         g_hp_r = hpr;
         g_bass_l += BASS_A * (hpl - g_bass_l);
         g_bass_r += BASS_A * (hpr - g_bass_r);
-        left = (int32_t)(hpl + 0.5f * g_bass_l);
-        right = (int32_t)(hpr + 0.5f * g_bass_r);
+        stereo[0] = limit16(hpl + 0.5f * g_bass_l);
+        stereo[1] = limit16(hpr + 0.5f * g_bass_r);
     }
-    stereo[0] = sat16(left);
-    stereo[1] = sat16(right);
 }
