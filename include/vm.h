@@ -84,6 +84,8 @@ int  vm_count_origin(const RbVm *vm, uint16_t script_ip);
 int  vm_collect_sprites(const RbVm *vm, RbVmSprite *out, int max);
 int  vm_quit_requested(const RbVm *vm);
 int  vm_boot_requested(const RbVm *vm);
+/* 1 once, when this frame loaded the next stage (records 3..6). */
+int  vm_take_stage_gap(RbVm *vm);
 
 /* 1 once a stage script has filled or composed the playfield. */
 int  vm_gfx_active(const RbVm *vm);

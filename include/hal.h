@@ -205,6 +205,8 @@ void sys_message(const char *title, const char *text);
 /* Sleep `counts` PC-98 wait ticks (1/RB_WAIT_HZ each). A zero count still
  * waits one tick, which is the GDC edge that follows the counter. */
 void sys_wait_vblank(unsigned counts);
+/* Hold the last presented frame. The audio callback keeps running. */
+void sys_idle(unsigned ms);
 void sys_present(void);
 
 void sys_clear(uint8_t r, uint8_t g, uint8_t b);

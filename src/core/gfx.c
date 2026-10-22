@@ -128,15 +128,20 @@ static void rmw_idx(RbGfx *gfx, int x, int y, uint8_t planes, int set)
     }
 }
 
-static int wrap_y(int y)
+/* Scanned page is 400*80 = 0x7D00 bytes. 0x7D00..0xFFFF is the gap and
+ * the rest of the segment; the GDC does not scan it. A 16-bit wrap that
+ * lands back under 0x7D00 is the top of the page. Folding the gap with
+ * `% 32000` paints it on the seam, which is the stray strip. */
+static int plane_xy(uint32_t addr, int *x, int *y)
 {
-    while (y < 0) {
-        y += RB_GFX_H;
+    uint16_t at = (uint16_t)addr;
+
+    if (at >= 0x7D00u) {
+        return 0;
     }
-    while (y >= RB_GFX_H) {
-        y -= RB_GFX_H;
-    }
-    return y;
+    *x = (int)(at % 80u) * 8;
+    *y = (int)(at / 80u);
+    return 1;
 }
 
 /* GRCG fill at loader 0x77D4. The color byte is inverted, then each
@@ -160,16 +165,18 @@ void gfx_fill(RbGfx *gfx, uint16_t di, uint16_t nbytes, uint16_t rows, uint8_t c
         ah = (uint8_t)(ah >> 1);
     }
     for (row = 0; row < rows; row++) {
-        uint32_t off = (uint32_t)di + (uint32_t)row * 80u;
         uint16_t b;
 
-        off %= 32000u;
         for (b = 0; b < nbytes; b++) {
-            uint32_t at = (off + b) % 32000u;
-            int x = (int)(at % 80u) * 8;
-            int y = (int)(at / 80u);
+            int x;
+            int y;
             int p;
 
+            /* 16-bit DI, same as the GRCG fill. Bytes in the gap stay
+             * off the scanned page instead of wrapping onto line 0. */
+            if (!plane_xy((uint32_t)di + (uint32_t)row * 80u + b, &x, &y)) {
+                continue;
+            }
             for (p = 0; p < 8; p++) {
                 put_idx(gfx, x + p, y, idx);
             }
@@ -234,7 +241,9 @@ static void blit_tile(RbGfx *gfx, const uint8_t *src, int x, int y)
             if (bits[2][col]) {
                 idx |= 4u;
             }
-            put_idx(gfx, x + col, wrap_y(y + row), idx);
+            /* 0x4B21 steps 16 lines and does not subtract 0x7D00.
+             * A row past the page is the gap. put_idx drops it. */
+            put_idx(gfx, x + col, y + row, idx);
         }
     }
 }
@@ -340,6 +349,7 @@ static void blit_sprite(RbGfx *gfx, const uint8_t *src, uint32_t len,
     int bright = (attr & 1u) == 0u;
     int wide = 16 + (shift ? 8 : 0);
     int row;
+    int ring = 0;
     uint32_t need = mono ? 32u : 128u;
 
     if (!src || len < need) {
@@ -350,6 +360,24 @@ static void blit_sprite(RbGfx *gfx, const uint8_t *src, uint32_t len,
     }
     if (shift > 7) {
         shift = 7;
+    }
+    /* 0x11D9 subtracts 0x7D00 once when the cell origin is past the
+     * scanned page. 0x483B then takes the ring (0x49C5) only when that
+     * origin is still past line 384. A cell at line 384 or earlier
+     * writes 16 scanlines with no per-line wrap; those rows fit, and
+     * wrapping a gap address back to y=0 is the stray strip. */
+    {
+        int bx = (x >= 0) ? (x >> 3) : 0;
+        int di;
+
+        if (y >= 0) {
+            di = y * 80 + bx;
+            if (di >= 0x7D00) {
+                y -= 400;
+                di -= 0x7D00;
+            }
+            ring = di > 0x7800;
+        }
     }
     for (row = 0; row < 16; row++) {
         uint8_t mask[24];
@@ -365,17 +393,20 @@ static void blit_sprite(RbGfx *gfx, const uint8_t *src, uint32_t len,
             decode_plane(src + 64 + row * 2, shift, r);
             decode_plane(src + 96 + row * 2, shift, g);
         }
-        /* GVRAM is a 400-line ring. 0x49C5 subtracts 0x7D00 when a
-         * scanline crosses it, which is this y-400. Present is what
-         * clips to the screen, using the GDC start address, so the
-         * wrapped rows come back on the other side of the seam.
-         * A negative line is not part of the ring; wrapping it
-         * landed a stray strip on the bottom edge. */
+        /* Negative lines are not in the ring. On the ring path, one
+         * subtract of 400 matches 0x49C5's single SUB 0x7D00. A line
+         * that is still past the page is the gap and is not drawn. */
         if (yy < 0) {
             continue;
         }
-        while (yy >= RB_GFX_H) {
+        if (yy >= RB_GFX_H) {
+            if (!ring) {
+                continue;
+            }
             yy -= RB_GFX_H;
+            if (yy < 0 || yy >= RB_GFX_H) {
+                continue;
+            }
         }
         for (col = 0; col < wide; col++) {
             uint8_t idx;
@@ -677,12 +708,9 @@ void gfx_merge_plane(RbGfx *gfx, int plane, const uint8_t *src, uint32_t n)
     gfx->active = 1;
 }
 
-static void di_xy(uint16_t di, int *x, int *y)
+static int di_xy(uint16_t di, int *x, int *y)
 {
-    uint32_t at = (uint32_t)di % 32000u;
-
-    *x = (int)(at % 80u) * 8;
-    *y = (int)(at / 80u);
+    return plane_xy(di, x, y);
 }
 
 static void blit_tile_shift(RbGfx *gfx, const uint8_t *src, int x, int y, int shift)
@@ -727,7 +755,7 @@ static void blit_tile_shift(RbGfx *gfx, const uint8_t *src, int x, int y, int sh
             if (bits[2][col]) {
                 idx |= 4u;
             }
-            put_idx(gfx, x + col, wrap_y(y + row), idx);
+            put_idx(gfx, x + col, y + row, idx);
         }
     }
 }
@@ -758,7 +786,10 @@ void gfx_blit_grid(RbGfx *gfx, const uint8_t *bank, uint32_t blen,
                 return;
             }
             index = cells[ncell++];
-            di_xy(at, &x, &y);
+            if (!di_xy(at, &x, &y)) {
+                at = (uint16_t)(at + 2u);
+                continue;
+            }
             if (kind == 1) {
                 uint32_t off = (uint32_t)index * 128u;
 
@@ -823,6 +854,10 @@ static void grcg_row(RbGfx *gfx, uint16_t di, const uint8_t *src_row,
             continue;
         }
         at = (uint16_t)(di + (uint16_t)(i >> 3));
+        /* Past 0x7D00 is the gap. 16-bit wrap under that is visible. */
+        if (at >= 0x7D00u) {
+            continue;
+        }
         x = (int)(at % 80u) * 8 + (i & 7);
         y = (int)(at / 80u);
         grcg_bit(gfx, x, y, planes, set);
@@ -940,7 +975,6 @@ void gfx_blit_span(RbGfx *gfx, const uint8_t *src, uint32_t slen,
 
                 for (b = 0; b < row_bytes; b++) {
                     uint8_t byte;
-                    uint32_t at;
                     int x;
                     int y;
                     int p;
@@ -950,13 +984,10 @@ void gfx_blit_span(RbGfx *gfx, const uint8_t *src, uint32_t slen,
                         return;
                     }
                     byte = src[si++];
-                    at = ((uint32_t)base + b) % 32000u;
-                    x = (int)(at % 80u) * 8;
-                    y = (int)(at / 80u);
+                    if (!plane_xy((uint32_t)base + b, &x, &y)) {
+                        continue;
+                    }
                     for (p = 0; p < 8; p++) {
-                        if (y >= RB_GFX_H) {
-                            break;
-                        }
                         rmw_idx(gfx, x + p, y, bit[plane],
                                 (byte >> (7 - p)) & 1);
                     }

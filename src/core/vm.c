@@ -89,6 +89,9 @@ struct RbVm {
      * A script's first entry (0x2FD0) stores 2. Opcode 0x3B masks it. */
     uint8_t disp_al;
     uint8_t script_entered[ENT_N];
+    /* Set when opcode 0x0D loads the next stage. The host holds the
+     * picture; the VM itself keeps running. */
+    int stage_gap;
     RbGfx *gfx;
 };
 
@@ -2296,6 +2299,15 @@ static void do_load(RbVm *vm, int ent, uint8_t record, uint8_t header)
     nip = read_u16_le(vm->chunk[record] + (unsigned)header * 2u);
     vm->cof[ent] = record;
     su16(vm, ent, 8, nip);
+    /* Records 3..6 are stages 2..5. The hold is the handoff from a
+     * stage that is already on screen. Record 2 is stage 1 (title and
+     * weapon select lead into it). Record 1 is the title, ending, and
+     * game over. A continue loads a stage while view_chunk is still 1.
+     * Boss music changes the track and does not come through here. */
+    if (record >= 3 && record <= 6 &&
+        vm->view_chunk >= 2 && vm->view_chunk < (int)record) {
+        vm->stage_gap = 1;
+    }
     if (record >= 1 && record <= 6) {
         vm->view_chunk = (int)record;
     }
@@ -3599,6 +3611,7 @@ void vm_reset_boot(RbVm *vm)
     gfx_reset(vm->gfx);
     install_boot_font(vm);
     vm->view_chunk = 1;
+    vm->stage_gap = 0;
     if (ensure_chunk(vm, 1) != 0 || vm->clen[1] < 2u) {
         return;
     }
@@ -3663,6 +3676,7 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
     gfx_reset(vm->gfx);
     install_boot_font(vm);
     vm->view_chunk = (int)chunk;
+    vm->stage_gap = 0;
     if (ensure_chunk(vm, chunk) != 0 || vm->clen[chunk] < 2u) {
         return;
     }
@@ -3991,6 +4005,18 @@ int vm_quit_requested(const RbVm *vm)
 int vm_boot_requested(const RbVm *vm)
 {
     return vm && vm->boot;
+}
+
+int vm_take_stage_gap(RbVm *vm)
+{
+    int gap;
+
+    if (!vm) {
+        return 0;
+    }
+    gap = vm->stage_gap;
+    vm->stage_gap = 0;
+    return gap;
 }
 
 int vm_gfx_active(const RbVm *vm)

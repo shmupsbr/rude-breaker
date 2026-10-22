@@ -53,22 +53,12 @@ static uint32_t g_accum;
 static int32_t g_hold_l;
 static int32_t g_hold_r;
 static int g_live;
-/* DC block at 20 Hz, then the 200 Hz band added in full (out = x + lp).
- * The previous shelf added that band at 0.5. ymfm's mix carries a few
- * thousand counts of offset; shelving that offset eats the headroom. */
-static float g_bass_l;
-static float g_bass_r;
+/* 20 Hz one-pole high-pass. ymfm's mix carries a DC offset; this
+ * removes it and leaves the chip's bass alone. */
 static float g_hp_l;
 static float g_hp_r;
 static float g_x1_l;
 static float g_x1_r;
-static float g_ssg_lp[2][2];
-static int g_ssg_lp_on[2];
-static float g_ssg_a;
-static int g_melody_lpf;
-/* SSG mixer, register 0x07. Bits 0-2 tone off, bits 3-5 noise off. */
-static uint8_t g_ssg_mix = 0x3Fu;
-static const float BASS_A = 0.028093f;
 static const float HP_R = 0.997152f;
 
 static int16_t sat16(int32_t v)
@@ -82,8 +72,7 @@ static int16_t sat16(int32_t v)
     return (int16_t)v;
 }
 
-/* Linear through 24000, then a soft knee so the bass shelf cannot
- * hard-clip a transient. Quiet material is unchanged. */
+/* Linear through 24000, then a soft knee. Quiet material is unchanged. */
 static int16_t limit16(float v)
 {
     float a = v < 0.0f ? -v : v;
@@ -243,27 +232,11 @@ extern "C" void opna_reset(void)
     g_accum = 0;
     g_hold_l = 0;
     g_hold_r = 0;
-    g_bass_l = 0;
-    g_bass_r = 0;
     g_hp_l = 0;
     g_hp_r = 0;
     g_x1_l = 0;
     g_x1_r = 0;
-    memset(g_ssg_lp, 0, sizeof g_ssg_lp);
-    g_ssg_lp_on[0] = 0;
-    g_ssg_lp_on[1] = 0;
-    g_melody_lpf = 0;
-    g_ssg_mix = 0x3Fu;
-    /* Two one-pole lows at 450 Hz, clocked at the chip rate. Track 13's
-     * SSG squares put a third harmonic on B5. Noise and the other
-     * tracks are not passed through it. */
-    g_ssg_a = 1.0f - expf(-2.0f * 3.14159265f * 450.0f / (float)g_chip_rate);
     g_live = 1;
-}
-
-extern "C" void opna_melody_lpf(int enable)
-{
-    g_melody_lpf = enable ? 1 : 0;
 }
 
 extern "C" void opna_write(uint16_t port, uint8_t value)
@@ -281,9 +254,6 @@ extern "C" void opna_write(uint16_t port, uint8_t value)
         /* YM2608 rhythm (ADPCM-A) lives at low-port addresses 0x10-0x1F. */
         if (g_addr_latch[0] >= 0x10u && g_addr_latch[0] <= 0x1Fu) {
             g_rhythm_writes++;
-        }
-        if (g_addr_latch[0] == 0x07u) {
-            g_ssg_mix = value;
         }
     } else if (port == 0x18Cu) {
         off = 2;
@@ -316,52 +286,17 @@ extern "C" void opna_sample(int16_t *stereo)
         ymfm::ym2608::output_data out;
 
         g_chip.generate(&out, 1);
-        /* data[2] is the mixed SSG. data[3..5] are channels 0..2 with
-         * the same scale. The title melody's squares are channels 0
-         * and 1 with noise disabled. A noise channel (the explosion)
-         * and channel 2 (the bass) are added raw. */
-        {
-            int32_t ssg = out.data[2];
-
-            if (g_melody_lpf) {
-                int ch;
-
-                ssg = 0;
-                for (ch = 0; ch < 3; ch++) {
-                    int32_t s = out.data[3 + ch];
-                    int noise = (g_ssg_mix & (uint8_t)(1u << (3 + ch))) == 0;
-
-                    if (ch < 2 && !noise) {
-                        float x = (float)s;
-
-                        if (!g_ssg_lp_on[ch]) {
-                            g_ssg_lp[ch][0] = x;
-                            g_ssg_lp[ch][1] = x;
-                            g_ssg_lp_on[ch] = 1;
-                        }
-                        g_ssg_lp[ch][0] += g_ssg_a * (x - g_ssg_lp[ch][0]);
-                        g_ssg_lp[ch][1] += g_ssg_a * (g_ssg_lp[ch][0] - g_ssg_lp[ch][1]);
-                        ssg += (int32_t)g_ssg_lp[ch][1];
-                    } else {
-                        if (ch < 2) {
-                            g_ssg_lp_on[ch] = 0;
-                        }
-                        ssg += s;
-                    }
-                }
-            } else {
-                g_ssg_lp_on[0] = 0;
-                g_ssg_lp_on[1] = 0;
-            }
-            left = out.data[0] + ssg;
-            right = out.data[1] + ssg;
-        }
+        /* data[0]/data[1] are FM plus ADPCM. data[2] is the SSG mix
+         * at ymfm's 2/3 scale. In that raw sum the FM sits under the
+         * SSG: option select, stage 1 and the final boss come up to
+         * the SSG-led stages at 3x. SSG stays at the chip's own mix. */
+        left = out.data[0] * 3 + out.data[2];
+        right = out.data[1] * 3 + out.data[2];
         g_accum -= OUT_RATE;
     }
     g_hold_l = left;
     g_hold_r = right;
-    /* High-pass the offset, then out = x + lp200. The hold stays raw so
-     * a repeated output sample is not shelved twice. */
+    /* The hold stays raw so a repeated output sample is not filtered twice. */
     {
         float xl = (float)left;
         float xr = (float)right;
@@ -372,9 +307,7 @@ extern "C" void opna_sample(int16_t *stereo)
         g_x1_r = xr;
         g_hp_l = hpl;
         g_hp_r = hpr;
-        g_bass_l += BASS_A * (hpl - g_bass_l);
-        g_bass_r += BASS_A * (hpr - g_bass_r);
-        stereo[0] = limit16(hpl + g_bass_l);
-        stereo[1] = limit16(hpr + g_bass_r);
+        stereo[0] = limit16(hpl);
+        stereo[1] = limit16(hpr);
     }
 }

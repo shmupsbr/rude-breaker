@@ -127,6 +127,19 @@ void sys_wait_vblank(unsigned counts)
     }
 }
 
+void sys_idle(unsigned ms)
+{
+    unsigned ticks = (ms * 60u + 999u) / 1000u;
+    unsigned i;
+
+    if (ticks == 0u) {
+        ticks = 1u;
+    }
+    for (i = 0; i < ticks; i++) {
+        _iocs_vdisp_wait();
+    }
+}
+
 void sys_present(void)
 {
     /*
