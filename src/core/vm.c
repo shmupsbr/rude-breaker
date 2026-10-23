@@ -97,6 +97,13 @@ struct RbVm {
     int training;
     /* Set when native 0x9213 registers a score. Training never sets it. */
     int rank_commit;
+    /* Pause (frame loop 0xBD9). Escape toggles [bp+0x72] bit 0x8000.
+     * The saved cells are the row the word PAUSE overwrites. */
+    int pause_hold;
+    int pause_saved;
+    uint16_t pause_blink;
+    uint8_t pause_cells[20];
+    uint8_t pause_attr[20];
     RbGfx *gfx;
 };
 
@@ -2180,6 +2187,19 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             stk[--sp] = (uint16_t)(int16_t)(int8_t)cs[ip++];
             continue;
         }
+        /* OUT imm8 / OUT DX. Native 0x9F91 writes [bp+0xE0] to port
+         * 0x74 and returns. The port has no such device; dropping the
+         * write lets the RETF run. Aborting here used to skip it. */
+        if (op == 0xE6u || op == 0xE7u) {
+            if ((uint32_t)ip >= len) {
+                return;
+            }
+            ip++;
+            continue;
+        }
+        if (op == 0xEEu || op == 0xEFu) {
+            continue;
+        }
 
         vm->nat_miss++;
         vm->nat_miss_ip = ip0;
@@ -3699,6 +3719,9 @@ void vm_reset_boot(RbVm *vm)
     vm->loads = 0;
     vm->quit = 0;
     vm->boot = 0;
+    vm->pause_hold = 0;
+    vm->pause_saved = 0;
+    vm->pause_blink = 0;
     vm->rng_mix = 0x1234u;
     vm->rng_cf = 0;
     sgu16(vm, 0x5C, 0x1234u);
@@ -3774,6 +3797,9 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
     vm->loads = 0;
     vm->quit = 0;
     vm->boot = 0;
+    vm->pause_hold = 0;
+    vm->pause_saved = 0;
+    vm->pause_blink = 0;
     vm->rng_mix = 0x1234u;
     vm->rng_cf = 0;
     sgu16(vm, 0x5C, 0x1234u);
@@ -4229,12 +4255,78 @@ static void hook_6c0b(RbVm *vm)
     vm->g[0xB8] = 0;
 }
 
+/* 0xBD9 copies ten text cells at column 10, row 23, then blinks PAUSE
+ * there. Even frames use attribute 0x81, odd frames 0xC1. */
+static void pause_save_cells(RbVm *vm)
+{
+    if (vm->pause_saved) {
+        return;
+    }
+    memcpy(vm->pause_cells, vm->text + 0xE74u, 20);
+    memcpy(vm->pause_attr, vm->text + 0x2000u + 0xE74u, 20);
+    vm->pause_saved = 1;
+}
+
+static void pause_restore_cells(RbVm *vm)
+{
+    if (!vm->pause_saved) {
+        return;
+    }
+    memcpy(vm->text + 0xE74u, vm->pause_cells, 20);
+    memcpy(vm->text + 0x2000u + 0xE74u, vm->pause_attr, 20);
+    vm->pause_saved = 0;
+}
+
+static void pause_draw(RbVm *vm)
+{
+    static const uint8_t glyphs[5] = {0x3Fu, 0x30u, 0x44u, 0x42u, 0x34u};
+    uint16_t di = text_cursor(10, 23);
+    uint16_t attr;
+    int i;
+
+    vm->pause_blink = (uint16_t)(vm->pause_blink + 1u);
+    attr = (vm->pause_blink & 1u) ? 0x00C1u : 0x0081u;
+    for (i = 0; i < 5; i++) {
+        uint16_t ax = (uint16_t)(0x0056u | ((uint16_t)glyphs[i] << 8));
+
+        text_pair(vm, di, ax,
+                  (uint16_t)((ax & 0xFF00u) | 0x00D6u), attr);
+        di = (uint16_t)(di + 4u);
+    }
+}
+
 void vm_frame(RbVm *vm)
 {
     int i;
+    uint16_t flags;
+    int toggled;
 
     if (!vm) {
         return;
+    }
+    /* apply_debug_keys 0xCE6. Escape's edge toggles the pause bit
+     * before any entity runs. The other keys in that routine are the
+     * debug group and stay gated off. */
+    flags = gu16(vm, 0x72);
+    toggled = (gu16(vm, 0x6E) & 0x0080u) != 0;
+    if (toggled) {
+        flags = (uint16_t)(flags ^ 0x8000u);
+        sgu16(vm, 0x72, flags);
+    }
+    if (flags & 0x8000u) {
+        pause_save_cells(vm);
+        vm->pause_hold = 1;
+        pause_draw(vm);
+        vm->prev_held = vm->held;
+        return;
+    }
+    if (vm->pause_hold) {
+        pause_restore_cells(vm);
+        vm->pause_hold = (vm->held & 0x0080u) != 0;
+        if (vm->pause_hold) {
+            vm->prev_held = vm->held;
+            return;
+        }
     }
     /* 0x2FD0 stores AX=2 only when a script is entered. Handlers
      * return to 0x2FD6, so AL stays in the CPU across opcodes and
