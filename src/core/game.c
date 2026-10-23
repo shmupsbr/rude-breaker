@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static RbEnemyPool  g_enemies;
 static RbBulletPool g_bullets;
@@ -26,6 +27,90 @@ static int          g_saw_move;
 static int          g_saw_clear;
 static int          g_saw_over;
 static int          g_data_missing;
+/* Host options. Default is the original palette and training off, so
+ * the scripted checks keep the same picture and the same deaths. */
+static int          g_modern;
+static int          g_training;
+
+static void cfg_path(const RbGame *g, char *out, size_t n)
+{
+    struct stat st;
+    char dir[512];
+    char *slash;
+
+    if (!g || !g->asset_dir[0]) {
+        snprintf(out, n, "%s", "rudebreaker.cfg");
+        return;
+    }
+    snprintf(dir, sizeof dir, "%s", g->asset_dir);
+    if (stat(dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        slash = strrchr(dir, '/');
+        if (slash && slash != dir) {
+            *slash = 0;
+        } else {
+            snprintf(dir, sizeof dir, "%s", ".");
+        }
+    }
+    snprintf(out, n, "%s/rudebreaker.cfg", dir);
+}
+
+static void load_cfg(const RbGame *g)
+{
+    char path[600];
+    FILE *fp;
+    char line[80];
+
+    g_modern = 0;
+    g_training = 0;
+    cfg_path(g, path, sizeof path);
+    fp = fopen(path, "r");
+    if (!fp) {
+        return;
+    }
+    while (fgets(line, sizeof line, fp)) {
+        if (strncmp(line, "palette=modern", 14) == 0) {
+            g_modern = 1;
+        } else if (strncmp(line, "palette=original", 16) == 0) {
+            g_modern = 0;
+        } else if (strncmp(line, "training=on", 11) == 0) {
+            g_training = 1;
+        } else if (strncmp(line, "training=off", 12) == 0) {
+            g_training = 0;
+        }
+    }
+    fclose(fp);
+}
+
+static void save_cfg(const RbGame *g)
+{
+    char path[600];
+    FILE *fp;
+
+    cfg_path(g, path, sizeof path);
+    fp = fopen(path, "w");
+    if (!fp) {
+        return;
+    }
+    fprintf(fp, "palette=%s\ntraining=%s\n",
+            g_modern ? "modern" : "original",
+            g_training ? "on" : "off");
+    fclose(fp);
+}
+
+static void apply_host_options(void)
+{
+    if (!g_vm) {
+        return;
+    }
+    vm_set_training(g_vm, g_training);
+    vm_set_grade(g_vm, g_modern);
+}
+
+static int settings_open(void)
+{
+    /* SETTINGS, the two JIS characters behind that English label. */
+    return g_vm && vm_text_has_jis(g_vm, 0x405Fu, 0x446Au);
+}
 
 static int env_on(const char *name)
 {
@@ -257,6 +342,8 @@ void game_init(RbGame *g, const RbDisk *disk)
 
     vm_reset_boot(g_vm);
     vm_set_hiscore(g_vm, g->hiscore);
+    load_cfg(g);
+    apply_host_options();
     g->state = RB_STATE_TITLE;
     if (env_on("RUDEBR_TRACE") || getenv("RUDEBR_STOP")) {
         fprintf(stderr, "smoke: title\n");
@@ -341,9 +428,32 @@ static void step_script(RbGame *g)
     }
 }
 
+static void host_options_input(RbGame *g)
+{
+    int changed = 0;
+
+    if (!settings_open()) {
+        return;
+    }
+    if (btn_pressed(g, RB_BTN_F5)) {
+        g_modern = !g_modern;
+        changed = 1;
+    }
+    if (btn_pressed(g, RB_BTN_F6)) {
+        g_training = !g_training;
+        changed = 1;
+    }
+    if (changed) {
+        apply_host_options();
+        save_cfg(g);
+    }
+}
+
 void game_update(RbGame *g)
 {
     g->frame++;
+    host_options_input(g);
+    apply_host_options();
 
     switch (g->state) {
     case RB_STATE_BOOT:
@@ -518,5 +628,21 @@ void game_render(const RbGame *g)
 
     default:
         break;
+    }
+    if (settings_open()) {
+        /* Quiet band on the settings screen, between the option rows. */
+        sys_draw_text(52, 228,
+                      g_modern ? "Palette: Modern Palette"
+                               : "Palette: Original Palette",
+                      0xFFFFFFFFu);
+        sys_draw_text(52, 238,
+                      g_training ? "Training Mode: On" : "Training Mode: Off",
+                      0xFFFFFFFFu);
+        /* 0xFFFF00FF is yellow. The low byte is alpha and the font has
+         * no lowercase, so the line reads as capitals. */
+        sys_draw_text(52, 248, "F5 palette   F6 training", 0xFFFF00FFu);
+    }
+    if (g_training && g->state == RB_STATE_PLAY) {
+        sys_draw_text(8, 8, "TRAINING", 0x40FF40FFu);
     }
 }

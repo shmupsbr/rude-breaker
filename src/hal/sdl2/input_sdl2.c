@@ -248,6 +248,12 @@ void sys_read_input(RbInput *out)
     if (keys[SDL_SCANCODE_4]) {
         out->buttons |= RB_BTN_4;
     }
+    if (keys[SDL_SCANCODE_F5]) {
+        out->buttons |= RB_BTN_F5;
+    }
+    if (keys[SDL_SCANCODE_F6]) {
+        out->buttons |= RB_BTN_F6;
+    }
     poll_pad(out);
     out->buttons = (uint16_t)(out->buttons | held_from_env());
     if (out->buttons & RB_BTN_UP) {

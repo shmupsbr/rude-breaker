@@ -67,6 +67,14 @@ unsigned vm_vsync_count(const RbVm *vm);
 void vm_ack_boot(RbVm *vm);
 void vm_set_hiscore(RbVm *vm, uint32_t score);
 void vm_set_input(RbVm *vm, const RbInput *in);
+/* Host options. Training skips player-body damage and blocks the
+ * ranking insert. The grade is the modern palette at present time.
+ * Neither flag is cleared by a stage reset. */
+void vm_set_training(RbVm *vm, int on);
+int  vm_training(const RbVm *vm);
+void vm_set_grade(RbVm *vm, int modern);
+/* 1 when two JIS characters sit next to each other in the text layer. */
+int  vm_text_has_jis(const RbVm *vm, uint16_t a, uint16_t b);
 void vm_frame(RbVm *vm);
 
 /* Keep the player ship (id 0x0012) above the hit that starts the
@@ -74,6 +82,10 @@ void vm_frame(RbVm *vm);
 void vm_sustain_ship(RbVm *vm);
 uint8_t vm_global_u8(const RbVm *vm, uint8_t field);
 uint16_t vm_global_u16(const RbVm *vm, uint8_t field);
+/* Expanded playfield palette, red/green/blue. */
+void vm_palette_rgb(const RbVm *vm, uint8_t rgb[16][3]);
+/* Live entities whose draw byte [+0x4F] equals attr. */
+int vm_count_attr(const RbVm *vm, uint8_t attr);
 /* Current instruction of the first live entity spawned at origin, or 0. */
 uint16_t vm_origin_ip(const RbVm *vm, uint16_t origin);
 /* Print live entities grouped by spawn address. */

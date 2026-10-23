@@ -38,6 +38,13 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
 void gfx_palette_abs(RbGfx *gfx, const uint8_t *p, uint32_t n);
 void gfx_palette_delta(RbGfx *gfx, const uint8_t *p, uint32_t n);
 void gfx_palette_step(RbGfx *gfx, uint8_t shift);
+/* 4-bit DAC sample expanded the way present does (level * 17).
+ * Channel 0 is red, 1 green, 2 blue. This is the original PC-98
+ * color, before the optional modern grade. */
+void gfx_palette_rgb(const RbGfx *gfx, uint8_t rgb[16][3]);
+/* 0 = original 4-bit lookup (level * 17). 1 = the measured modern
+ * grade, applied to the same 4-bit sample so a fade still tracks. */
+void gfx_set_grade(int modern);
 /* Loader 0x6C0B. The analog DAC reads the palette; it does not
  * store the sampled level back into the fade words. */
 void gfx_dac_flush(RbGfx *gfx);

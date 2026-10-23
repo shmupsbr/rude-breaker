@@ -498,6 +498,9 @@ static void blit_sprite_smooth(RbGfx *gfx, const uint8_t *src, uint32_t len,
                                int px, int shift, uint8_t attr, int world_y,
                                int scroll76, int speed, int blank_sides)
 {
+    /* attr 2 is the one-frame hit flash. The score native stores 2 in
+     * the draw byte when HP changes, and the next call replaces it.
+     * The mono plane is painted with palette index 11. */
     int mono = (attr == 2);
     int bright = (attr & 1u) == 0u;
     int wide = 16 + (shift ? 8 : 0);
@@ -760,6 +763,156 @@ static int dac_level(int16_t w)
         return 15;
     }
     return (int)(((uint16_t)w & 0xFFu) >> 4);
+}
+
+/* Modern grade, one row per settled palette the stages actually hold.
+ * src is the 4-bit PC-98 level. A 0 modern channel with a 0 src channel
+ * is black; graded entries are marked in `use` (bit per index). Indexes
+ * that are not marked stay on level * 17. Fades scale the modern color
+ * by the current level over that settled level, per channel, so the
+ * picture still fades instead of popping. It is not one channel curve:
+ * stage 4 index 0 red level 3 becomes 32, and index 1 red level 3 stays 51. */
+#define GRADE_N 6
+static const uint8_t GRADE_SRC[GRADE_N][16][3] = {
+    { /* stage 1 */
+        {2,1,2},{9,4,3},{3,4,4},{4,5,6},{6,5,5},{8,7,7},{13,9,4},{11,11,10},
+        {9,4,4},{0,0,0},{8,7,10},{14,6,6},{15,12,7},{8,5,12},{12,12,15},{15,15,15}
+    },
+    { /* stage 2 */
+        {2,1,1},{12,10,5},{4,4,4},{7,5,5},{9,7,6},{11,9,9},{10,3,4},{12,11,11},
+        {9,4,4},{0,0,0},{8,7,10},{14,6,6},{15,12,7},{8,5,12},{12,12,15},{15,15,15}
+    },
+    { /* stage 3 */
+        {2,3,2},{11,8,2},{7,8,7},{10,10,8},{4,5,4},{3,4,5},{5,5,6},{6,7,8},
+        {9,4,4},{0,0,0},{8,7,10},{14,6,6},{15,12,7},{8,5,12},{12,12,15},{15,15,15}
+    },
+    { /* stage 4 */
+        {3,3,2},{3,4,3},{12,2,2},{4,5,4},{4,6,6},{6,8,7},{9,9,7},{10,10,9},
+        {9,4,4},{0,0,0},{8,7,10},{14,6,6},{15,12,7},{8,5,12},{12,12,15},{15,15,15}
+    },
+    { /* stage 5 */
+        {3,3,3},{3,4,5},{12,2,2},{5,5,6},{6,7,8},{9,10,9},{11,11,9},{12,12,11},
+        {9,4,4},{0,0,0},{8,7,10},{14,6,6},{15,12,7},{8,5,12},{12,12,15},{15,15,15}
+    },
+    { /* stage 5 boss */
+        {3,3,3},{11,6,3},{12,2,2},{11,8,5},{12,11,10},{9,10,9},{11,11,9},{12,12,11},
+        {9,4,4},{0,0,0},{8,7,10},{14,6,6},{15,12,7},{8,5,12},{12,12,15},{15,15,15}
+    }
+};
+/* Bit i set: index i uses GRADE_DST instead of level * 17. */
+static const uint16_t GRADE_USE[GRADE_N] = {
+    (1u << 0) | (1u << 10) | (1u << 11),
+    (1u << 0) | (1u << 10) | (1u << 11),
+    (1u << 0) | (1u << 6) | (1u << 7) | (1u << 10) | (1u << 11),
+    (1u << 0) | (1u << 4) | (1u << 5) | (1u << 6) | (1u << 10) | (1u << 11),
+    (1u << 1) | (1u << 3) | (1u << 4) | (1u << 10) | (1u << 11),
+    (1u << 1) | (1u << 3) | (1u << 4) | (1u << 10) | (1u << 11)
+};
+static const uint8_t GRADE_DST[GRADE_N][16][3] = {
+    { {12,1,13},{0},{0},{0},{0},{0},{0},{0},{0},{0},{125,110,162},{231,92,88} },
+    { {11,1,1},{0},{0},{0},{0},{0},{0},{0},{0},{0},{125,110,162},{231,92,88} },
+    { {36,48,48},{0},{0},{0},{0},{0},{77,86,105},{86,104,124},{0},{0},{125,110,162},{231,92,88} },
+    { {32,48,32},{0},{0},{0},{53,86,88},{113,129,105},{160,161,125},{0},{0},{0},{125,110,162},{231,92,88} },
+    { {0},{31,49,69},{0},{69,69,87},{86,104,124},{0},{0},{0},{0},{0},{125,110,162},{231,92,88} },
+    { {0},{176,88,29},{0},{185,150,113},{198,179,160},{0},{0},{0},{0},{0},{125,110,162},{231,92,88} }
+};
+
+static int g_modern;
+
+void gfx_set_grade(int modern)
+{
+    g_modern = modern ? 1 : 0;
+}
+
+/* Which settled palette the current DAC levels are fading toward.
+ * -1 keeps every index on the original lookup (title, intro). */
+static int grade_scene(const RbGfx *gfx)
+{
+    int level[16][3];
+    int idx;
+    int ch;
+    int best = -1;
+    int best_dist = 0x7fffffff;
+    int scene;
+
+    if (!gfx) {
+        return -1;
+    }
+    for (idx = 0; idx < 16; idx++) {
+        for (ch = 0; ch < 3; ch++) {
+            level[idx][ch] = dac_level(gfx->pal[idx][ch]);
+        }
+    }
+    for (scene = 0; scene < GRADE_N; scene++) {
+        int dist = 0;
+        int ok = 1;
+
+        for (idx = 0; idx < 16 && ok; idx++) {
+            for (ch = 0; ch < 3; ch++) {
+                int src = GRADE_SRC[scene][idx][ch];
+                int cur = level[idx][ch];
+
+                if (cur > src) {
+                    ok = 0;
+                    break;
+                }
+                dist += src - cur;
+            }
+        }
+        if (ok && dist < best_dist) {
+            best_dist = dist;
+            best = scene;
+        }
+    }
+    return best;
+}
+
+static void expand_index(int scene, int idx, int r4, int g4, int b4,
+                         int *R, int *G, int *B)
+{
+    int ch;
+    int cur[3];
+    int out[3];
+
+    cur[0] = r4;
+    cur[1] = g4;
+    cur[2] = b4;
+    if (scene < 0 || idx < 0 || idx > 15 ||
+        (GRADE_USE[scene] & (1u << idx)) == 0) {
+        *R = r4 * 17;
+        *G = g4 * 17;
+        *B = b4 * 17;
+        return;
+    }
+    for (ch = 0; ch < 3; ch++) {
+        int src = GRADE_SRC[scene][idx][ch];
+
+        if (src <= 0 || cur[ch] >= src) {
+            out[ch] = GRADE_DST[scene][idx][ch];
+        } else {
+            out[ch] = (GRADE_DST[scene][idx][ch] * cur[ch]) / src;
+        }
+    }
+    *R = out[0];
+    *G = out[1];
+    *B = out[2];
+}
+
+void gfx_palette_rgb(const RbGfx *gfx, uint8_t rgb[16][3])
+{
+    int idx;
+    int ch;
+
+    if (!rgb) {
+        return;
+    }
+    for (idx = 0; idx < 16; idx++) {
+        for (ch = 0; ch < 3; ch++) {
+            int v = gfx ? dac_level(gfx->pal[idx][ch]) : 0;
+
+            rgb[idx][ch] = (uint8_t)(v * 17);
+        }
+    }
 }
 
 void gfx_palette_step(RbGfx *gfx, uint8_t shift)
@@ -1511,6 +1664,12 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
             scroll -= RB_GFX_H;
         }
     }
+    /* One scene for the whole frame. The grade scales each palette
+     * index from that scene's settled 4-bit color, so a fade still
+     * tracks the script. Original mode leaves scene at -1. */
+    {
+    int scene = g_modern ? grade_scene(gfx) : -1;
+
     for (y = 0; y < RB_GFX_H; y++) {
         int src = y + scroll;
         int x;
@@ -1550,14 +1709,24 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
             if (tail && idx == gfx->bg[at]) {
                 idx = gfx->hold[at];
             }
-            for (ch = 0; ch < 3; ch++) {
-                int v = dac_level(gfx->pal[idx][ch]);
+            {
+                int lv[3];
+                int rgb[3];
 
-                px |= (uint32_t)(v * 17) << (8 + (2 - ch) * 8);
+                for (ch = 0; ch < 3; ch++) {
+                    lv[ch] = dac_level(gfx->pal[idx][ch]);
+                }
+                /* pal[][0] is red, [1] green, [2] blue, matching ports AC/AA/AE.
+                 * The grade, when on, replaces level*17 after the DAC sample. */
+                expand_index(scene, (int)idx, lv[0], lv[1], lv[2],
+                             &rgb[0], &rgb[1], &rgb[2]);
+                px |= (uint32_t)rgb[0] << 24;
+                px |= (uint32_t)rgb[1] << 16;
+                px |= (uint32_t)rgb[2] << 8;
             }
-            /* pal[][0] is red, [1] green, [2] blue, matching ports AC/AA/AE. */
             rgba[(size_t)y * (size_t)w + (size_t)x] = px;
         }
+    }
     }
     if (blank_sides) {
         int row;

@@ -92,6 +92,9 @@ struct RbVm {
     /* Set when opcode 0x0D loads the next stage. The host holds the
      * picture; the VM itself keeps running. */
     int stage_gap;
+    /* Host training switch. Not part of the script state, so a stage
+     * reset leaves it alone. */
+    int training;
     RbGfx *gfx;
 };
 
@@ -1311,6 +1314,19 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
     int steps = 0;
 
     if (!cs) {
+        return;
+    }
+    /* Ranking qualify at 0x91AF. The caller treats E0 >= 10 as "this
+     * run does not enter the table" and jumps back to the title, so
+     * name entry never starts. 0x9213 is the insert that would write
+     * the score into the rank block. Training does neither. The port
+     * does not write RBRANK.DAT; skipping the insert keeps the loaded
+     * table unchanged for this run. */
+    if (vm->training && ip0 == 0x91AFu) {
+        vm->g[0xE0] = 0xFFu;
+        return;
+    }
+    if (vm->training && ip0 == 0x9213u) {
         return;
     }
     memset(r, 0, sizeof r);
@@ -2701,6 +2717,24 @@ static void note_miss(RbVm *vm, int ent, uint8_t op, uint16_t ip)
     vm->mode[ent] = MODE_FOREVER;
 }
 
+/* Stage chunks 2..6 spawn the ship at 0x4F6E, the hit proxy at
+ * 0x5641, and the second body at 0x5CF4. Chunk 1's copies are six
+ * bytes later. Those are the scripts whose 0x50 tests hurt the player. */
+static int player_body_origin(uint16_t origin)
+{
+    switch (origin) {
+    case 0x4F6Eu:
+    case 0x5641u:
+    case 0x5CF4u:
+    case 0x4F74u:
+    case 0x5647u:
+    case 0x5CFAu:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static void run_fetch(RbVm *vm, int ent)
 {
     int steps = 0;
@@ -3408,6 +3442,20 @@ static void run_fetch(RbVm *vm, int ent)
             int hit = 0;
 
             di = (uint16_t)(di + 2u);
+            /* Player body scripts test enemy shots and collisions with
+             * mask 0x00C0 or 0x00E0 and then subtract from the target's
+             * HP word. Training treats that test as a miss: the ship's
+             * own counter is not decremented, so there is no weapon
+             * loss and no death. Item scripts and player shots use
+             * other origins and still run. */
+            if (vm->training && player_body_origin(vm->origin[ent]) &&
+                (mask == 0x00C0u || mask == 0x00E0u) &&
+                rd8(vm, ent, di) == 0x02u &&
+                rd8(vm, ent, (uint16_t)(di + 1u)) == 0x3Cu) {
+                skip_subops(vm, ent, &di);
+                su16(vm, ent, 8, di);
+                break;
+            }
             start = di;
             for (i = 0; i < ENT_N; i++) {
                 uint16_t t = eu16(vm, i, 0);
@@ -3722,6 +3770,55 @@ void vm_set_hiscore(RbVm *vm, uint32_t score)
     sgu16(vm, 0x8C, (uint16_t)(score >> 16));
 }
 
+void vm_set_training(RbVm *vm, int on)
+{
+    if (!vm) {
+        return;
+    }
+    vm->training = on ? 1 : 0;
+}
+
+int vm_training(const RbVm *vm)
+{
+    return vm && vm->training;
+}
+
+void vm_set_grade(RbVm *vm, int modern)
+{
+    (void)vm;
+    gfx_set_grade(modern);
+}
+
+int vm_text_has_jis(const RbVm *vm, uint16_t a, uint16_t b)
+{
+    uint8_t a0;
+    uint8_t a1;
+    uint8_t b0;
+    uint8_t b1;
+    int row;
+
+    if (!vm) {
+        return 0;
+    }
+    a0 = (uint8_t)(((a >> 8) & 0x7Fu) - 0x20u);
+    a1 = (uint8_t)(a & 0xFFu);
+    b0 = (uint8_t)(((b >> 8) & 0x7Fu) - 0x20u);
+    b1 = (uint8_t)(b & 0xFFu);
+    for (row = 0; row < 25; row++) {
+        int col;
+
+        for (col = 0; col < 76; col += 2) {
+            unsigned off = (unsigned)row * 0xA0u + (unsigned)col * 2u;
+
+            if (vm->text[off] == a0 && vm->text[off + 1] == a1 &&
+                vm->text[off + 4] == b0 && vm->text[off + 5] == b1) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 void vm_set_input(RbVm *vm, const RbInput *in)
 {
     uint16_t held;
@@ -3772,6 +3869,30 @@ uint16_t vm_global_u16(const RbVm *vm, uint8_t field)
         return 0;
     }
     return (uint16_t)vm->g[field] | ((uint16_t)vm->g[field + 1u] << 8);
+}
+
+void vm_palette_rgb(const RbVm *vm, uint8_t rgb[16][3])
+{
+    if (!rgb) {
+        return;
+    }
+    gfx_palette_rgb(vm ? vm->gfx : NULL, rgb);
+}
+
+int vm_count_attr(const RbVm *vm, uint8_t attr)
+{
+    int i;
+    int n = 0;
+
+    if (!vm) {
+        return 0;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        if (eu16(vm, i, 0) != 0 && eu8(vm, i, 0x4F) == attr) {
+            n++;
+        }
+    }
+    return n;
 }
 
 uint16_t vm_origin_ip(const RbVm *vm, uint16_t origin)

@@ -115,6 +115,10 @@ typedef struct RB_PACKED RbInput {
 #define RB_BTN_2        0x0200u
 #define RB_BTN_3        0x0400u
 #define RB_BTN_4        0x0800u
+/* Host-only. The VM does not copy these into the PC-98 game word.
+ * F5 cycles the palette grade, F6 toggles training, on the settings screen. */
+#define RB_BTN_F5       0x1000u
+#define RB_BTN_F6       0x2000u
 
 /* ---- entities (shared layout for Phase 1 and Phase 2) ------------------- */
 
