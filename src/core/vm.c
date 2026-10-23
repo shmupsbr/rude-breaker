@@ -95,6 +95,8 @@ struct RbVm {
     /* Host training switch. Not part of the script state, so a stage
      * reset leaves it alone. */
     int training;
+    /* Set when native 0x9213 registers a score. Training never sets it. */
+    int rank_commit;
     RbGfx *gfx;
 };
 
@@ -1359,10 +1361,9 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
     }
     /* Ranking qualify at 0x91AF. The caller treats E0 >= 10 as "this
      * run does not enter the table" and jumps back to the title, so
-     * name entry never starts. 0x9213 is the insert that would write
-     * the score into the rank block. Training does neither. The port
-     * does not write RBRANK.DAT; skipping the insert keeps the loaded
-     * table unchanged for this run. */
+     * name entry never starts. 0x9213 writes the score into the rank
+     * block. Training does neither, and the host does not write
+     * RBRANK.DAT for that run. */
     if (vm->training && ip0 == 0x91AFu) {
         vm->g[0xE0] = 0xFFu;
         return;
@@ -2897,6 +2898,11 @@ static void run_fetch(RbVm *vm, int ent)
             a = rd16(vm, ent, di);
             su16(vm, ent, 8, (uint16_t)(di + 2u));
             x86_native(vm, ent, a);
+            /* Name entry calls 0x9128 then 0x9213. The insert is the
+             * moment the original has a finished record. */
+            if (a == 0x9213u && !vm->training) {
+                vm->rank_commit = 1;
+            }
             if (eu16(vm, ent, 0) == 0) {
                 return;
             }
@@ -3713,6 +3719,7 @@ void vm_reset_boot(RbVm *vm)
      * middle step writes this same pair. */
     sgu16(vm, 0xB2, 2);
     vm->g[0xC9] = 7;
+    vm->rank_commit = 0;
     memset(vm->rank, 0, sizeof vm->rank);
     memset(vm->text, 0, sizeof vm->text);
     vm->text_di = 0;
@@ -3774,6 +3781,7 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
     sgu16(vm, 0x60, 2);
     sgu16(vm, 0xB2, 2);
     vm->g[0xC9] = 7;
+    vm->rank_commit = 0;
     /* Chunk 1's pre-stage script (0x9507) arms the mode byte before it
      * loads a stage. The stage chunk never writes it back to 1, and the
      * ship native ignores the mode button while the byte is still 0.
@@ -3800,6 +3808,131 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
     vm->cof[0] = (uint8_t)chunk;
     vm->origin[0] = ip;
     vm->mode[0] = MODE_FETCH;
+}
+
+/* Game image 0x1948, copied by loader 0x1648 when RBRANK.DAT is absent.
+ * Ten records, 100000 down to 10000. The name cells are 01 32. The
+ * first three records are stage 2 and the rest are stage 1. */
+static void rank_default_records(uint8_t *dst)
+{
+    int i;
+
+    for (i = 0; i < 10; i++) {
+        uint8_t *rec = dst + i * 22;
+        uint32_t score = 100000u - (uint32_t)i * 10000u;
+        int k;
+
+        write_u16_le(rec, (uint16_t)score);
+        write_u16_le(rec + 2u, (uint16_t)(score >> 16));
+        for (k = 0; k < 8; k++) {
+            rec[4 + k * 2] = 0x01u;
+            rec[5 + k * 2] = 0x32u;
+        }
+        rec[0x14] = (i < 3) ? 2u : 1u;
+        rec[0x15] = 0;
+    }
+}
+
+static void rank_default_file(uint8_t file[230])
+{
+    memset(file, 0, 230);
+    write_u16_le(file + 2, 2);
+    write_u16_le(file + 4, 2);
+    file[6] = 1;
+    file[7] = 7;
+    rank_default_records(file + 10);
+}
+
+static void rank_apply_file(RbVm *vm, const uint8_t *file)
+{
+    uint16_t flags = (uint16_t)(read_u16_le(file) & 0x7FFFu);
+
+    memcpy(vm->rank, file + 10, 220);
+    if (RANK_SIZE > 220u) {
+        memset(vm->rank + 220, 0, RANK_SIZE - 220u);
+    }
+    /* Loader 0x16C6. Bit 15 of the debug word is cleared on the way in. */
+    sgu16(vm, 0x72, flags);
+    sgu16(vm, 0xB2, read_u16_le(file + 2));
+    sgu16(vm, 0x62, read_u16_le(file + 4));
+    set_g8(vm, 0xC7, file[6]);
+    set_g8(vm, 0xC9, file[7]);
+    set_g8(vm, 0xB9, (uint8_t)(vm->g[0xB9] | file[8]));
+    set_g8(vm, 0xC0, file[9]);
+    set_g8(vm, 0xC1, 0);
+    sgu16(vm, 0x8A, read_u16_le(vm->rank));
+    sgu16(vm, 0x8C, read_u16_le(vm->rank + 2));
+}
+
+void vm_rank_load(RbVm *vm, const uint8_t *bytes, size_t n)
+{
+    uint8_t file[230];
+
+    if (!vm) {
+        return;
+    }
+    if (bytes && n == 230u) {
+        memcpy(file, bytes, 230);
+    } else {
+        rank_default_file(file);
+    }
+    rank_apply_file(vm, file);
+    vm->rank_commit = 0;
+}
+
+void vm_rank_export(const RbVm *vm, uint8_t *out)
+{
+    if (!out) {
+        return;
+    }
+    if (!vm) {
+        rank_default_file(out);
+        return;
+    }
+    /* Save side of 0x15B6. The debug word is stored whole. */
+    memset(out, 0, 230);
+    write_u16_le(out, gu16(vm, 0x72));
+    write_u16_le(out + 2, gu16(vm, 0xB2));
+    write_u16_le(out + 4, gu16(vm, 0x62));
+    out[6] = vm->g[0xC7];
+    out[7] = vm->g[0xC9];
+    out[8] = (uint8_t)(vm->g[0xB9] & 0x04u);
+    out[9] = vm->g[0xC0];
+    memcpy(out + 10, vm->rank, 220);
+}
+
+int vm_take_rank_commit(RbVm *vm)
+{
+    int pending;
+
+    if (!vm) {
+        return 0;
+    }
+    pending = vm->rank_commit;
+    vm->rank_commit = 0;
+    return pending;
+}
+
+uint16_t vm_peak_hp(const RbVm *vm)
+{
+    int i;
+    uint16_t peak = 0;
+
+    if (!vm) {
+        return 0;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        uint16_t hp;
+
+        if (eu16(vm, i, 0) == 0) {
+            continue;
+        }
+        hp = eu16(vm, i, 0x3C);
+        if (hp > peak) {
+            peak = hp;
+        }
+    }
+    return peak;
 }
 
 void vm_set_hiscore(RbVm *vm, uint32_t score)

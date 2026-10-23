@@ -35,6 +35,8 @@ typedef struct RbGame {
 } RbGame;
 
 void game_init(RbGame *g, const RbDisk *disk);
+/* Write RBRANK.DAT the way the original quit path does. Training skips it. */
+void game_shutdown(RbGame *g);
 void game_update(RbGame *g);
 void game_render(const RbGame *g);
 /* 1 once, after an update that loaded the next stage. */

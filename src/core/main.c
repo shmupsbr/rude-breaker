@@ -172,6 +172,7 @@ int main(int argc, char **argv)
         sys_pace_overlay_draw();
         sys_present();
     }
+    game_shutdown(&game);
     sys_pace_shutdown();
 
     if (game_data_missing()) {

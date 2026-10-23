@@ -66,6 +66,15 @@ unsigned vm_vsync_count(const RbVm *vm);
 /* Clear the "header 0 was loaded" flag after the host has noticed it. */
 void vm_ack_boot(RbVm *vm);
 void vm_set_hiscore(RbVm *vm, uint32_t score);
+/* RBRANK.DAT is 10 bytes of config plus 10 records of 22. A buffer
+ * that is not exactly 230 bytes installs the loader's default table
+ * (100000 down to 10000, C9 = 7, B2 = 2). */
+void vm_rank_load(RbVm *vm, const uint8_t *bytes, size_t n);
+void vm_rank_export(const RbVm *vm, uint8_t *out);
+/* 1 once, after native 0x9213 registers a score outside training. */
+int  vm_take_rank_commit(RbVm *vm);
+/* Highest live entity hit-point word. */
+uint16_t vm_peak_hp(const RbVm *vm);
 void vm_set_input(RbVm *vm, const RbInput *in);
 /* Host options. Training skips player-body damage and blocks the
  * ranking insert. The grade is the modern palette at present time.

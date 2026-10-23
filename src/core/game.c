@@ -83,6 +83,119 @@ static void load_cfg(const RbGame *g)
     fclose(fp);
 }
 
+static uint8_t  g_rank_c9;
+static uint16_t g_rank_b2;
+static uint16_t g_rank_stock;
+
+static void rank_path(const RbGame *g, char *out, size_t n)
+{
+    char cfg[600];
+    char *slash;
+
+    cfg_path(g, cfg, sizeof cfg);
+    slash = strrchr(cfg, '/');
+    if (!slash) {
+        snprintf(out, n, "%s", "RBRANK.DAT");
+        return;
+    }
+    *slash = 0;
+    snprintf(out, n, "%s/RBRANK.DAT", cfg);
+}
+
+static void rank_snapshot(void)
+{
+    if (!g_vm) {
+        return;
+    }
+    g_rank_c9 = vm_global_u8(g_vm, 0xC9);
+    g_rank_b2 = vm_global_u16(g_vm, 0xB2);
+    g_rank_stock = vm_global_u16(g_vm, 0x62);
+}
+
+static int rank_header_changed(void)
+{
+    if (!g_vm) {
+        return 0;
+    }
+    return vm_global_u8(g_vm, 0xC9) != g_rank_c9 ||
+           vm_global_u16(g_vm, 0xB2) != g_rank_b2 ||
+           vm_global_u16(g_vm, 0x62) != g_rank_stock;
+}
+
+/* Identical bytes stay on disk. A training run never gets here. */
+static void rank_flush(const RbGame *g)
+{
+    char path[600];
+    uint8_t fresh[230];
+    uint8_t old[230];
+    FILE *fp;
+    size_t n = 0;
+
+    if (!g || !g_vm || g_training) {
+        return;
+    }
+    vm_rank_export(g_vm, fresh);
+    rank_path(g, path, sizeof path);
+    fp = fopen(path, "rb");
+    if (fp) {
+        n = fread(old, 1, sizeof old, fp);
+        if (n == sizeof old && fgetc(fp) != EOF) {
+            n = 0;
+        }
+        fclose(fp);
+        if (n == sizeof old && memcmp(old, fresh, sizeof fresh) == 0) {
+            rank_snapshot();
+            return;
+        }
+    }
+    fp = fopen(path, "wb");
+    if (!fp) {
+        return;
+    }
+    if (fwrite(fresh, 1, sizeof fresh, fp) == sizeof fresh) {
+        rank_snapshot();
+    }
+    fclose(fp);
+}
+
+static void rank_load(RbGame *g)
+{
+    char path[600];
+    uint8_t buf[230];
+    FILE *fp;
+    size_t n = 0;
+    int exact = 0;
+
+    rank_path(g, path, sizeof path);
+    fp = fopen(path, "rb");
+    if (fp) {
+        n = fread(buf, 1, sizeof buf, fp);
+        exact = (n == sizeof buf && fgetc(fp) == EOF);
+        fclose(fp);
+    }
+    if (exact) {
+        vm_rank_load(g_vm, buf, n);
+    } else {
+        vm_rank_load(g_vm, NULL, 0);
+    }
+    rank_snapshot();
+    if (!exact) {
+        rank_flush(g);
+    }
+}
+
+static void rank_sync(const RbGame *g)
+{
+    int commit = g_vm && vm_take_rank_commit(g_vm);
+
+    if (!g_vm || g_training) {
+        return;
+    }
+    if (commit || rank_header_changed()) {
+        rank_flush(g);
+    }
+}
+
 static void save_cfg(const RbGame *g)
 {
     char path[600];
@@ -485,7 +598,13 @@ void game_init(RbGame *g, const RbDisk *disk)
     }
 
     vm_reset_boot(g_vm);
-    vm_set_hiscore(g_vm, g->hiscore);
+    rank_load(g);
+    {
+        RbVmInfo info;
+
+        vm_info(g_vm, &info);
+        g->hiscore = info.hiscore;
+    }
     load_cfg(g);
     apply_host_options();
     g->state = RB_STATE_TITLE;
@@ -493,6 +612,11 @@ void game_init(RbGame *g, const RbDisk *disk)
         fprintf(stderr, "smoke: title\n");
     }
     smoke_trace(g, "boot");
+}
+
+void game_shutdown(RbGame *g)
+{
+    rank_flush(g);
 }
 
 int game_data_missing(void)
@@ -670,6 +794,7 @@ void game_update(RbGame *g)
 
     g->input.buttons = user_buttons;
     host_menu_commit(g, swallowed);
+    rank_sync(g);
     g->input_prev = g->input;
     watch_smoke(g);
     if (env_on("RUDEBR_TRACE") && (g->frame == 1 || (g->frame % 120u) == 0)) {
