@@ -104,6 +104,8 @@ struct RbVm {
     uint16_t pause_blink;
     uint8_t pause_cells[20];
     uint8_t pause_attr[20];
+    /* 1 on a page-flip iteration. Frame skip leaves this 0. */
+    int show_frame;
     RbGfx *gfx;
 };
 
@@ -2940,12 +2942,11 @@ static void run_fetch(RbVm *vm, int ent)
             break;
         case 0x10:
             /* Menu entries are `10 01 00`, `10 02 00`, and `10 03 00`.
-             * On the PC-98 the same immediate is the vsync wait and the
-             * stock field. The host tick is locked to the capture, so
-             * only the stock field follows the key. [bp+0x60] stays at
-             * the loader's 2 (opcode 0x0F copies it once at boot, and
-             * opcode 0x0E stores 2 again). */
+             * The same immediate is the vsync wait [bp+0x60] and the
+             * stock field [bp+0x62]. The host period is N/2 * 3/92 s,
+             * so count 2 stays on the capture lock. */
             a = rd16(vm, ent, di);
+            sgu16(vm, 0x60, a);
             sgu16(vm, 0x62, a);
             su16(vm, ent, 8, (uint16_t)(di + 2u));
             break;
@@ -4101,11 +4102,43 @@ void vm_set_input(RbVm *vm, const RbInput *in)
 {
     uint16_t held;
     uint16_t edge;
+    uint16_t flags;
 
     if (!vm) {
         return;
     }
     held = held_from(in);
+    flags = gu16(vm, 0x72);
+    /* A connected pad is the port's stand-in for the READJS driver.
+     * The joystick row will not set bit 0x400 until B9 bit 3 is on. */
+    if (in && in->pad) {
+        vm->g[0xB9] = (uint8_t)(vm->g[0xB9] | 0x08u);
+    }
+    if (in && (flags & 0x0400u)) {
+        RbInput pad;
+
+        memset(&pad, 0, sizeof pad);
+        pad.buttons = (uint16_t)(in->pad_buttons &
+                                 (RB_BTN_UP | RB_BTN_DOWN | RB_BTN_LEFT |
+                                  RB_BTN_RIGHT | RB_BTN_A | RB_BTN_B | RB_BTN_C));
+        held = (uint16_t)(held | held_from(&pad));
+    }
+    /* Poll 0x7997. Bit 0x200 exchanges fire and mode. */
+    if (flags & 0x0200u) {
+        uint16_t fire = (uint16_t)(held & 0x0010u);
+        uint16_t mode = (uint16_t)(held & 0x0020u);
+
+        held = (uint16_t)(held & (uint16_t)~0x0030u);
+        if (fire) {
+            held = (uint16_t)(held | 0x0020u);
+        }
+        if (mode) {
+            held = (uint16_t)(held | 0x0010u);
+        }
+    }
+    if (in) {
+        vm->g[0xC2] = in->chord;
+    }
     edge = (uint16_t)((~vm->prev_held | 0x0040u) & held);
     vm->held = held;
     sgu16(vm, 0x6C, held);
@@ -4230,10 +4263,176 @@ void vm_debug_origins(const RbVm *vm)
     }
 }
 
+/* 0xD62, only while the pause bit is already set. The sequence is
+ * N-E-K-O-C-O in [bp+0xC2] (bits 0x08, 0x02, 0x04, 0x10, 0x01, 0x10).
+ * The last step sets debug bit 0x800. A wrong key clears the progress.
+ * Once the bit is on, any chord key or a 1..4 edge clears it again. */
+static void debug_chord(RbVm *vm)
+{
+    uint8_t c3 = vm->g[0xC3];
+    uint8_t c2 = vm->g[0xC2];
+
+    if (gu16(vm, 0x72) & 0x0800u) {
+        if ((gu16(vm, 0x6E) & 0x3F00u) != 0 || c2 != 0) {
+            sgu16(vm, 0x72, (uint16_t)(gu16(vm, 0x72) & 0xF7FFu));
+        }
+        return;
+    }
+    if (c3 & 0x10u) {
+        if (c2 & 0x10u) {
+            vm->g[0xC3] = 0;
+            sgu16(vm, 0x72, (uint16_t)(gu16(vm, 0x72) | 0x0800u));
+            return;
+        }
+    } else if (c3 & 0x08u) {
+        if (c2 & 0x01u) {
+            vm->g[0xC3] = (uint8_t)(c3 | 0x10u);
+            return;
+        }
+    } else if (c3 & 0x04u) {
+        if (c2 & 0x10u) {
+            vm->g[0xC3] = (uint8_t)(c3 | 0x08u);
+            return;
+        }
+    } else if (c3 & 0x02u) {
+        if (c2 & 0x04u) {
+            vm->g[0xC3] = (uint8_t)(c3 | 0x04u);
+            return;
+        }
+    } else if (c3 & 0x01u) {
+        if (c2 & 0x02u) {
+            vm->g[0xC3] = (uint8_t)(c3 | 0x02u);
+            return;
+        }
+    } else if (c2 & 0x08u) {
+        vm->g[0xC3] = (uint8_t)(c3 | 0x01u);
+        return;
+    }
+    if (c2 != 0) {
+        vm->g[0xC3] = 0;
+    }
+}
+
+/* 0xCE6. Escape toggles pause. The other keys run only after the
+ * NEKOCO chord has set bit 0x800. Key 2 toggles invincible bit 0x0100
+ * (the same bit the INVINCIBLE menu row writes) and sets [bp+0xC4].
+ * Key 3 toggles the debug HUD bit 0x2000. Key 1 held sets bit 0x4000,
+ * which skips the vsync wait. Key 4 sets [bp+0xCC], the ending flag.
+ * Edge bits 0x0100 and 0x0200 are in the routine and are never set by
+ * the keyboard poll. */
+static void apply_debug_keys(RbVm *vm)
+{
+    uint16_t flags = gu16(vm, 0x72);
+    uint16_t edge;
+    uint16_t held;
+
+    if (flags & 0x8000u) {
+        debug_chord(vm);
+        flags = gu16(vm, 0x72);
+    }
+    edge = gu16(vm, 0x6E);
+    held = gu16(vm, 0x6C);
+    if (edge & 0x0080u) {
+        flags = (uint16_t)(flags ^ 0x8000u);
+    }
+    if (flags & 0x0800u) {
+        if (edge & 0x1000u) {
+            flags = (uint16_t)(flags ^ 0x0100u);
+            vm->g[0xC4] = 1;
+        }
+        if (edge & 0x0800u) {
+            flags = (uint16_t)(flags ^ 0x2000u);
+        }
+        if (edge & 0x0100u) {
+            flags = (uint16_t)(flags ^ 0x1000u);
+        }
+        flags = (uint16_t)(flags & 0xBFFFu);
+        if (held & 0x2000u) {
+            flags = (uint16_t)(flags | 0x4000u);
+        }
+    }
+    sgu16(vm, 0x72, flags);
+    if (flags & 0x0800u) {
+        if (edge & 0x0400u) {
+            vm->g[0xCC] = 1;
+        }
+        if (edge & 0x0200u) {
+            uint8_t bl = (uint8_t)((vm->g[0xC0] + 1u) & 3u);
+
+            vm->g[0xC0] = bl;
+            vm->g[0xC1] = bl;
+        }
+    }
+}
+
+static void hud_line(RbVm *vm, int row, const char *text)
+{
+    vm_text_write(vm, 58, row, text, 8, 0xE1u);
+}
+
+/* 0x1717. Two-letter tags and the values the original prints down the
+ * right side. The port's glyphs are two columns wide, so the column
+ * is 58 instead of 72 and the lines still end on the screen. */
+static void debug_hud(RbVm *vm)
+{
+    char line[16];
+    int i;
+    unsigned alive = 0;
+    uint16_t mx;
+    uint16_t my;
+
+    if ((gu16(vm, 0x72) & 0x2000u) == 0) {
+        return;
+    }
+    snprintf(line, sizeof line, "Ic %05u", (unsigned)gu16(vm, 0x5C));
+    hud_line(vm, 0, line);
+    snprintf(line, sizeof line, "Id %05u", (unsigned)gu16(vm, 0x66));
+    hud_line(vm, 1, line);
+    snprintf(line, sizeof line, "Gd %05u", (unsigned)gu16(vm, 0x74));
+    hud_line(vm, 2, line);
+    snprintf(line, sizeof line, "Sp %05u", (unsigned)gu16(vm, 0x82));
+    hud_line(vm, 3, line);
+    snprintf(line, sizeof line, "Mp %05u", (unsigned)gu16(vm, 0x7C));
+    hud_line(vm, 4, line);
+    snprintf(line, sizeof line, "Zd %05u", (unsigned)gu16(vm, 0x68));
+    hud_line(vm, 5, line);
+    snprintf(line, sizeof line, "Ti %02X", (unsigned)vm->g[0xB9]);
+    hud_line(vm, 6, line);
+    mx = (uint16_t)((gu16(vm, 0x96) - 0x48u) & 0xFFF0u);
+    snprintf(line, sizeof line, "Mx %04X", (unsigned)mx);
+    hud_line(vm, 8, line);
+    my = (uint16_t)((gu16(vm, 0x98) - 0x10u + gu16(vm, 0x7A)) >> 4);
+    snprintf(line, sizeof line, "My %04X", (unsigned)my);
+    hud_line(vm, 9, line);
+    snprintf(line, sizeof line, "Fl %05u", (unsigned)vm->g[0xE0]);
+    hud_line(vm, 10, line);
+    for (i = 0; i < ENT_N; i++) {
+        if (eu16(vm, i, 0) != 0) {
+            alive++;
+        }
+    }
+    snprintf(line, sizeof line, "Ac %05u", alive);
+    hud_line(vm, 13, line);
+    snprintf(line, sizeof line, "Ec %05u", (unsigned)gu16(vm, 0xAE));
+    hud_line(vm, 14, line);
+    snprintf(line, sizeof line, "Ew %05u", (unsigned)gu16(vm, 0xB0));
+    hud_line(vm, 15, line);
+    snprintf(line, sizeof line, "Cf %04X", (unsigned)gu16(vm, 0x72));
+    hud_line(vm, 17, line);
+    snprintf(line, sizeof line, "Ts %02X", (unsigned)vm->g[0xB9]);
+    hud_line(vm, 18, line);
+    snprintf(line, sizeof line, "Uc %05u", (unsigned)vm->g[0xDF]);
+    hud_line(vm, 19, line);
+    snprintf(line, sizeof line, "Hk %02X", (unsigned)vm->g[0xC2]);
+    hud_line(vm, 20, line);
+    snprintf(line, sizeof line, "Hs %02X", (unsigned)vm->g[0xC3]);
+    hud_line(vm, 21, line);
+}
+
 /* 0x5EF5: OUT 0x64, then spin until the vsync counter [bp+0x5C] has
  * advanced by [bp+0x60]. That counter is also the RNG seed, so the port
- * does not bump it. The host timer in sys_wait_vblank sleeps the same
- * count. The stores below are what later script reads can observe. */
+ * does not bump it. The host timer sleeps N/2 * 3/92 s for that count.
+ * The stores below are what later script reads can observe. */
 static void hook_5ef5(RbVm *vm)
 {
     uint16_t old = gu16(vm, 0x5E);
@@ -4253,6 +4452,35 @@ static void hook_6c0b(RbVm *vm)
     }
     gfx_dac_flush(vm->gfx);
     vm->g[0xB8] = 0;
+}
+
+/* After the entity scan. C0 == 0 presents every iteration. C0 == N
+ * presents once, stores N in C1, then skips N iterations. Each
+ * iteration still waits, so the logic rate does not change. Bit
+ * 0x4000 skips that wait. The scroll copy 0xFB9 runs only on a
+ * present iteration. Opcode 0x4C already skips compose while C1 != 0. */
+static void frame_present_or_skip(RbVm *vm)
+{
+    uint8_t c0 = vm->g[0xC0];
+    uint8_t c1 = vm->g[0xC1];
+    int skip = 0;
+
+    if (c0 != 0) {
+        if (c1 != 0) {
+            skip = 1;
+            vm->g[0xC1] = (uint8_t)(c1 - 1u);
+        } else {
+            vm->g[0xC1] = c0;
+        }
+    }
+    vm->show_frame = skip ? 0 : 1;
+    if ((gu16(vm, 0x72) & 0x4000u) == 0) {
+        hook_5ef5(vm);
+    }
+    if (!skip) {
+        sgu16(vm, 0x84, gu16(vm, 0x82));
+    }
+    hook_6c0b(vm);
 }
 
 /* 0xBD9 copies ten text cells at column 10, row 23, then blinks PAUSE
@@ -4299,24 +4527,19 @@ void vm_frame(RbVm *vm)
 {
     int i;
     uint16_t flags;
-    int toggled;
 
     if (!vm) {
         return;
     }
-    /* apply_debug_keys 0xCE6. Escape's edge toggles the pause bit
-     * before any entity runs. The other keys in that routine are the
-     * debug group and stay gated off. */
+    /* 0xCE6 then 0xBD9. The chord runs only while already paused.
+     * Escape's edge toggles the pause bit before any entity runs. */
+    apply_debug_keys(vm);
     flags = gu16(vm, 0x72);
-    toggled = (gu16(vm, 0x6E) & 0x0080u) != 0;
-    if (toggled) {
-        flags = (uint16_t)(flags ^ 0x8000u);
-        sgu16(vm, 0x72, flags);
-    }
     if (flags & 0x8000u) {
         pause_save_cells(vm);
         vm->pause_hold = 1;
         pause_draw(vm);
+        vm->show_frame = 1;
         vm->prev_held = vm->held;
         return;
     }
@@ -4324,28 +4547,28 @@ void vm_frame(RbVm *vm)
         pause_restore_cells(vm);
         vm->pause_hold = (vm->held & 0x0080u) != 0;
         if (vm->pause_hold) {
+            vm->show_frame = 1;
             vm->prev_held = vm->held;
             return;
         }
     }
-    /* 0x2FD0 stores AX=2 only when a script is entered. Handlers
-     * return to 0x2FD6, so AL stays in the CPU across opcodes and
-     * across frames. Opcode 0x3B uses that low 3 bits as the span
-     * shift, and 0x3C/0x3D leave the fill color there. Clearing AL
-     * here forced every later 0x3B to shift 0 and dropped the title
-     * overlays. run_entity sets 2 on the first entry only. */
+    /* 0x1717, then the entity scan. 0x2FD0 stores AX=2 only when a
+     * script is entered. Handlers return to 0x2FD6, so AL stays in
+     * the CPU across opcodes and across frames. Opcode 0x3B uses
+     * that low 3 bits as the span shift, and 0x3C/0x3D leave the
+     * fill color there. Clearing AL here forced every later 0x3B to
+     * shift 0 and dropped the title overlays. run_entity sets 2 on
+     * the first entry only. */
+    debug_hud(vm);
     for (i = 0; i < ENT_N; i++) {
         run_entity(vm, i);
     }
-    /* Frame loop 0x09DB / 0x0A01 / 0x0A25. 0x5EF5 is the timer wait.
-     * 0x0FB9 then copies the scroll speed into [bp+0x84]. Map-locked
-     * enemies add that word to Y, so a stage that leaves it at the
-     * init zero never brings them on screen and never clears [bp+0xAE].
-     * The GDC register writes in the same routine are display-only.
+    /* Frame loop 0x0978 / 0x09CE. 0x5EF5 is the timer wait. 0x0FB9
+     * copies the scroll speed into [bp+0x84] on a present iteration.
+     * Map-locked enemies add that word to Y. The GDC register writes
+     * and the PIC mask in the same routine are display hardware.
      * 0x6C0B flushes the staged palette. */
-    hook_5ef5(vm);
-    sgu16(vm, 0x84, gu16(vm, 0x82));
-    hook_6c0b(vm);
+    frame_present_or_skip(vm);
     vm->prev_held = vm->held;
 }
 
@@ -4477,6 +4700,11 @@ unsigned vm_vsync_count(const RbVm *vm)
     }
     n = gu16(vm, 0x60);
     return n == 0u ? 1u : n;
+}
+
+int vm_frame_shown(const RbVm *vm)
+{
+    return vm && vm->show_frame;
 }
 
 void vm_ack_boot(RbVm *vm)

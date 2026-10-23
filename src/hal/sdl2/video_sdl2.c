@@ -355,6 +355,8 @@ void sys_wait_vblank(unsigned counts)
 
 static uint64_t pace_freq;
 static uint64_t pace_period;
+static unsigned pace_count = 2;
+static int pace_skip_wait;
 static uint64_t pace_next;
 static uint64_t pace_origin;
 static uint64_t pace_steps;
@@ -574,6 +576,27 @@ int sys_pace_fast(void)
     return frames_are_fast();
 }
 
+void sys_pace_set_mode(unsigned count, int skip_wait)
+{
+    if (count == 0u) {
+        count = 1u;
+    }
+    if (count > 16u) {
+        count = 16u;
+    }
+    pace_count = count;
+    pace_skip_wait = skip_wait ? 1 : 0;
+    if (pace_freq == 0u) {
+        return;
+    }
+    /* N/2 * 3/92 s. Count 2 is the capture lock. */
+    pace_period = (pace_freq * 3ull * (uint64_t)pace_count) /
+                  ((uint64_t)RB_WAIT_HZ * 2ull);
+    if (pace_period == 0u) {
+        pace_period = 1u;
+    }
+}
+
 int sys_pace_frame_start(void)
 {
     uint64_t now;
@@ -582,6 +605,11 @@ int sys_pace_frame_start(void)
 
     pace_poll_overlay();
     if (frames_are_fast()) {
+        pace_steps++;
+        return 1;
+    }
+    if (pace_skip_wait) {
+        pace_next = 0;
         pace_steps++;
         return 1;
     }

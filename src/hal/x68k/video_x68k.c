@@ -177,6 +177,8 @@ void sys_pace_shutdown(void)
 {
 }
 
+void sys_pace_set_mode(unsigned count, int skip_wait) { (void)count; (void)skip_wait; }
+
 int sys_pace_frame_start(void)
 {
     /* Two vertical blanks stand in for the locked 3/92 s period until

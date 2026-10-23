@@ -75,13 +75,13 @@ static inline void write_u32_le(uint8_t *p, uint32_t v)
 
 #define RB_NATIVE_W     640
 #define RB_NATIVE_H     400
-/* Locked logic period, fitted to the hardware capture: cruise scroll
- * is 4 px per logic frame at about 122 px/s, and a later 2 px stretch
- * is about 60 px/s, so one logic frame is 3/92 s (about 30.7 Hz).
- * The menu word [bp+0x60] is not a scale factor on this period.
- * 120 Hz per count was 40 logic Hz, about 1.3x ahead of the capture.
- * Not the host refresh, and not one PC-98 vertical blank (56.42 Hz):
- * three of those would be about 19 Hz. */
+/* Logic period for menu wait count N ([bp+0x60]) is N/2 * 3/92 s.
+ * N = 2 is the capture lock: cruise scroll is 4 px per logic frame at
+ * about 122 px/s, so one logic frame is 3/92 s (about 30.7 Hz).
+ * Count 1 is about 61 Hz. Count 3 is about 20 Hz. Bit 0x4000 of the
+ * debug word skips that wait. 120 Hz per count was about 1.3x ahead
+ * of the capture. Not the host refresh, and not one PC-98 vertical
+ * blank (56.42 Hz): three of those would be about 19 Hz. */
 #define RB_WAIT_HZ      92
 #define RB_TARGET_FPS   (RB_WAIT_HZ / 3)
 /* Repay at most this many logic frames after a hitch. Past the cap
@@ -98,6 +98,14 @@ typedef struct RB_PACKED RbInput {
     uint16_t buttons;   /* bitfield: see RB_BTN_* */
     int16_t  axis_x;    /* -1, 0, +1 */
     int16_t  axis_y;    /* -1, 0, +1 */
+    /* 1 when a gamepad is attached. The menu ORs this into B9 bit 3
+     * before it will set the joystick flag. */
+    uint8_t  pad;
+    /* PC-98 key matrix copy at [bp+0xC2]. N E K O C, in that bit order. */
+    uint8_t  chord;
+    /* Gamepad buttons, same RB_BTN_* bits. Merged only while the
+     * joystick flag [bp+0x72] bit 0x400 is set. */
+    uint16_t pad_buttons;
 } RbInput;
 
 #define RB_BTN_UP       0x0001u
@@ -219,6 +227,9 @@ void sys_pace_shutdown(void);
  * to run now, from 1 to RB_PACE_CATCH_MAX. RUDEBR_FAST returns 1 and
  * does not sleep. */
 int sys_pace_frame_start(void);
+/* Next periods use wait count N as N/2 * 3/92 s. skip_wait is the
+ * debug bit 0x4000: one step, no sleep, and no catch-up afterwards. */
+void sys_pace_set_mode(unsigned count, int skip_wait);
 /* Forget lateness. Used after the two-second stage hold. */
 void sys_pace_resync(void);
 /* F8 toggles a timing overlay drawn on top of the game frame. */

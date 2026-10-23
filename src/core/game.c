@@ -33,6 +33,9 @@ static int          g_data_missing;
 static int          g_modern;
 static int          g_training;
 static int          g_menu_pending;
+/* Set by a VM iteration that flips the page. Frame skip leaves it
+ * clear so the picture already on screen stays up. */
+static int          g_show_frame = 1;
 
 static void cfg_path(const RbGame *g, char *out, size_t n)
 {
@@ -256,9 +259,9 @@ static void swallow_btn(RbGame *g, uint16_t btn, uint16_t game_bit, uint16_t *sw
 }
 
 /* UP/DOWN move the settings cursor. LEFT/RIGHT change the value.
- * Palette sits on the blank row between FRAME SKIP and INVINCIBLE.
- * Training sits under NAME ENTRY. Both use the menu's own cursor
- * values so the script keeps blinking every other row. */
+ * PALETTE and TRAINING share the blank row between FRAME SKIP and
+ * INVINCIBLE. TRAINING is the left-hand value. PALETTE keeps the
+ * label and value columns the other rows use. Row 24 stays empty. */
 static void host_menu_input(RbGame *g, uint16_t *swallowed)
 {
     int up = btn_pressed(g, RB_BTN_UP);
@@ -281,23 +284,26 @@ static void host_menu_input(RbGame *g, uint16_t *swallowed)
         swallow_btn(g, RB_BTN_DOWN, 0x0008u, swallowed);
         swallow_btn(g, RB_BTN_A, 0x0010u, swallowed);
         swallow_btn(g, RB_BTN_B, 0x0020u, swallowed);
-        if (e0 == 20) {
+        if (e0 == 21) {
             if (up) {
-                vm_set_global_u8(g_vm, 0xE0, 16);
+                g_menu_pending = 16;
                 menu_beep();
             } else if (down) {
-                vm_set_global_u8(g_vm, 0xE0, 17);
+                vm_set_global_u8(g_vm, 0xE0, 20);
                 menu_beep();
             } else if (left || right) {
-                g_modern = !g_modern;
+                g_training = !g_training;
                 changed = 1;
                 menu_beep();
             }
         } else if (up) {
-            vm_set_global_u8(g_vm, 0xE0, 19);
+            vm_set_global_u8(g_vm, 0xE0, 21);
+            menu_beep();
+        } else if (down) {
+            g_menu_pending = 17;
             menu_beep();
         } else if (left || right) {
-            g_training = !g_training;
+            g_modern = !g_modern;
             changed = 1;
             menu_beep();
         }
@@ -309,15 +315,11 @@ static void host_menu_input(RbGame *g, uint16_t *swallowed)
     }
     if (e0 == 16 && down) {
         swallow_btn(g, RB_BTN_DOWN, 0x0008u, swallowed);
-        g_menu_pending = 20;
+        g_menu_pending = 21;
         menu_beep();
     } else if (e0 == 17 && up) {
         swallow_btn(g, RB_BTN_UP, 0x0001u, swallowed);
         g_menu_pending = 20;
-        menu_beep();
-    } else if (e0 == 19 && down) {
-        swallow_btn(g, RB_BTN_DOWN, 0x0008u, swallowed);
-        g_menu_pending = 21;
         menu_beep();
     }
 }
@@ -339,8 +341,9 @@ static void host_menu_commit(RbGame *g, uint16_t swallowed)
     (void)g;
 }
 
-static void paint_option_row(int row, const char *label, const char *value,
-                             int selected, int hot)
+static void paint_option_row(int col, int value_col, int row,
+                             const char *label, const char *value,
+                             int value_width, int selected, int hot)
 {
     uint8_t label_attr = selected ? 0x41u : 0xE1u;
     uint8_t value_attr = hot ? 0xC1u : 0xA1u;
@@ -349,8 +352,8 @@ static void paint_option_row(int row, const char *label, const char *value,
     if (selected && blink) {
         value_attr = 0x41u;
     }
-    vm_text_write(g_vm, 26, row, label, 0, label_attr);
-    vm_text_write(g_vm, 50, row, value, 8, value_attr);
+    vm_text_write(g_vm, col, row, label, 0, label_attr);
+    vm_text_write(g_vm, value_col, row, value, value_width, value_attr);
 }
 
 static void host_menu_paint(void)
@@ -361,12 +364,17 @@ static void host_menu_paint(void)
         return;
     }
     e0 = vm_global_u8(g_vm, 0xE0);
-    paint_option_row(20, "PALETTE",
-                     g_modern ? "MODERN" : "ORIGINAL",
-                     e0 == 20, g_modern);
-    paint_option_row(24, "TRAINING",
-                     g_training ? "ON" : "OFF",
+    /* Row 20 is the blank line the original leaves between FRAME SKIP
+     * and INVINCIBLE. Both host rows share it. Row 24 is wiped so a
+     * previous build's TRAINING line cannot sit on the bottom edge. */
+    vm_text_write(g_vm, 0, 20, "", 40, 0);
+    vm_text_write(g_vm, 0, 24, "", 40, 0);
+    paint_option_row(0, 18, 20, "TRAINING",
+                     g_training ? "ON" : "OFF", 3,
                      e0 == 21, g_training);
+    paint_option_row(26, 50, 20, "PALETTE",
+                     g_modern ? "MODERN" : "ORIGINAL", 8,
+                     e0 == 20, g_modern);
 }
 
 static int env_on(const char *name)
@@ -696,12 +704,129 @@ static void step_script(RbGame *g)
     }
 }
 
+/* RUDEBR_SCRIPT=120:DOWN,140:A,200-208:RIGHT
+ * One frame, or a range, of extra buttons. Tokens match RUDEBR_HOLD
+ * and are joined with '+'. Headless menu shots use this. */
+static uint16_t script_token(const char *s, size_t n)
+{
+    char buf[16];
+    size_t i;
+
+    if (n == 0 || n >= sizeof buf) {
+        return 0;
+    }
+    for (i = 0; i < n; i++) {
+        char c = s[i];
+
+        if (c >= 'a' && c <= 'z') {
+            c = (char)(c - 'a' + 'A');
+        }
+        buf[i] = c;
+    }
+    buf[n] = 0;
+    if (strcmp(buf, "A") == 0 || strcmp(buf, "Z") == 0) {
+        return RB_BTN_A;
+    }
+    if (strcmp(buf, "B") == 0 || strcmp(buf, "X") == 0) {
+        return RB_BTN_B;
+    }
+    if (strcmp(buf, "C") == 0) {
+        return RB_BTN_C;
+    }
+    if (strcmp(buf, "UP") == 0) {
+        return RB_BTN_UP;
+    }
+    if (strcmp(buf, "DOWN") == 0) {
+        return RB_BTN_DOWN;
+    }
+    if (strcmp(buf, "LEFT") == 0) {
+        return RB_BTN_LEFT;
+    }
+    if (strcmp(buf, "RIGHT") == 0) {
+        return RB_BTN_RIGHT;
+    }
+    if (strcmp(buf, "START") == 0) {
+        return RB_BTN_START;
+    }
+    if (strcmp(buf, "1") == 0) {
+        return RB_BTN_1;
+    }
+    if (strcmp(buf, "2") == 0) {
+        return RB_BTN_2;
+    }
+    if (strcmp(buf, "3") == 0) {
+        return RB_BTN_3;
+    }
+    if (strcmp(buf, "4") == 0) {
+        return RB_BTN_4;
+    }
+    return 0;
+}
+
+static uint16_t script_buttons(uint32_t frame)
+{
+    const char *s = getenv("RUDEBR_SCRIPT");
+    uint16_t bits = 0;
+
+    if (!s || !s[0]) {
+        return 0;
+    }
+    while (*s) {
+        char *end = NULL;
+        unsigned long a;
+        unsigned long b;
+        const char *tok;
+
+        while (*s == ' ' || *s == ',') {
+            s++;
+        }
+        if (!*s) {
+            break;
+        }
+        a = strtoul(s, &end, 10);
+        if (end == s) {
+            break;
+        }
+        s = end;
+        b = a;
+        if (*s == '-') {
+            s++;
+            b = strtoul(s, &end, 10);
+            s = end;
+        }
+        if (*s != ':') {
+            break;
+        }
+        s++;
+        tok = s;
+        while (*s && *s != ',') {
+            s++;
+        }
+        if (frame >= a && frame <= b) {
+            const char *p = tok;
+
+            while (p < s) {
+                const char *q = p;
+
+                while (q < s && *q != '+') {
+                    q++;
+                }
+                bits = (uint16_t)(bits | script_token(p, (size_t)(q - p)));
+                p = q < s ? q + 1 : q;
+            }
+        }
+    }
+    return bits;
+}
+
 void game_update(RbGame *g)
 {
-    uint16_t user_buttons = g->input.buttons;
+    uint16_t user_buttons;
     uint16_t swallowed = 0;
 
     g->frame++;
+    g->input.buttons = (uint16_t)(g->input.buttons | script_buttons(g->frame));
+    user_buttons = g->input.buttons;
     host_menu_input(g, &swallowed);
     apply_host_options();
 
@@ -795,6 +920,16 @@ void game_update(RbGame *g)
     g->input.buttons = user_buttons;
     host_menu_commit(g, swallowed);
     rank_sync(g);
+    if (g_vm) {
+        if (vm_frame_shown(g_vm)) {
+            g_show_frame = 1;
+        }
+        sys_pace_set_mode(vm_vsync_count(g_vm),
+                          (vm_global_u16(g_vm, 0x72) & 0x4000u) != 0);
+    } else {
+        g_show_frame = 1;
+        sys_pace_set_mode(2, 0);
+    }
     g->input_prev = g->input;
     watch_smoke(g);
     if (env_on("RUDEBR_TRACE") && (g->frame == 1 || (g->frame % 120u) == 0)) {
@@ -806,6 +941,10 @@ void game_render(const RbGame *g)
 {
     char line[80];
 
+    if (!g_show_frame) {
+        return;
+    }
+    g_show_frame = 0;
     host_menu_paint();
     sys_clear(8, 8, 24);
 
@@ -885,5 +1024,35 @@ void game_render(const RbGame *g)
     }
     if (g_training && g->state == RB_STATE_PLAY) {
         sys_draw_text(8, 8, "TRAINING", 0x40FF40FFu);
+    }
+    if (settings_open()) {
+        const char *shot = getenv("RUDEBR_SHOT");
+        static int saved;
+        uint32_t *px;
+        FILE *fp;
+
+        /* RUDEBR_SHOT_FRAME waits until that logic frame. The settings
+         * page draws its lower rows only after the cursor has visited
+         * them, so a headless shot can land on the finished list. */
+        if (shot && shot[0] && !saved) {
+            const char *at = getenv("RUDEBR_SHOT_FRAME");
+            unsigned long want = at && at[0] ? strtoul(at, NULL, 10) : 0;
+
+            if (want > 0 && g->frame < want) {
+                shot = NULL;
+            }
+        }
+        if (shot && shot[0] && !saved) {
+            px = sys_frame_pixels();
+            if (px) {
+                fp = fopen(shot, "wb");
+                if (fp) {
+                    fwrite(px, 4, (size_t)RB_NATIVE_W * (size_t)RB_NATIVE_H, fp);
+                    fclose(fp);
+                    fprintf(stderr, "shot %s\n", shot);
+                    saved = 1;
+                }
+            }
+        }
     }
 }

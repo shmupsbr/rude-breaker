@@ -63,6 +63,8 @@ void vm_reset_play(RbVm *vm, uint16_t stage);
 void vm_reset_boot(RbVm *vm);
 /* Wait counts at [bp+0x60]. Zero becomes one (the following vsync edge). */
 unsigned vm_vsync_count(const RbVm *vm);
+/* 1 when this iteration flips the page. Frame skip holds the last picture. */
+int vm_frame_shown(const RbVm *vm);
 /* Clear the "header 0 was loaded" flag after the host has noticed it. */
 void vm_ack_boot(RbVm *vm);
 void vm_set_hiscore(RbVm *vm, uint32_t score);

@@ -47,46 +47,44 @@ static void poll_pad(RbInput *out)
     Sint16 ay;
 
     bind_pad();
-    if (!g_pad) {
+    if (!g_pad || !SDL_GameControllerGetAttached(g_pad)) {
         return;
     }
+    /* Held aside until the script sets the joystick flag. */
+    out->pad = 1;
     ax = SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_LEFTX);
     ay = SDL_GameControllerGetAxis(g_pad, SDL_CONTROLLER_AXIS_LEFTY);
     if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_DPAD_UP) ||
         ay < -16000) {
-        out->buttons |= RB_BTN_UP;
-        out->axis_y = -1;
+        out->pad_buttons |= RB_BTN_UP;
     }
     if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_DPAD_DOWN) ||
         ay > 16000) {
-        out->buttons |= RB_BTN_DOWN;
-        out->axis_y = 1;
+        out->pad_buttons |= RB_BTN_DOWN;
     }
     if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_DPAD_LEFT) ||
         ax < -16000) {
-        out->buttons |= RB_BTN_LEFT;
-        out->axis_x = -1;
+        out->pad_buttons |= RB_BTN_LEFT;
     }
     if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_DPAD_RIGHT) ||
         ax > 16000) {
-        out->buttons |= RB_BTN_RIGHT;
-        out->axis_x = 1;
+        out->pad_buttons |= RB_BTN_RIGHT;
     }
     /* South is fire, east is mode, west is the forced edge. */
     if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_A)) {
-        out->buttons |= RB_BTN_A;
+        out->pad_buttons |= RB_BTN_A;
     }
     if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_B)) {
-        out->buttons |= RB_BTN_B;
+        out->pad_buttons |= RB_BTN_B;
     }
     if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_X)) {
-        out->buttons |= RB_BTN_C;
+        out->pad_buttons |= RB_BTN_C;
     }
     if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_START)) {
-        out->buttons |= RB_BTN_START;
+        out->pad_buttons |= RB_BTN_START;
     }
     if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_BACK)) {
-        out->buttons |= RB_BTN_QUIT;
+        out->pad_buttons |= RB_BTN_QUIT;
     }
 }
 
@@ -247,6 +245,22 @@ void sys_read_input(RbInput *out)
     }
     if (keys[SDL_SCANCODE_4]) {
         out->buttons |= RB_BTN_4;
+    }
+    /* Matrix copy at [bp+0xC2]. N is also the mode key. */
+    if (keys[SDL_SCANCODE_N]) {
+        out->chord = (uint8_t)(out->chord | 0x08u);
+    }
+    if (keys[SDL_SCANCODE_E]) {
+        out->chord = (uint8_t)(out->chord | 0x02u);
+    }
+    if (keys[SDL_SCANCODE_K]) {
+        out->chord = (uint8_t)(out->chord | 0x04u);
+    }
+    if (keys[SDL_SCANCODE_O]) {
+        out->chord = (uint8_t)(out->chord | 0x10u);
+    }
+    if (keys[SDL_SCANCODE_C]) {
+        out->chord = (uint8_t)(out->chord | 0x01u);
     }
     poll_pad(out);
     out->buttons = (uint16_t)(out->buttons | held_from_env());
