@@ -3388,7 +3388,9 @@ static void run_fetch(RbVm *vm, int ent)
         case 0x4E:
             gfx_draw_entities(vm->gfx, vm->ent, ENT_N, ENT_STR,
                               (const uint8_t *const *)vm->chunk, vm->clen,
-                              vm->cof, (int)gu16(vm, 0x76));
+                              vm->cof, (int)gu16(vm, 0x76),
+                              (int)(int16_t)gu16(vm, 0x82),
+                              vm->view_chunk >= 2 && vm->view_chunk <= 6);
             break;
         case 0x4D:
             scroll_4d(vm);
@@ -3602,6 +3604,15 @@ void vm_reset_boot(RbVm *vm)
     sgu16(vm, 0x5C, 0x1234u);
     sgu16(vm, 0x62, 3);
     sgu16(vm, 0x60, 3);
+    /* Loader 0x157C, the path taken when RBRANK has no saved config:
+     * word [bp+0xB2] = 2 and byte [bp+0xC9] = 7. Spawn scripts do
+     * HP <<= [bp+0xB2], so a fresh game's bosses and formation
+     * enemies have four times the raw hit points. The config menu's
+     * middle step writes this same pair. Lives stay 3: the loader
+     * also stores 2 into [bp+0x62], and the in-game stock menu is
+     * what the death timing was calibrated against. */
+    sgu16(vm, 0xB2, 2);
+    vm->g[0xC9] = 7;
     memset(vm->rank, 0, sizeof vm->rank);
     memset(vm->text, 0, sizeof vm->text);
     vm->text_di = 0;
@@ -3661,6 +3672,8 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
     sgu16(vm, 0x5C, 0x1234u);
     sgu16(vm, 0x62, 3);
     sgu16(vm, 0x60, 3);
+    sgu16(vm, 0xB2, 2);
+    vm->g[0xC9] = 7;
     /* Chunk 1's pre-stage script (0x9507) arms the mode byte before it
      * loads a stage. The stage chunk never writes it back to 1, and the
      * ship native ignores the mode button while the byte is still 0.

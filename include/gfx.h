@@ -28,9 +28,12 @@ void gfx_fill(RbGfx *gfx, uint16_t di, uint16_t nbytes, uint16_t rows, uint8_t c
 void gfx_copy_row(RbGfx *gfx, uint16_t screen_row, uint16_t src_row);
 void gfx_compose(RbGfx *gfx);
 
+/* scroll_speed is [bp+0x82], the speed the next present copies into
+ * [bp+0x84]. blank_sides is the stage window (chunks 2..6). */
 void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
                        const uint8_t *const *chunk, const uint32_t *clen,
-                       const uint8_t *cof, int scroll76);
+                       const uint8_t *cof, int scroll76, int scroll_speed,
+                       int blank_sides);
 
 void gfx_palette_abs(RbGfx *gfx, const uint8_t *p, uint32_t n);
 void gfx_palette_delta(RbGfx *gfx, const uint8_t *p, uint32_t n);

@@ -475,9 +475,115 @@ static void blit_sprite(RbGfx *gfx, const uint8_t *src, uint32_t len,
     }
 }
 
+static int wrap_line(int v)
+{
+    while (v < 0) {
+        v += RB_GFX_H;
+    }
+    while (v >= RB_GFX_H) {
+        v -= RB_GFX_H;
+    }
+    return v;
+}
+
+/* Entity sprites are 16x16 cells. The PC-98 blitter at 0x1132 drops a
+ * whole cell when its world row is outside 0..23 or its column is
+ * outside 4..34, so a large sprite steps onto the screen in bands.
+ * A line that is already on screen keeps the GVRAM address 0x1132
+ * used (world Y plus the scroll, wrapped into the page). The clip is
+ * the line present will show. A stage starts at SAD = scroll + speed
+ * - 1, so that line is world - speed + 1. The title starts at
+ * scroll76, so the line is the world Y itself. */
+static void blit_sprite_smooth(RbGfx *gfx, const uint8_t *src, uint32_t len,
+                               int px, int shift, uint8_t attr, int world_y,
+                               int scroll76, int speed, int blank_sides)
+{
+    int mono = (attr == 2);
+    int bright = (attr & 1u) == 0u;
+    int wide = 16 + (shift ? 8 : 0);
+    int row;
+    uint32_t need = mono ? 32u : 128u;
+    int x0 = blank_sides ? 80 : 0;
+    int x1 = blank_sides ? 560 : RB_GFX_W;
+    int marked_low = 0;
+    int marked_high = 0;
+
+    if (!src || len < need) {
+        return;
+    }
+    if (shift < 0) {
+        shift = 0;
+    }
+    if (shift > 7) {
+        shift = 7;
+    }
+    for (row = 0; row < 16; row++) {
+        uint8_t mask[24];
+        uint8_t b[24];
+        uint8_t r[24];
+        uint8_t g[24];
+        int col;
+        int world = world_y + row;
+        int screen = blank_sides ? (world - speed + 1) : world;
+        int gv;
+        int drew = 0;
+
+        if (screen < 0 || screen >= RB_GFX_H) {
+            continue;
+        }
+        gv = wrap_line(world + scroll76);
+        decode_plane(src + row * 2, shift, mask);
+        if (!mono) {
+            decode_plane(src + 32 + row * 2, shift, b);
+            decode_plane(src + 64 + row * 2, shift, r);
+            decode_plane(src + 96 + row * 2, shift, g);
+        }
+        for (col = 0; col < wide; col++) {
+            int sx = px + col;
+            uint8_t idx;
+
+            if (sx < x0 || sx >= x1 || !mask[col]) {
+                continue;
+            }
+            if (mono) {
+                idx = 11;
+            } else {
+                idx = 0;
+                if (b[col]) {
+                    idx |= 1u;
+                }
+                if (r[col]) {
+                    idx |= 2u;
+                }
+                if (g[col]) {
+                    idx |= 4u;
+                }
+                if (bright) {
+                    idx |= 8u;
+                }
+            }
+            put_idx(gfx, sx, gv, idx);
+            drew = 1;
+        }
+        if (!drew) {
+            continue;
+        }
+        if (gv >= 384) {
+            if (!marked_high) {
+                mark_dirty(gfx, px, gv, wide);
+                marked_high = 1;
+            }
+        } else if (!marked_low) {
+            mark_dirty(gfx, px, gv, wide);
+            marked_low = 1;
+        }
+    }
+}
+
 void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
                        const uint8_t *const *chunk, const uint32_t *clen,
-                       const uint8_t *cof, int scroll76)
+                       const uint8_t *cof, int scroll76, int scroll_speed,
+                       int blank_sides)
 {
     int i;
 
@@ -496,7 +602,6 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
         int16_t y;
         int wcells;
         int hcells;
-        int sy;
         uint16_t pat;
         uint16_t seg;
         uint8_t shift;
@@ -522,10 +627,6 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
         y = (int16_t)((uint16_t)slot[0x24] | ((uint16_t)slot[0x25] << 8));
         x = (int16_t)(x - (int16_t)(wcells << 3));
         y = (int16_t)(y - (int16_t)(hcells << 3));
-        sy = (int)y + scroll76;
-        if (sy >= 0x190) {
-            sy -= 0x190;
-        }
         pat = (uint16_t)slot[0x38] | ((uint16_t)slot[0x39] << 8);
         seg = (uint16_t)slot[0x3A] | ((uint16_t)slot[0x3B] << 8);
         shift = (uint8_t)((uint8_t)x & slot[0x4E]);
@@ -543,34 +644,27 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
             continue;
         }
         for (row = 0; row < hcells; row++) {
-            int ycell = (int)(y >> 4) + row;
-            int draw = (ycell >= 0 && ycell < 0x18);
             int col;
 
             for (col = 0; col < wcells; col++) {
-                int xcell = (int)(x >> 4) + col;
                 unsigned poff = (unsigned)pat + (unsigned)row * (unsigned)wcells +
                                 (unsigned)col;
                 uint8_t index;
                 uint32_t off;
                 int px;
-                int py;
 
                 if (poff >= slen) {
                     continue;
                 }
                 index = script[poff];
-                if (!draw || xcell < 4 || xcell >= 0x23) {
-                    continue;
-                }
                 off = pattern_off(index);
                 if (off >= gfx->blen[seg]) {
                     continue;
                 }
                 px = ((int)(x >> 3) + col * 2) * 8;
-                py = sy + row * 16;
-                blit_sprite(gfx, sheet + off, gfx->blen[seg] - off, px, py,
-                            (int)shift, attr);
+                blit_sprite_smooth(gfx, sheet + off, gfx->blen[seg] - off, px,
+                                   (int)shift, attr, (int)y + row * 16,
+                                   scroll76, scroll_speed, blank_sides);
             }
         }
     }
