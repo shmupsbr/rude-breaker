@@ -143,24 +143,36 @@ int main(int argc, char **argv)
 
     game_init(&game, &disk);
     disk_free(&disk);
+    sys_pace_startup();
 
     while (!game_wants_quit(&game)) {
-        sys_read_input(&game.input);
-        game_update(&game);
-        /* Stage-to-stage only. The picture already on screen stays up
-         * and the music keeps playing; the VM has taken the one step
-         * that loaded the next stage. RUDEBR_FAST is the smoke switch. */
-        if (game_take_stage_gap()) {
-            const char *fast = getenv("RUDEBR_FAST");
+        int steps;
+        int i;
 
-            if (!fast || !fast[0] || strcmp(fast, "0") == 0) {
-                sys_idle(2000);
+        sys_read_input(&game.input);
+        /* One present shows the latest logic frame. A short hitch runs
+         * a few extra VM frames first; the deadline does not depend on
+         * the monitor or on [bp+0x60]. */
+        steps = sys_pace_frame_start();
+        for (i = 0; i < steps; i++) {
+            game_update(&game);
+            /* Stage-to-stage only. The picture already on screen stays
+             * up and the music keeps playing. The hold is wall-clock
+             * time, then the logic clock starts clean so the pause is
+             * not repaid as a burst of frames. */
+            if (game_take_stage_gap()) {
+                if (!sys_pace_fast()) {
+                    sys_idle(2000);
+                }
+                sys_pace_resync();
+                break;
             }
         }
         game_render(&game);
-        sys_wait_vblank(game_vsyncs(&game));
+        sys_pace_overlay_draw();
         sys_present();
     }
+    sys_pace_shutdown();
 
     if (game_data_missing()) {
         rc = 1;

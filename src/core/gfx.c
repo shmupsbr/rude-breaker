@@ -709,9 +709,19 @@ void gfx_palette_abs(RbGfx *gfx, const uint8_t *p, uint32_t n)
 void gfx_palette_delta(RbGfx *gfx, const uint8_t *p, uint32_t n)
 {
     const uint8_t *end;
+    int i;
+    int c0;
 
     if (!gfx || !p) {
         return;
+    }
+    /* 0x6CAB zeros the whole delta table before the stream. A later
+     * step keeps adding those words, so a partial stream must not
+     * leave the previous fade's deltas in the other colors. */
+    for (i = 0; i < 16; i++) {
+        for (c0 = 0; c0 < 3; c0++) {
+            gfx->dpal[i][c0] = 0;
+        }
     }
     end = p + n;
     for (;;) {

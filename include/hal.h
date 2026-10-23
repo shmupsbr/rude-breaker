@@ -75,15 +75,18 @@ static inline void write_u32_le(uint8_t *p, uint32_t v)
 
 #define RB_NATIVE_W     640
 #define RB_NATIVE_H     400
-/* One count of the loader's vsync wait ([bp+0x60], usually 3).
- * The capture's cruise background (4 px per logic frame) moves at
- * about 122 px/s, and a later 2 px section moves at about 60 px/s,
- * so a logic frame is about 30.7 Hz. Three counts at 92 Hz sleep
- * that long. 120 Hz per count was 40 logic Hz, about 1.3x ahead of
- * the capture. Not the host refresh rate, and not one PC-98 vertical
- * blank (56.42 Hz) per count: three of those would be ~19 Hz. */
+/* Locked logic period, fitted to the hardware capture: cruise scroll
+ * is 4 px per logic frame at about 122 px/s, and a later 2 px stretch
+ * is about 60 px/s, so one logic frame is 3/92 s (about 30.7 Hz).
+ * The menu word [bp+0x60] is not a scale factor on this period.
+ * 120 Hz per count was 40 logic Hz, about 1.3x ahead of the capture.
+ * Not the host refresh, and not one PC-98 vertical blank (56.42 Hz):
+ * three of those would be about 19 Hz. */
 #define RB_WAIT_HZ      92
-#define RB_TARGET_FPS   RB_WAIT_HZ
+#define RB_TARGET_FPS   (RB_WAIT_HZ / 3)
+/* Repay at most this many logic frames after a hitch. Past the cap
+ * the clock drops the debt and the game slows instead of skipping. */
+#define RB_PACE_CATCH_MAX 4
 
 /* X68000 Phase-2 outer raster (640x400 centered in 640x480) */
 #define RB_X68K_OUTER_H 480
@@ -202,12 +205,26 @@ void sys_shutdown(void);
 /* stderr, plus a dialog when a real video driver is up. */
 void sys_message(const char *title, const char *text);
 
-/* Sleep `counts` PC-98 wait ticks (1/RB_WAIT_HZ each). A zero count still
- * waits one tick, which is the GDC edge that follows the counter. */
+/* Sleep `counts` of 1/RB_WAIT_HZ. Kept for the X68000 backend. The SDL
+ * loop paces with sys_pace_frame_start and does not call this. */
 void sys_wait_vblank(unsigned counts);
 /* Hold the last presented frame. The audio callback keeps running. */
 void sys_idle(unsigned ms);
 void sys_present(void);
+
+/* Detect the display and the timer, then lock the logic clock. */
+void sys_pace_startup(void);
+void sys_pace_shutdown(void);
+/* Sleep until at least one logic frame is due. Returns how many frames
+ * to run now, from 1 to RB_PACE_CATCH_MAX. RUDEBR_FAST returns 1 and
+ * does not sleep. */
+int sys_pace_frame_start(void);
+/* Forget lateness. Used after the two-second stage hold. */
+void sys_pace_resync(void);
+/* F8 toggles a timing overlay drawn on top of the game frame. */
+int sys_pace_overlay(void);
+void sys_pace_overlay_draw(void);
+int sys_pace_fast(void);
 
 void sys_clear(uint8_t r, uint8_t g, uint8_t b);
 /* Host RGBA8888 framebuffer, RB_NATIVE_W by RB_NATIVE_H, or NULL. */

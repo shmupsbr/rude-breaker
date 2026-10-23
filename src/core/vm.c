@@ -2838,8 +2838,13 @@ static void run_fetch(RbVm *vm, int ent)
             sgu16(vm, 0x60, gu16(vm, 0x62));
             break;
         case 0x10:
+            /* Menu entries are `10 01 00`, `10 02 00`, and `10 03 00`.
+             * On the PC-98 the same immediate is the vsync wait and the
+             * stock field. The host tick is locked to the capture, so
+             * only the stock field follows the key. [bp+0x60] stays at
+             * the loader's 2 (opcode 0x0F copies it once at boot, and
+             * opcode 0x0E stores 2 again). */
             a = rd16(vm, ent, di);
-            sgu16(vm, 0x60, a);
             sgu16(vm, 0x62, a);
             su16(vm, ent, 8, (uint16_t)(di + 2u));
             break;
@@ -3602,15 +3607,18 @@ void vm_reset_boot(RbVm *vm)
     vm->rng_mix = 0x1234u;
     vm->rng_cf = 0;
     sgu16(vm, 0x5C, 0x1234u);
-    sgu16(vm, 0x62, 3);
-    sgu16(vm, 0x60, 3);
-    /* Loader 0x157C, the path taken when RBRANK has no saved config:
-     * word [bp+0xB2] = 2 and byte [bp+0xC9] = 7. Spawn scripts do
-     * HP <<= [bp+0xB2], so a fresh game's bosses and formation
+    /* Loader 0x157C, no saved config: word [bp+0x62] = 2 and the
+     * first instruction of chunk 1 (opcode 0x0F) copies that into
+     * the vsync wait [bp+0x60]. Byte [bp+0xD2] is the reserve the
+     * HUD prints and the death script spends. Nothing copies 0x62
+     * into D2, and D2 is left at 0, so a new game shows reserve 0
+     * and the ship already on screen is the only hull. */
+    sgu16(vm, 0x62, 2);
+    sgu16(vm, 0x60, 2);
+    /* Same loader path: word [bp+0xB2] = 2 and byte [bp+0xC9] = 7.
+     * Spawn scripts do HP <<= [bp+0xB2], so bosses and formation
      * enemies have four times the raw hit points. The config menu's
-     * middle step writes this same pair. Lives stay 3: the loader
-     * also stores 2 into [bp+0x62], and the in-game stock menu is
-     * what the death timing was calibrated against. */
+     * middle step writes this same pair. */
     sgu16(vm, 0xB2, 2);
     vm->g[0xC9] = 7;
     memset(vm->rank, 0, sizeof vm->rank);
@@ -3670,8 +3678,8 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
     vm->rng_mix = 0x1234u;
     vm->rng_cf = 0;
     sgu16(vm, 0x5C, 0x1234u);
-    sgu16(vm, 0x62, 3);
-    sgu16(vm, 0x60, 3);
+    sgu16(vm, 0x62, 2);
+    sgu16(vm, 0x60, 2);
     sgu16(vm, 0xB2, 2);
     vm->g[0xC9] = 7;
     /* Chunk 1's pre-stage script (0x9507) arms the mode byte before it

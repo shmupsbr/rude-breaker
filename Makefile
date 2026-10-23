@@ -25,7 +25,8 @@ CORE_SRCS := \
 	src/core/diskimg.c \
 	src/core/inflate.c \
 	src/core/vm.c \
-	src/core/gfx.c
+	src/core/gfx.c \
+	src/core/pace.c
 
 ifeq ($(PLATFORM),sdl2)
   HAL_SRCS := \
@@ -42,6 +43,10 @@ ifeq ($(PLATFORM),sdl2)
   SDL2_LIBS   ?= $(shell pkg-config --libs sdl2)
   CFLAGS  += $(SDL2_CFLAGS) -DSDL_MAIN_HANDLED
   LDFLAGS += $(SDL2_LIBS)
+  # timeBeginPeriod. The .exe cross link is the Windows build.
+  ifneq ($(EXE),)
+    LDFLAGS += -lwinmm
+  endif
   # Cross builds pass EXE=.exe so the recipe's -o name matches MinGW.
   EXE     ?=
   TARGET  := $(BUILD)/rudebreaker$(EXE)
