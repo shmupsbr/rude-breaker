@@ -3607,12 +3607,15 @@ void vm_reset_boot(RbVm *vm)
     vm->rng_mix = 0x1234u;
     vm->rng_cf = 0;
     sgu16(vm, 0x5C, 0x1234u);
-    /* Loader 0x157C, no saved config: word [bp+0x62] = 2 and the
-     * first instruction of chunk 1 (opcode 0x0F) copies that into
-     * the vsync wait [bp+0x60]. Byte [bp+0xD2] is the reserve the
-     * HUD prints and the death script spends. Nothing copies 0x62
-     * into D2, and D2 is left at 0, so a new game shows reserve 0
-     * and the ship already on screen is the only hull. */
+    /* Loader 0x1648, no saved config: word [bp+0x62] = 2. Opcode 0x0F
+     * copies that into the vsync wait [bp+0x60]. It is the menu stock,
+     * not the HUD. Boot calls 0x9F98, which stores byte [bp+0xCA] = 3.
+     * Starting a game at 0x78C6 calls 0x9FA9 (D2 = CA) and then
+     * subtracts 1, so the HUD byte [bp+0xD2] is 2. Nothing copies 0x62
+     * into D2, and this reset does not assign D2 either: the script is
+     * the source. Continue returns through the title and runs 0x78C6
+     * again, so the next game starts at 2 as well. vm_reset_play is the
+     * lab entry and still leaves D2 at 0. */
     sgu16(vm, 0x62, 2);
     sgu16(vm, 0x60, 2);
     /* Same loader path: word [bp+0xB2] = 2 and byte [bp+0xC9] = 7.
