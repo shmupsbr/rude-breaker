@@ -28,7 +28,7 @@ disk into the same folder as the program, then start it.
 | `SGM1.DAT` | yes | Stage, sprite, and script bank. The game will not start without it. |
 | `FPLAY.COM` | yes | FM/SSG driver. Music stays silent without it. |
 | `SONG.DAT` | yes | Song data for that driver. |
-| `RBRANK.DAT` | no | Ranking table. Loaded when the file is present. |
+| `RBRANK.DAT` | no | Ranking table and saved difficulty. Loaded at boot, written when a score is entered, and created with the original table if it is missing. |
 | `ym2608_adpcm_rom.bin` | no | Yamaha rhythm ROM. 8192 bytes, CRC32 `23c9e0d8`. See below. |
 
 These names on the disk are **not** read. Leave them out of the folder:
@@ -104,7 +104,7 @@ RUDEBR/
   READJS.COM   joystick helper — not read
   SGM1.DAT     packed asset bank (37 chunks) — required
   SONG.DAT     BGM data for FPLAY — required
-  RBRANK.DAT   ranking / high-score table — optional
+  RBRANK.DAT   ranking table and saved difficulty — loaded and written beside the program
   RUDEBR.BAT   launches SGC — not read
 ```
 
