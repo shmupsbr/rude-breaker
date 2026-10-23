@@ -28,9 +28,11 @@ static int          g_saw_clear;
 static int          g_saw_over;
 static int          g_data_missing;
 /* Host options. Default is the original palette and training off, so
- * the scripted checks keep the same picture and the same deaths. */
+ * the scripted checks keep the same picture and the same deaths.
+ * On the settings screen they are cursor rows E0 20 and 21. */
 static int          g_modern;
 static int          g_training;
+static int          g_menu_pending;
 
 static void cfg_path(const RbGame *g, char *out, size_t n)
 {
@@ -110,6 +112,148 @@ static int settings_open(void)
 {
     /* SETTINGS, the two JIS characters behind that English label. */
     return g_vm && vm_text_has_jis(g_vm, 0x405Fu, 0x446Au);
+}
+
+/* Cursor index to the text row it redraws. E0 2 is BACK on row 5.
+ * INVINCIBLE (17) skips the blank row 20. */
+static int row_for_e0(int e0)
+{
+    if (e0 >= 2 && e0 <= 16) {
+        return e0 + 3;
+    }
+    if (e0 >= 17 && e0 <= 19) {
+        return e0 + 4;
+    }
+    return -1;
+}
+
+static int btn_pressed(const RbGame *g, uint16_t mask);
+
+static void menu_beep(void)
+{
+    sys_play_sound(0x1D, 180);
+}
+
+static void swallow_btn(RbGame *g, uint16_t btn, uint16_t game_bit, uint16_t *sw)
+{
+    if (g->input.buttons & btn) {
+        g->input.buttons = (uint16_t)(g->input.buttons & (uint16_t)~btn);
+        *sw = (uint16_t)(*sw | game_bit);
+    }
+}
+
+/* UP/DOWN move the settings cursor. LEFT/RIGHT change the value.
+ * Palette sits on the blank row between FRAME SKIP and INVINCIBLE.
+ * Training sits under NAME ENTRY. Both use the menu's own cursor
+ * values so the script keeps blinking every other row. */
+static void host_menu_input(RbGame *g, uint16_t *swallowed)
+{
+    int up = btn_pressed(g, RB_BTN_UP);
+    int down = btn_pressed(g, RB_BTN_DOWN);
+    int left = btn_pressed(g, RB_BTN_LEFT);
+    int right = btn_pressed(g, RB_BTN_RIGHT);
+    uint8_t e0;
+    int changed = 0;
+
+    *swallowed = 0;
+    if (!settings_open()) {
+        g_menu_pending = 0;
+        return;
+    }
+    e0 = vm_global_u8(g_vm, 0xE0);
+    if (e0 == 20 || e0 == 21) {
+        swallow_btn(g, RB_BTN_UP, 0x0001u, swallowed);
+        swallow_btn(g, RB_BTN_LEFT, 0x0002u, swallowed);
+        swallow_btn(g, RB_BTN_RIGHT, 0x0004u, swallowed);
+        swallow_btn(g, RB_BTN_DOWN, 0x0008u, swallowed);
+        swallow_btn(g, RB_BTN_A, 0x0010u, swallowed);
+        swallow_btn(g, RB_BTN_B, 0x0020u, swallowed);
+        if (e0 == 20) {
+            if (up) {
+                vm_set_global_u8(g_vm, 0xE0, 16);
+                menu_beep();
+            } else if (down) {
+                vm_set_global_u8(g_vm, 0xE0, 17);
+                menu_beep();
+            } else if (left || right) {
+                g_modern = !g_modern;
+                changed = 1;
+                menu_beep();
+            }
+        } else if (up) {
+            vm_set_global_u8(g_vm, 0xE0, 19);
+            menu_beep();
+        } else if (left || right) {
+            g_training = !g_training;
+            changed = 1;
+            menu_beep();
+        }
+        if (changed) {
+            apply_host_options();
+            save_cfg(g);
+        }
+        return;
+    }
+    if (e0 == 16 && down) {
+        swallow_btn(g, RB_BTN_DOWN, 0x0008u, swallowed);
+        g_menu_pending = 20;
+        menu_beep();
+    } else if (e0 == 17 && up) {
+        swallow_btn(g, RB_BTN_UP, 0x0001u, swallowed);
+        g_menu_pending = 20;
+        menu_beep();
+    } else if (e0 == 19 && down) {
+        swallow_btn(g, RB_BTN_DOWN, 0x0008u, swallowed);
+        g_menu_pending = 21;
+        menu_beep();
+    }
+}
+
+static void host_menu_commit(RbGame *g, uint16_t swallowed)
+{
+    if (g_vm && g_menu_pending && settings_open()) {
+        int row = row_for_e0((int)vm_global_u8(g_vm, 0xE0));
+
+        if (row >= 0) {
+            vm_text_settle_row(g_vm, row);
+        }
+        vm_set_global_u8(g_vm, 0xE0, (uint8_t)g_menu_pending);
+    }
+    g_menu_pending = 0;
+    if (g_vm && swallowed) {
+        vm_pretend_held(g_vm, swallowed);
+    }
+    (void)g;
+}
+
+static void paint_option_row(int row, const char *label, const char *value,
+                             int selected, int hot)
+{
+    uint8_t label_attr = selected ? 0x41u : 0xE1u;
+    uint8_t value_attr = hot ? 0xC1u : 0xA1u;
+    int blink = vm_global_u8(g_vm, 0xC8) != 0;
+
+    if (selected && blink) {
+        value_attr = 0x41u;
+    }
+    vm_text_write(g_vm, 26, row, label, 0, label_attr);
+    vm_text_write(g_vm, 50, row, value, 8, value_attr);
+}
+
+static void host_menu_paint(void)
+{
+    uint8_t e0;
+
+    if (!settings_open()) {
+        return;
+    }
+    e0 = vm_global_u8(g_vm, 0xE0);
+    paint_option_row(20, "PALETTE",
+                     g_modern ? "MODERN" : "ORIGINAL",
+                     e0 == 20, g_modern);
+    paint_option_row(24, "TRAINING",
+                     g_training ? "ON" : "OFF",
+                     e0 == 21, g_training);
 }
 
 static int env_on(const char *name)
@@ -428,31 +572,13 @@ static void step_script(RbGame *g)
     }
 }
 
-static void host_options_input(RbGame *g)
-{
-    int changed = 0;
-
-    if (!settings_open()) {
-        return;
-    }
-    if (btn_pressed(g, RB_BTN_F5)) {
-        g_modern = !g_modern;
-        changed = 1;
-    }
-    if (btn_pressed(g, RB_BTN_F6)) {
-        g_training = !g_training;
-        changed = 1;
-    }
-    if (changed) {
-        apply_host_options();
-        save_cfg(g);
-    }
-}
-
 void game_update(RbGame *g)
 {
+    uint16_t user_buttons = g->input.buttons;
+    uint16_t swallowed = 0;
+
     g->frame++;
-    host_options_input(g);
+    host_menu_input(g, &swallowed);
     apply_host_options();
 
     switch (g->state) {
@@ -542,6 +668,8 @@ void game_update(RbGame *g)
         break;
     }
 
+    g->input.buttons = user_buttons;
+    host_menu_commit(g, swallowed);
     g->input_prev = g->input;
     watch_smoke(g);
     if (env_on("RUDEBR_TRACE") && (g->frame == 1 || (g->frame % 120u) == 0)) {
@@ -553,6 +681,7 @@ void game_render(const RbGame *g)
 {
     char line[80];
 
+    host_menu_paint();
     sys_clear(8, 8, 24);
 
     switch (g->state) {
@@ -628,19 +757,6 @@ void game_render(const RbGame *g)
 
     default:
         break;
-    }
-    if (settings_open()) {
-        /* Quiet band on the settings screen, between the option rows. */
-        sys_draw_text(52, 228,
-                      g_modern ? "Palette: Modern Palette"
-                               : "Palette: Original Palette",
-                      0xFFFFFFFFu);
-        sys_draw_text(52, 238,
-                      g_training ? "Training Mode: On" : "Training Mode: Off",
-                      0xFFFFFFFFu);
-        /* 0xFFFF00FF is yellow. The low byte is alpha and the font has
-         * no lowercase, so the line reads as capitals. */
-        sys_draw_text(52, 248, "F5 palette   F6 training", 0xFFFF00FFu);
     }
     if (g_training && g->state == RB_STATE_PLAY) {
         sys_draw_text(8, 8, "TRAINING", 0x40FF40FFu);

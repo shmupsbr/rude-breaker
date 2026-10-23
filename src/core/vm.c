@@ -289,6 +289,8 @@ static uint32_t lz_decompress(const uint8_t *src, uint32_t src_n,
     return di;
 }
 
+static void install_menu_extension(RbVm *vm);
+
 static int ensure_chunk(RbVm *vm, unsigned index)
 {
     uint32_t sz = 0;
@@ -314,7 +316,46 @@ static int ensure_chunk(RbVm *vm, unsigned index)
     n = lz_decompress(src, sz, dst, CHUNK_CAP, NULL);
     vm->chunk[index] = dst;
     vm->clen[index] = n;
+    if (index == 1u) {
+        install_menu_extension(vm);
+    }
     return 0;
+}
+
+/* Settings cursor E0 runs from 2 (BACK) through 19 (NAME ENTRY). The
+ * dispatcher at 0x80F3 used to wrap anything else back to 2. Palette
+ * and training are host rows on that same cursor, stored as E0 20 and
+ * 21. The cave lets those two values ride the frame loop; the host
+ * draws the text and applies the keys. */
+static void install_menu_extension(RbVm *vm)
+{
+    uint8_t *p = vm->chunk[1];
+    static const uint8_t cave[] = {
+        0x25, 0xE0, 0x00, 0x14, 0x13, 0xB0,
+        0x25, 0xE0, 0x00, 0x15, 0x13, 0xB0,
+        0x2B, 0xE0, 0x00, 0x02,
+        0x05, 0x1A, 0x80,
+        0x05, 0x1A, 0x80
+    };
+
+    if (!p || vm->clen[1] < 0x80FAu ||
+        0xB000u + sizeof cave > CHUNK_CAP) {
+        return;
+    }
+    if (p[0x80F3] == 0x2Bu && p[0x80F4] == 0xE0u &&
+        p[0x80F5] == 0x00u && p[0x80F6] == 0x02u) {
+        p[0x80F3] = 0x05;
+        p[0x80F4] = 0x00;
+        p[0x80F5] = 0xB0;
+        p[0x80F6] = 0x00;
+        p[0x80F7] = 0x00;
+        p[0x80F8] = 0x00;
+        p[0x80F9] = 0x00;
+    }
+    memcpy(p + 0xB000, cave, sizeof cave);
+    if (vm->clen[1] < 0xB000u + sizeof cave) {
+        vm->clen[1] = 0xB000u + (uint32_t)sizeof cave;
+    }
 }
 
 /* ---- RNG 0xE5D / 0xE4E -------------------------------------------------- */
@@ -3787,6 +3828,84 @@ void vm_set_grade(RbVm *vm, int modern)
 {
     (void)vm;
     gfx_set_grade(modern);
+}
+
+void vm_set_global_u8(RbVm *vm, uint8_t field, uint8_t value)
+{
+    if (!vm) {
+        return;
+    }
+    set_g8(vm, (int)field, value);
+}
+
+void vm_pretend_held(RbVm *vm, uint16_t game_bits)
+{
+    if (!vm) {
+        return;
+    }
+    vm->prev_held = (uint16_t)(vm->prev_held | game_bits);
+}
+
+void vm_text_write(RbVm *vm, int col, int row, const char *s, int width,
+                   uint8_t attr)
+{
+    uint16_t di;
+    uint16_t a;
+    int i;
+    int n;
+    int limit;
+
+    if (!vm || row < 0 || row > 24 || col < 0) {
+        return;
+    }
+    if (!s) {
+        s = "";
+    }
+    /* Pad past the terminator. The next literal in the binary is not
+     * a blank, and reading it painted a stray glyph in the last cell. */
+    n = (int)strlen(s);
+    limit = width > 0 ? width : n;
+    di = (uint16_t)((unsigned)col * 2u + (unsigned)row * 160u);
+    a = (uint16_t)(0x5700u | attr);
+    for (i = 0; i < limit; i++) {
+        unsigned char ch = (i < n) ? (unsigned char)s[i] : (unsigned char)' ';
+
+        if (ch >= 'a' && ch <= 'z') {
+            ch = (unsigned char)(ch - 32u);
+        }
+        if (ch == ' ') {
+            if ((uint32_t)di + 0x2003u < TEXT_SIZE) {
+                memset(vm->text + di, 0, 4);
+                memset(vm->text + 0x2000u + di, 0, 4);
+            }
+        } else {
+            uint16_t left = (uint16_t)(0x0003u | ((uint16_t)ch << 8));
+
+            text_pair(vm, di, left, (uint16_t)(left | 0x0080u), a);
+        }
+        di = (uint16_t)(di + 4u);
+    }
+}
+
+void vm_text_settle_row(RbVm *vm, int row)
+{
+    int col;
+
+    if (!vm || row < 0 || row > 24) {
+        return;
+    }
+    for (col = 0; col < 80; col++) {
+        unsigned off = (unsigned)row * 0xA0u + (unsigned)col * 2u;
+        uint8_t ch = vm->text[off];
+        uint8_t ch2 = vm->text[off + 1u];
+
+        if (ch2 == 0 && (ch == 0 || ch == 0x20u)) {
+            continue;
+        }
+        if (vm->text[0x2000u + off] == 0x41u) {
+            vm->text[0x2000u + off] = (col < 50) ? 0xE1u : 0xA1u;
+        }
+    }
 }
 
 int vm_text_has_jis(const RbVm *vm, uint16_t a, uint16_t b)

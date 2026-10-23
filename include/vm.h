@@ -73,6 +73,18 @@ void vm_set_input(RbVm *vm, const RbInput *in);
 void vm_set_training(RbVm *vm, int on);
 int  vm_training(const RbVm *vm);
 void vm_set_grade(RbVm *vm, int modern);
+void vm_set_global_u8(RbVm *vm, uint8_t field, uint8_t value);
+/* OR these PC-98 held bits into the edge history so a swallowed key
+ * does not fire again on the next frame while the player is still
+ * holding it. */
+void vm_pretend_held(RbVm *vm, uint16_t game_bits);
+/* One settings row, ASCII in the same 0x23 fold the menu uses for
+ * OFF/ON. width pads with blanks; 0 writes the string as-is. */
+void vm_text_write(RbVm *vm, int col, int row, const char *s, int width,
+                   uint8_t attr);
+/* Selected rows blink attribute 0x41. Put a row back to the resting
+ * label and value colors when the cursor leaves it. */
+void vm_text_settle_row(RbVm *vm, int row);
 /* 1 when two JIS characters sit next to each other in the text layer. */
 int  vm_text_has_jis(const RbVm *vm, uint16_t a, uint16_t b);
 void vm_frame(RbVm *vm);
