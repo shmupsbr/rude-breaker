@@ -246,6 +246,39 @@ void sys_draw_text(int16_t x, int16_t y, const char *utf8, uint32_t rgba);
 
 void sys_read_input(RbInput *out);
 
+/* One slot per action. DEFAULT keeps the built-in key and pad map.
+ * KEY is an SDL scancode. BUTTON is a controller or joystick button.
+ * AXIS uses a = axis index and b = -1 or +1. HAT uses a = hat index
+ * and b = the SDL hat mask. */
+#define RB_ACT_UP     0
+#define RB_ACT_DOWN   1
+#define RB_ACT_LEFT   2
+#define RB_ACT_RIGHT  3
+#define RB_ACT_FIRE   4
+#define RB_ACT_MODE   5
+#define RB_ACT_SHIFT  6
+#define RB_ACT_PAUSE  7
+#define RB_ACT_COUNT  8
+
+#define RB_BIND_DEFAULT 0
+#define RB_BIND_KEY     1
+#define RB_BIND_BUTTON  2
+#define RB_BIND_AXIS    3
+#define RB_BIND_HAT     4
+
+/* Arm capture. The next key, button, or axis edge is stored. Escape
+ * cancels. sys_bind_result returns 1, -1, or 0 and clears the result. */
+void sys_bind_begin(void);
+int  sys_bind_result(int *kind, int *a, int *b);
+void sys_bind_restore(void);
+int  sys_bind_set(int action, int kind, int a, int b);
+const char *sys_bind_label(int action);
+void sys_bind_write(void *file);
+int  sys_bind_read_line(const char *line);
+/* Empty string when no device is open. The first live device wins. */
+const char *sys_joy_name(void);
+int  sys_joy_present(void);
+
 int  sys_play_sound(uint16_t id, uint8_t vol);
 int  sys_play_music(uint16_t track_id);
 void sys_stop_music(void);
@@ -260,6 +293,10 @@ int  sys_audio_bind_mem(const uint8_t *com, size_t com_n,
 void sys_set_rhythm_override(const char *path);
 /* Opcode 0x46, INT 7Fh AH=4. speed is the fade step the driver stores. */
 void sys_fade_music(uint8_t speed);
+/* 0..10 from the samples last handed to the audio device. */
+int  sys_audio_level(void);
+/* Freeze the output clock. Play and stop clear it. */
+void sys_audio_pause(int on);
 
 /* Milliseconds since sys_init (debug / Phase 1 only; core must not rely). */
 uint32_t sys_ticks_ms(void);

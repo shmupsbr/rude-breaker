@@ -11,6 +11,29 @@
 
 static SDL_AudioDeviceID g_dev;
 static int g_opened;
+static int g_paused;
+static volatile int g_peak;
+
+static void note_level(const int16_t *s, int frames)
+{
+    int n = frames * 2;
+    int i;
+    int peak = 0;
+
+    for (i = 0; i < n; i++) {
+        int a = s[i];
+
+        if (a < 0) {
+            a = -a;
+        }
+        if (a > peak) {
+            peak = a;
+        }
+    }
+    if (peak > g_peak) {
+        g_peak = peak;
+    }
+}
 
 static void audio_cb(void *userdata, Uint8 *stream, int len)
 {
@@ -21,6 +44,18 @@ static void audio_cb(void *userdata, Uint8 *stream, int len)
         return;
     }
     fplay_render((int16_t *)stream, frames);
+    note_level((const int16_t *)stream, frames);
+}
+
+static void audio_resume(void)
+{
+    if (!g_paused) {
+        return;
+    }
+    g_paused = 0;
+    if (g_dev) {
+        SDL_PauseAudioDevice(g_dev, 0);
+    }
 }
 
 static void open_device(void)
@@ -75,6 +110,7 @@ int sys_play_sound(uint16_t id, uint8_t vol)
     if (!g_opened) {
         open_device();
     }
+    audio_resume();
     if (g_dev) {
         SDL_LockAudioDevice(g_dev);
     }
@@ -90,6 +126,7 @@ int sys_play_music(uint16_t track_id)
     if (!g_opened) {
         open_device();
     }
+    audio_resume();
     if (g_dev) {
         SDL_LockAudioDevice(g_dev);
     }
@@ -103,12 +140,41 @@ int sys_play_music(uint16_t track_id)
 
 void sys_stop_music(void)
 {
+    audio_resume();
     if (g_dev) {
         SDL_LockAudioDevice(g_dev);
     }
     fplay_command(3, 0);
     if (g_dev) {
         SDL_UnlockAudioDevice(g_dev);
+    }
+}
+
+int sys_audio_level(void)
+{
+    int p = g_peak;
+    int bars;
+
+    g_peak = (p * 2) / 3;
+    if (p < 500) {
+        return 0;
+    }
+    bars = p / 2800;
+    if (bars > 10) {
+        bars = 10;
+    }
+    return bars;
+}
+
+void sys_audio_pause(int on)
+{
+    if (!g_opened) {
+        open_device();
+    }
+    g_paused = on ? 1 : 0;
+    g_peak = 0;
+    if (g_dev) {
+        SDL_PauseAudioDevice(g_dev, g_paused);
     }
 }
 

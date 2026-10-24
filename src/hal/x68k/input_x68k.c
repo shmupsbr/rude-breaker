@@ -63,6 +63,58 @@ void sys_read_input(RbInput *out)
     }
 }
 
+void sys_bind_begin(void)
+{
+}
+
+int sys_bind_result(int *kind, int *a, int *b)
+{
+    (void)kind;
+    (void)a;
+    (void)b;
+    return 0;
+}
+
+void sys_bind_restore(void)
+{
+}
+
+int sys_bind_set(int action, int kind, int a, int b)
+{
+    (void)action;
+    (void)kind;
+    (void)a;
+    (void)b;
+    return 0;
+}
+
+const char *sys_bind_label(int action)
+{
+    (void)action;
+    return "DEFAULT";
+}
+
+void sys_bind_write(void *file)
+{
+    (void)file;
+}
+
+int sys_bind_read_line(const char *line)
+{
+    (void)line;
+    return 0;
+}
+
+const char *sys_joy_name(void)
+{
+    return "";
+}
+
+int sys_joy_present(void)
+{
+    return 0;
+}
+
 #else
 
 typedef int rb_input_x68k_placeholder;

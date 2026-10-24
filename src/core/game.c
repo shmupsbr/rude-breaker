@@ -9,6 +9,7 @@
 #include "stage.h"
 #include "stage_data.h"
 #include "assets.h"
+#include "exepath.h"
 #include "vm.h"
 
 #include <stdio.h>
@@ -28,11 +29,22 @@ static int          g_saw_clear;
 static int          g_saw_over;
 static int          g_data_missing;
 /* Host options. Default is the original palette and training off, so
- * the scripted checks keep the same picture and the same deaths.
- * On the settings screen they are cursor rows E0 20 and 21. */
+ * the scripted checks keep the same picture and the same deaths. */
 static int          g_modern;
 static int          g_training;
-static int          g_menu_pending;
+static int          g_menu_latched;
+static int          g_suspend;
+static int          g_suspend_closed;
+static int          g_page;
+static int          g_cursor;
+static int          g_capture;
+static int          g_handoff;
+static int          g_bgm_no;
+static int          g_se_no;
+static int          g_pl_kind;
+static int          g_pl;
+static int          g_joy_was;
+static int          g_joy_lockout;
 /* Set by a VM iteration that flips the page. Frame skip leaves it
  * clear so the picture already on screen stays up. */
 static int          g_show_frame = 1;
@@ -41,8 +53,14 @@ static void cfg_path(const RbGame *g, char *out, size_t n)
 {
     struct stat st;
     char dir[512];
+    char exe[1024];
     char *slash;
 
+    /* Bindings, palette, and training sit beside the executable. */
+    if (rb_exe_dir(exe, sizeof exe) == 0) {
+        snprintf(out, n, "%s/rudebreaker.cfg", exe);
+        return;
+    }
     if (!g || !g->asset_dir[0]) {
         snprintf(out, n, "%s", "rudebreaker.cfg");
         return;
@@ -67,6 +85,7 @@ static void load_cfg(const RbGame *g)
 
     g_modern = 0;
     g_training = 0;
+    sys_bind_restore();
     cfg_path(g, path, sizeof path);
     fp = fopen(path, "r");
     if (!fp) {
@@ -81,6 +100,8 @@ static void load_cfg(const RbGame *g)
             g_training = 1;
         } else if (strncmp(line, "training=off", 12) == 0) {
             g_training = 0;
+        } else {
+            sys_bind_read_line(line);
         }
     }
     fclose(fp);
@@ -90,19 +111,28 @@ static uint8_t  g_rank_c9;
 static uint16_t g_rank_b2;
 static uint16_t g_rank_stock;
 
+/* Ranking stays beside the data folder. The settings file is the one
+ * next to the executable. */
 static void rank_path(const RbGame *g, char *out, size_t n)
 {
-    char cfg[600];
+    struct stat st;
+    char dir[512];
     char *slash;
 
-    cfg_path(g, cfg, sizeof cfg);
-    slash = strrchr(cfg, '/');
-    if (!slash) {
+    if (!g || !g->asset_dir[0]) {
         snprintf(out, n, "%s", "RBRANK.DAT");
         return;
     }
-    *slash = 0;
-    snprintf(out, n, "%s/RBRANK.DAT", cfg);
+    snprintf(dir, sizeof dir, "%s", g->asset_dir);
+    if (stat(dir, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        slash = strrchr(dir, '/');
+        if (slash && slash != dir) {
+            *slash = 0;
+        } else {
+            snprintf(dir, sizeof dir, "%s", ".");
+        }
+    }
+    snprintf(out, n, "%s/RBRANK.DAT", dir);
 }
 
 static void rank_snapshot(void)
@@ -212,6 +242,7 @@ static void save_cfg(const RbGame *g)
     fprintf(fp, "palette=%s\ntraining=%s\n",
             g_modern ? "modern" : "original",
             g_training ? "on" : "off");
+    sys_bind_write(fp);
     fclose(fp);
 }
 
@@ -224,121 +255,491 @@ static void apply_host_options(void)
     vm_set_grade(g_vm, g_modern);
 }
 
-static int settings_open(void)
+static int btn_pressed(const RbGame *g, uint16_t mask);
+
+static int script_settings(void)
 {
     /* SETTINGS, the two JIS characters behind that English label. */
     return g_vm && vm_text_has_jis(g_vm, 0x405Fu, 0x446Au);
 }
 
-/* Cursor index to the text row it redraws. E0 2 is BACK on row 5.
- * INVINCIBLE (17) skips the blank row 20. */
-static int row_for_e0(int e0)
+static int menu_visible(void)
 {
-    if (e0 >= 2 && e0 <= 16) {
-        return e0 + 3;
-    }
-    if (e0 >= 17 && e0 <= 19) {
-        return e0 + 4;
-    }
-    return -1;
+    return g_menu_latched && !g_suspend && g_handoff == 0;
 }
 
-static int btn_pressed(const RbGame *g, uint16_t mask);
+enum {
+    PAGE_ROOT = 0,
+    PAGE_GAME,
+    PAGE_CTRL,
+    PAGE_KEYS,
+    PAGE_SOUND
+};
+
+static uint16_t flag_word(void)
+{
+    return vm_global_u16(g_vm, 0x72);
+}
+
+static void set_flag_word(uint16_t f)
+{
+    vm_set_global_u8(g_vm, 0x72, (uint8_t)f);
+    vm_set_global_u8(g_vm, 0x73, (uint8_t)(f >> 8));
+}
+
+static int sound_on(void)
+{
+    return g_vm && (vm_global_u8(g_vm, 0xB9) & 0x04u) == 0;
+}
 
 static void menu_beep(void)
 {
-    sys_play_sound(0x1D, 180);
-}
-
-static void swallow_btn(RbGame *g, uint16_t btn, uint16_t game_bit, uint16_t *sw)
-{
-    if (g->input.buttons & btn) {
-        g->input.buttons = (uint16_t)(g->input.buttons & (uint16_t)~btn);
-        *sw = (uint16_t)(*sw | game_bit);
+    if (sound_on()) {
+        sys_play_sound(0x1D, 180);
     }
 }
 
-/* UP/DOWN move the settings cursor. LEFT/RIGHT change the value.
- * PALETTE and TRAINING share the blank row between FRAME SKIP and
- * INVINCIBLE. TRAINING is the left-hand value. PALETTE keeps the
- * label and value columns the other rows use. Row 24 stays empty. */
-static void host_menu_input(RbGame *g, uint16_t *swallowed)
+static void menu_ok(void)
 {
-    int up = btn_pressed(g, RB_BTN_UP);
-    int down = btn_pressed(g, RB_BTN_DOWN);
-    int left = btn_pressed(g, RB_BTN_LEFT);
-    int right = btn_pressed(g, RB_BTN_RIGHT);
-    uint8_t e0;
+    if (sound_on()) {
+        sys_play_sound(0x1C, 180);
+    }
+}
+
+/* Difficulty pairs the original left/right handler writes.
+ * C9 / B2: 0/0, 4/1, 7/2, 10/3, 28/3. 7/2 is the loader default. */
+static const uint8_t k_c9[5] = {0, 4, 7, 10, 28};
+static const uint8_t k_b2[5] = {0, 1, 2, 3, 3};
+static const char *const k_diff[5] = {
+    "VERY EASY", "EASY", "NORMAL", "HARD", "VERY HARD"
+};
+
+static int diff_index(void)
+{
+    uint8_t c9 = vm_global_u8(g_vm, 0xC9);
+    int i;
+
+    for (i = 0; i < 5; i++) {
+        if (k_c9[i] == c9) {
+            return i;
+        }
+    }
+    return 2;
+}
+
+static void set_diff(int i)
+{
+    if (i < 0) {
+        i = 0;
+    }
+    if (i > 4) {
+        i = 4;
+    }
+    vm_set_global_u8(g_vm, 0xC9, k_c9[i]);
+    vm_set_global_u8(g_vm, 0xB2, k_b2[i]);
+    vm_set_global_u8(g_vm, 0xB3, 0);
+}
+
+/* Bit 0x10 is slow, bit 0x20 is fast, neither is normal. */
+static int speed_index(void)
+{
+    uint16_t f = flag_word();
+
+    if (f & 0x0010u) {
+        return 0;
+    }
+    if (f & 0x0020u) {
+        return 2;
+    }
+    return 1;
+}
+
+static void set_speed(int i)
+{
+    uint16_t f = (uint16_t)(flag_word() & (uint16_t)~0x0030u);
+
+    if (i <= 0) {
+        f = (uint16_t)(f | 0x0010u);
+    } else if (i >= 2) {
+        f = (uint16_t)(f | 0x0020u);
+    }
+    set_flag_word(f);
+}
+
+/* RETURN FIRE. Bit 0x0008 set is the OFF label. Clear is ON. */
+static int suicide_on(void)
+{
+    return (flag_word() & 0x0008u) == 0;
+}
+
+/* SHIP SELECT. Bit 0x0080 set skips the scene (the OFF label). */
+static int ship_on(void)
+{
+    return (flag_word() & 0x0080u) == 0;
+}
+
+static int joy_flag(void)
+{
+    return (flag_word() & 0x0400u) != 0;
+}
+
+static void set_joy(int on)
+{
+    uint16_t f = flag_word();
+
+    if (on) {
+        if (!sys_joy_present() && (vm_global_u8(g_vm, 0xB9) & 0x08u) == 0) {
+            return;
+        }
+        set_flag_word((uint16_t)(f | 0x0400u));
+        g_joy_lockout = 0;
+    } else {
+        set_flag_word((uint16_t)(f & (uint16_t)~0x0400u));
+        g_joy_lockout = 1;
+    }
+}
+
+static void set_sound(int on)
+{
+    uint8_t b = vm_global_u8(g_vm, 0xB9);
+
+    if (on) {
+        vm_set_global_u8(g_vm, 0xB9, (uint8_t)(b & (uint8_t)~0x04u));
+        sys_play_sound(0x1D, 180);
+        sys_play_music(0x0D);
+    } else {
+        vm_set_global_u8(g_vm, 0xB9, (uint8_t)(b | 0x04u));
+        sys_audio_pause(0);
+        sys_stop_music();
+        g_pl = 0;
+    }
+}
+
+static void player_stop(void)
+{
+    sys_audio_pause(0);
+    sys_stop_music();
+    g_pl = 0;
+}
+
+static void player_play(void)
+{
+    if (!sound_on()) {
+        return;
+    }
+    sys_audio_pause(0);
+    if (g_pl_kind) {
+        sys_play_sound((uint16_t)g_se_no, 180);
+    } else {
+        sys_play_music((uint16_t)g_bgm_no);
+    }
+    g_pl = 1;
+}
+
+static void player_pause(void)
+{
+    if (g_pl == 1) {
+        sys_audio_pause(1);
+        g_pl = 2;
+    } else if (g_pl == 2) {
+        sys_audio_pause(0);
+        g_pl = 1;
+    }
+}
+
+static void joy_auto(void)
+{
+    int present;
+
+    if (!g_vm) {
+        return;
+    }
+    present = sys_joy_present();
+    if (present && !g_joy_was && !g_joy_lockout) {
+        set_flag_word((uint16_t)(flag_word() | 0x0400u));
+    }
+    g_joy_was = present;
+}
+
+static int page_count(void)
+{
+    switch (g_page) {
+    case PAGE_GAME:  return 7;
+    case PAGE_CTRL:  return 3;
+    case PAGE_KEYS:  return 10;
+    case PAGE_SOUND: return 7;
+    default:         return 6;
+    }
+}
+
+static void enter_page(int page)
+{
+    if (g_page == PAGE_SOUND && page != PAGE_SOUND) {
+        player_stop();
+    }
+    g_page = page;
+    g_cursor = 0;
+    g_capture = 0;
+}
+
+static void handoff(int e0)
+{
+    if (g_page == PAGE_SOUND) {
+        player_stop();
+    }
+    g_handoff = e0;
+}
+
+static void change_value(RbGame *g, int dir)
+{
     int changed = 0;
 
-    *swallowed = 0;
-    if (!settings_open()) {
-        g_menu_pending = 0;
-        return;
-    }
-    e0 = vm_global_u8(g_vm, 0xE0);
-    if (e0 == 20 || e0 == 21) {
-        swallow_btn(g, RB_BTN_UP, 0x0001u, swallowed);
-        swallow_btn(g, RB_BTN_LEFT, 0x0002u, swallowed);
-        swallow_btn(g, RB_BTN_RIGHT, 0x0004u, swallowed);
-        swallow_btn(g, RB_BTN_DOWN, 0x0008u, swallowed);
-        swallow_btn(g, RB_BTN_A, 0x0010u, swallowed);
-        swallow_btn(g, RB_BTN_B, 0x0020u, swallowed);
-        if (e0 == 21) {
-            if (up) {
-                g_menu_pending = 16;
-                menu_beep();
-            } else if (down) {
-                vm_set_global_u8(g_vm, 0xE0, 20);
-                menu_beep();
-            } else if (left || right) {
-                g_training = !g_training;
-                changed = 1;
-                menu_beep();
-            }
-        } else if (up) {
-            vm_set_global_u8(g_vm, 0xE0, 21);
-            menu_beep();
-        } else if (down) {
-            g_menu_pending = 17;
-            menu_beep();
-        } else if (left || right) {
+    (void)g;
+    if (g_page == PAGE_GAME) {
+        if (g_cursor == 0) {
+            set_diff(diff_index() + dir);
+            changed = 1;
+        } else if (g_cursor == 1) {
+            set_flag_word((uint16_t)(flag_word() ^ 0x0008u));
+            changed = 1;
+        } else if (g_cursor == 2) {
+            set_flag_word((uint16_t)(flag_word() ^ 0x0080u));
+            changed = 1;
+        } else if (g_cursor == 3) {
+            set_speed(speed_index() + dir);
+            changed = 1;
+        } else if (g_cursor == 4) {
             g_modern = !g_modern;
             changed = 1;
-            menu_beep();
+        } else if (g_cursor == 5) {
+            g_training = !g_training;
+            changed = 1;
         }
-        if (changed) {
-            apply_host_options();
-            save_cfg(g);
+    } else if (g_page == PAGE_CTRL && g_cursor == 0) {
+        int next = !joy_flag();
+
+        if (dir < 0) {
+            next = 0;
+        } else if (dir > 0) {
+            next = 1;
+        }
+        if (next != joy_flag()) {
+            set_joy(next);
+            changed = joy_flag() == next;
+        }
+    } else if (g_page == PAGE_SOUND) {
+        if (g_cursor == 0) {
+            set_sound(!sound_on());
+            return;
+        }
+        if (g_cursor == 1) {
+            g_bgm_no += dir;
+            if (g_bgm_no < 0) {
+                g_bgm_no = 0;
+            }
+            if (g_bgm_no > 47) {
+                g_bgm_no = 47;
+            }
+            g_pl_kind = 0;
+            changed = 1;
+        } else if (g_cursor == 2) {
+            g_se_no += dir;
+            if (g_se_no < 0) {
+                g_se_no = 0;
+            }
+            if (g_se_no > 47) {
+                g_se_no = 47;
+            }
+            g_pl_kind = 1;
+            changed = 1;
+        }
+    }
+    if (changed) {
+        apply_host_options();
+        save_cfg(g);
+        menu_beep();
+    }
+}
+
+static void activate_row(RbGame *g)
+{
+    if (g_page == PAGE_ROOT) {
+        if (g_cursor == 0) {
+            enter_page(PAGE_GAME);
+        } else if (g_cursor == 1) {
+            enter_page(PAGE_CTRL);
+        } else if (g_cursor == 2) {
+            enter_page(PAGE_SOUND);
+        } else if (g_cursor == 3) {
+            handoff(3);
+        } else if (g_cursor == 4) {
+            handoff(4);
+        } else {
+            handoff(2);
+        }
+        menu_ok();
+        return;
+    }
+    if (g_page == PAGE_GAME && g_cursor == 6) {
+        enter_page(PAGE_ROOT);
+        menu_ok();
+        return;
+    }
+    if (g_page == PAGE_CTRL) {
+        if (g_cursor == 1) {
+            enter_page(PAGE_KEYS);
+            menu_ok();
+        } else if (g_cursor == 2) {
+            enter_page(PAGE_ROOT);
+            menu_ok();
         }
         return;
     }
-    if (e0 == 16 && down) {
-        swallow_btn(g, RB_BTN_DOWN, 0x0008u, swallowed);
-        g_menu_pending = 21;
-        menu_beep();
-    } else if (e0 == 17 && up) {
-        swallow_btn(g, RB_BTN_UP, 0x0001u, swallowed);
-        g_menu_pending = 20;
-        menu_beep();
+    if (g_page == PAGE_KEYS) {
+        if (g_cursor == 8) {
+            sys_bind_restore();
+            save_cfg(g);
+            menu_ok();
+        } else if (g_cursor == 9) {
+            enter_page(PAGE_CTRL);
+            menu_ok();
+        } else if (g_cursor >= 0 && g_cursor < RB_ACT_COUNT) {
+            g_capture = 1;
+            sys_bind_begin();
+            menu_ok();
+        }
+        return;
     }
+    if (g_page == PAGE_SOUND) {
+        if (g_cursor == 1) {
+            g_pl_kind = 0;
+            player_play();
+        } else if (g_cursor == 2) {
+            g_pl_kind = 1;
+            player_play();
+        } else if (g_cursor == 3) {
+            g_pl_kind = 0;
+            player_play();
+        } else if (g_cursor == 4) {
+            player_pause();
+        } else if (g_cursor == 5) {
+            player_stop();
+        } else if (g_cursor == 6) {
+            enter_page(PAGE_ROOT);
+        }
+        menu_ok();
+    }
+}
+
+static void strip_menu_buttons(RbGame *g)
+{
+    g->input.buttons = (uint16_t)(g->input.buttons &
+                                  (uint16_t)~(RB_BTN_UP | RB_BTN_DOWN |
+                                               RB_BTN_LEFT | RB_BTN_RIGHT |
+                                               RB_BTN_A | RB_BTN_B));
+}
+
+static void host_menu_input(RbGame *g, uint16_t *swallowed)
+{
+    int up;
+    int down;
+    int left;
+    int right;
+    int fire;
+    int n;
+
+    *swallowed = 0;
+    joy_auto();
+    if (!g_vm) {
+        return;
+    }
+    if (g_handoff) {
+        int e0 = g_handoff;
+
+        g_handoff = 0;
+        vm_set_global_u8(g_vm, 0xE0, (uint8_t)e0);
+        g->input.buttons = (uint16_t)((g->input.buttons &
+                                       (uint16_t)~(RB_BTN_UP | RB_BTN_DOWN |
+                                                    RB_BTN_LEFT | RB_BTN_RIGHT |
+                                                    RB_BTN_B)) |
+                                      RB_BTN_A);
+        g_menu_latched = 0;
+        g_suspend = 1;
+        g_suspend_closed = 0;
+        g_capture = 0;
+        return;
+    }
+    if (g_suspend) {
+        if (!script_settings()) {
+            g_suspend_closed = 1;
+        }
+        if (g_suspend_closed && script_settings()) {
+            g_suspend = 0;
+            g_suspend_closed = 0;
+            g_menu_latched = 1;
+            g_page = PAGE_ROOT;
+            g_cursor = 0;
+        } else {
+            return;
+        }
+    }
+    if (!g_menu_latched) {
+        if (!script_settings()) {
+            return;
+        }
+        g_menu_latched = 1;
+        g_page = PAGE_ROOT;
+        g_cursor = 0;
+    }
+    if (g_capture) {
+        int kind = 0;
+        int a = 0;
+        int b = 0;
+        int got = sys_bind_result(&kind, &a, &b);
+
+        if (got > 0) {
+            sys_bind_set(g_cursor, kind, a, b);
+            save_cfg(g);
+            g_capture = 0;
+            menu_beep();
+        } else if (got < 0) {
+            g_capture = 0;
+        }
+        strip_menu_buttons(g);
+        return;
+    }
+    up = btn_pressed(g, RB_BTN_UP);
+    down = btn_pressed(g, RB_BTN_DOWN);
+    left = btn_pressed(g, RB_BTN_LEFT);
+    right = btn_pressed(g, RB_BTN_RIGHT);
+    fire = btn_pressed(g, RB_BTN_A) || btn_pressed(g, RB_BTN_B);
+    n = page_count();
+    if (up) {
+        g_cursor--;
+        if (g_cursor < 0) {
+            g_cursor = n - 1;
+        }
+        menu_beep();
+    } else if (down) {
+        g_cursor++;
+        if (g_cursor >= n) {
+            g_cursor = 0;
+        }
+        menu_beep();
+    } else if (left) {
+        change_value(g, -1);
+    } else if (right) {
+        change_value(g, 1);
+    } else if (fire) {
+        activate_row(g);
+    }
+    strip_menu_buttons(g);
 }
 
 static void host_menu_commit(RbGame *g, uint16_t swallowed)
 {
-    if (g_vm && g_menu_pending && settings_open()) {
-        int row = row_for_e0((int)vm_global_u8(g_vm, 0xE0));
-
-        if (row >= 0) {
-            vm_text_settle_row(g_vm, row);
-        }
-        vm_set_global_u8(g_vm, 0xE0, (uint8_t)g_menu_pending);
-    }
-    g_menu_pending = 0;
-    if (g_vm && swallowed) {
-        vm_pretend_held(g_vm, swallowed);
-    }
     (void)g;
+    (void)swallowed;
 }
 
 static void paint_option_row(int col, int value_col, int row,
@@ -353,28 +754,134 @@ static void paint_option_row(int col, int value_col, int row,
         value_attr = 0x41u;
     }
     vm_text_write(g_vm, col, row, label, 0, label_attr);
-    vm_text_write(g_vm, value_col, row, value, value_width, value_attr);
+    if (value) {
+        vm_text_write(g_vm, value_col, row, value, value_width, value_attr);
+    }
+}
+
+static const char *speed_name(void)
+{
+    switch (speed_index()) {
+    case 0:  return "SLOW";
+    case 2:  return "FAST";
+    default: return "NORMAL";
+    }
+}
+
+static const char *joy_value(void)
+{
+    if (!joy_flag()) {
+        return sys_joy_present() ? "UNUSED" : "NONE";
+    }
+    if (sys_joy_name()[0]) {
+        return sys_joy_name();
+    }
+    return "IN USE";
+}
+
+static void paint_line(int index, int row, const char *label, const char *value,
+                       int hot)
+{
+    paint_option_row(4, 28, row, label, value, value ? 16 : 0,
+                     index == g_cursor, hot);
 }
 
 static void host_menu_paint(void)
 {
-    uint8_t e0;
+    int row;
+    int i;
+    char num[8];
+    char track[20];
+    char meter[12];
+    int bars;
+    const char *title = "CONFIG";
+    static const char *root_name[6] = {
+        "GAMEPLAY", "CONTROLS", "SOUND TEST", "RANKING", "PASSWORD", "BACK"
+    };
+    static const char *key_name[10] = {
+        "UP", "DOWN", "LEFT", "RIGHT", "FIRE", "MODE", "SHIFT", "PAUSE",
+        "RESTORE DEFAULTS", "BACK"
+    };
 
-    if (!settings_open()) {
+    if (!menu_visible() || !g_vm) {
         return;
     }
-    e0 = vm_global_u8(g_vm, 0xE0);
-    /* Row 20 is the blank line the original leaves between FRAME SKIP
-     * and INVINCIBLE. Both host rows share it. Row 24 is wiped so a
-     * previous build's TRAINING line cannot sit on the bottom edge. */
-    vm_text_write(g_vm, 0, 20, "", 40, 0);
-    vm_text_write(g_vm, 0, 24, "", 40, 0);
-    paint_option_row(0, 18, 20, "TRAINING",
-                     g_training ? "ON" : "OFF", 3,
-                     e0 == 21, g_training);
-    paint_option_row(26, 50, 20, "PALETTE",
-                     g_modern ? "MODERN" : "ORIGINAL", 8,
-                     e0 == 20, g_modern);
+    for (row = 0; row < 24; row++) {
+        vm_text_write(g_vm, 0, row, "", 40, 0);
+    }
+    if (g_page == PAGE_GAME) {
+        title = "GAMEPLAY";
+    } else if (g_page == PAGE_CTRL) {
+        title = "CONTROLS";
+    } else if (g_page == PAGE_KEYS) {
+        title = "DEFINE KEYS";
+    } else if (g_page == PAGE_SOUND) {
+        title = "SOUND TEST";
+    }
+    vm_text_write(g_vm, 4, 2, title, 0, 0xE1u);
+    if (g_page == PAGE_ROOT) {
+        for (i = 0; i < 6; i++) {
+            paint_line(i, 4 + i, root_name[i], NULL, 0);
+        }
+    } else if (g_page == PAGE_GAME) {
+        paint_line(0, 4, "DIFFICULTY", k_diff[diff_index()], diff_index() != 2);
+        paint_line(1, 5, "SUICIDE BULLETS", suicide_on() ? "ON" : "OFF",
+                   suicide_on());
+        paint_line(2, 6, "SHIP SELECT", ship_on() ? "ON" : "OFF", ship_on());
+        paint_line(3, 7, "MOVE SPEED", speed_name(), speed_index() != 1);
+        paint_line(4, 8, "PALETTE", g_modern ? "MODERN" : "ORIGINAL", g_modern);
+        paint_line(5, 9, "TRAINING", g_training ? "ON" : "OFF", g_training);
+        paint_line(6, 10, "BACK", NULL, 0);
+    } else if (g_page == PAGE_CTRL) {
+        paint_line(0, 4, "JOYSTICK", joy_value(), joy_flag());
+        paint_line(1, 5, "DEFINE KEYS", NULL, 0);
+        paint_line(2, 6, "BACK", NULL, 0);
+    } else if (g_page == PAGE_KEYS) {
+        for (i = 0; i < 8; i++) {
+            const char *value = sys_bind_label(i);
+
+            if (g_capture && g_cursor == i) {
+                value = "PRESS A KEY";
+            }
+            paint_line(i, 4 + i, key_name[i], value, 0);
+        }
+        paint_line(8, 12, key_name[8], NULL, 0);
+        paint_line(9, 13, key_name[9], NULL, 0);
+    } else if (g_page == PAGE_SOUND) {
+        const char *state = "STOP";
+
+        snprintf(num, sizeof num, "%02d", g_bgm_no);
+        paint_line(0, 4, "SOUND", sound_on() ? "ON" : "OFF", sound_on());
+        paint_line(1, 5, "BGM", num, g_pl_kind == 0 && g_pl == 1);
+        snprintf(num, sizeof num, "%02d", g_se_no);
+        paint_line(2, 6, "SE", num, g_pl_kind == 1 && g_pl == 1);
+        paint_line(3, 7, "PLAY", NULL, 0);
+        paint_line(4, 8, "PAUSE", NULL, 0);
+        paint_line(5, 9, "STOP", NULL, 0);
+        paint_line(6, 10, "BACK", NULL, 0);
+        if (g_pl == 1) {
+            state = "PLAY";
+        } else if (g_pl == 2) {
+            state = "PAUSE";
+        }
+        snprintf(track, sizeof track, "%s %02d  %s",
+                 g_pl_kind ? "SE" : "BGM",
+                 g_pl_kind ? g_se_no : g_bgm_no, state);
+        vm_text_write(g_vm, 4, 12, "TRACK", 0, 0xE1u);
+        vm_text_write(g_vm, 28, 12, track, 16, 0xA1u);
+        bars = sys_audio_level();
+        for (i = 0; i < 10; i++) {
+            meter[i] = (i < bars) ? '#' : '-';
+        }
+        meter[10] = 0;
+        vm_text_write(g_vm, 4, 13, "LEVEL", 0, 0xE1u);
+        vm_text_write(g_vm, 28, 13, meter, 10, g_pl == 1 ? 0xC1u : 0xA1u);
+    }
+    if (g_capture) {
+        vm_text_write(g_vm, 4, 22, "ESC CANCELS", 0, 0xA1u);
+    } else {
+        vm_text_write(g_vm, 4, 22, "FIRE SELECTS    LEFT RIGHT CHANGES", 0, 0xA1u);
+    }
 }
 
 static int env_on(const char *name)
@@ -1025,7 +1532,7 @@ void game_render(const RbGame *g)
     if (g_training && g->state == RB_STATE_PLAY) {
         sys_draw_text(8, 8, "TRAINING", 0x40FF40FFu);
     }
-    if (settings_open()) {
+    if (menu_visible()) {
         const char *shot = getenv("RUDEBR_SHOT");
         static int saved;
         uint32_t *px;
