@@ -21,7 +21,7 @@ You must supply these files from **your own legal copy** of the game.
 1. Get the game legally, for example from [Project EGG](https://www.amusement-center.com/), or from your own *Disc Station Vol. 10* disc.
 2. Extract these files from the Rude Breaker disk: `SGM1.DAT`, `SONG.DAT` and `FPLAY.COM`.
 3. Obtain `ym2608_adpcm_rom.bin` by dumping it from your own hardware.
-4. Download or build `rudebreaker.exe`, then put everything in one folder:
+4. Download `releases/RudeBreaker-PC-pr9n.zip` from this repository (or build `rudebreaker.exe` yourself), unzip it, and add the game files so the folder looks like this:
    ```
    Rude Breaker PC/
      rudebreaker.exe
@@ -60,7 +60,7 @@ Você precisa tirar esses arquivos da **sua própria cópia legal** do jogo.
 1. Consiga o jogo legalmente, por exemplo na [Project EGG](https://www.amusement-center.com/) ou no seu próprio disco da *Disc Station Vol. 10*.
 2. Extraia estes arquivos do disco do Rude Breaker: `SGM1.DAT`, `SONG.DAT` e `FPLAY.COM`.
 3. Obtenha a `ym2608_adpcm_rom.bin` fazendo o dump do seu próprio hardware.
-4. Baixe ou compile o `rudebreaker.exe` e coloque tudo numa pasta só:
+4. Baixe o `releases/RudeBreaker-PC-pr9n.zip` deste repositório (ou compile o `rudebreaker.exe`), descompacte e coloque os arquivos do jogo junto, deixando a pasta assim:
    ```
    Rude Breaker PC/
      rudebreaker.exe
