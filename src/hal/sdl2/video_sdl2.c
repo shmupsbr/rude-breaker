@@ -69,10 +69,24 @@ int sys_init(const char *title)
         return -1;
     }
 
-    /* The logic rate is a fixed timer in sys_wait_vblank. Present vsync
-     * would lock that to a 120 Hz or 144 Hz monitor and run the game
-     * several times too fast. */
-    g_rb_renderer = SDL_CreateRenderer(g_rb_window, -1, SDL_RENDERER_ACCELERATED);
+    /* Present waits for vertical blank so frames are never torn and
+     * each one is held for a whole number of refreshes. The logic clock
+     * does not follow the monitor: sys_pace_frame_start decides how many
+     * VM frames run, and a refresh that is not a multiple of 30 Hz only
+     * repeats the latest frame. RUDEBR_VSYNC=0 turns it off. */
+    {
+        const char *vs = getenv("RUDEBR_VSYNC");
+        int want_vsync = !(vs && strcmp(vs, "0") == 0);
+
+        if (want_vsync) {
+            g_rb_renderer = SDL_CreateRenderer(g_rb_window, -1,
+                                               SDL_RENDERER_ACCELERATED |
+                                               SDL_RENDERER_PRESENTVSYNC);
+        }
+    }
+    if (!g_rb_renderer) {
+        g_rb_renderer = SDL_CreateRenderer(g_rb_window, -1, SDL_RENDERER_ACCELERATED);
+    }
     if (!g_rb_renderer) {
         g_rb_renderer = SDL_CreateRenderer(g_rb_window, -1, 0);
     }
@@ -368,16 +382,33 @@ static int pace_vsync_driver;
 static int pace_timer_ms;
 static int pace_overlay_on;
 static int pace_f8_was;
+/* Presentation. pace_pref_exact is the player's choice. pace_vsync_on
+ * means the renderer was created with PRESENTVSYNC. pace_vsync_ok is
+ * set once present intervals prove the driver really blocks, and
+ * pace_hold is the refreshes per logic frame in smooth mode (0 when
+ * the measured refresh is not a multiple of 30 Hz). */
+static int pace_pref_exact;
+static int pace_pref_loaded;
+static int pace_vsync_on;
+static int pace_vsync_ok;
+static int pace_hold;
+static double pace_meas_hz;
+static uint64_t pace_last_present;
+static double pace_iv_sum;
+static int pace_iv_n;
+static uint64_t pace_presents;
 static char pace_strategy[64];
 #if defined(_WIN32)
 static HANDLE pace_timer;
 #endif
 
+static const char *pace_mode_name(void);
+
 static void pace_write_log(void)
 {
     char dir[1024];
     char path[1100];
-    char body[1200];
+    char body[1600];
     FILE *fp;
     double measured = 0.0;
     uint64_t now;
@@ -402,16 +433,19 @@ static void pace_write_log(void)
                  "refresh_hz=%d\n"
                  "window_refresh_hz=%d\n"
                  "vsync_driver=%s\n"
-                 "vsync_used=off\n"
+                 "vsync_used=%s\n"
+                 "pacing=%s\n"
+                 "measured_refresh_hz=%.2f\n"
+                 "refreshes_per_logic_frame=%d\n"
                  "timer_hz=%llu\n"
                  "timer_period_ms=%d\n"
                  "overlay=F8\n"
                  "menu_wait=ignored\n"
-                 "The logic tick is one performance-counter period. Present does not\n"
-                 "wait for vertical blank, so 50/60/75/120/144/165/240 Hz, variable\n"
-                 "refresh, and a vsync toggle cannot change the game speed. A hitch\n"
-                 "repays at most %d logic frames. Debt past that is dropped and the\n"
-                 "game slows down instead of skipping ahead.\n",
+                 "smooth: on a 60/120/240 Hz display each logic frame is held for\n"
+                 "exactly refresh/30 refreshes (30.00 Hz, 2.2%% under 30.67).\n"
+                 "exact: the logic tick is one performance-counter period (30.67 Hz)\n"
+                 "and every refresh shows the latest frame. Without a verified vsync\n"
+                 "the timer paces both. A hitch repays at most %d logic frames.\n",
                  pace_strategy,
                  (double)RB_WAIT_HZ / 3.0,
                  (pace_freq ? (double)pace_period * 1000000.0 / (double)pace_freq : 0.0),
@@ -423,6 +457,10 @@ static void pace_write_log(void)
                  pace_refresh,
                  pace_window_refresh,
                  pace_vsync_driver ? "available" : "unavailable",
+                 pace_vsync_ok ? "on" : (pace_vsync_on ? "requested-unverified" : "off"),
+                 pace_mode_name(),
+                 pace_meas_hz,
+                 pace_hold,
                  (unsigned long long)pace_freq,
                  pace_timer_ms,
                  RB_PACE_CATCH_MAX);
@@ -485,6 +523,174 @@ static void pace_poll_overlay(void)
     pace_f8_was = down;
 }
 
+/* ---- presentation: smooth / exact --------------------------------------- */
+
+static void pace_pref_path(char *path, size_t n)
+{
+    char dir[1024];
+
+    if (rb_exe_dir(dir, sizeof(dir)) == 0) {
+        snprintf(path, n, "%s/rudebreaker.ini", dir);
+    } else {
+        snprintf(path, n, "rudebreaker.ini");
+    }
+}
+
+static void pace_load_pref(void)
+{
+    char path[1100];
+    char line[128];
+    const char *env = getenv("RUDEBR_PACING");
+    FILE *fp;
+
+    if (pace_pref_loaded) {
+        return;
+    }
+    pace_pref_loaded = 1;
+    pace_pref_exact = 0;
+    pace_pref_path(path, sizeof path);
+    fp = fopen(path, "rb");
+    if (fp) {
+        while (fgets(line, sizeof line, fp)) {
+            if (strncmp(line, "pacing=", 7) == 0) {
+                pace_pref_exact = strncmp(line + 7, "exact", 5) == 0;
+            }
+        }
+        fclose(fp);
+    }
+    if (env && env[0]) {
+        pace_pref_exact = strcmp(env, "exact") == 0;
+    }
+}
+
+int sys_pace_pref_exact(void)
+{
+    pace_load_pref();
+    return pace_pref_exact;
+}
+
+void sys_pace_set_pref_exact(int exact)
+{
+    char path[1100];
+    FILE *fp;
+
+    pace_load_pref();
+    exact = exact ? 1 : 0;
+    if (exact == pace_pref_exact) {
+        return;
+    }
+    pace_pref_exact = exact;
+    pace_next = 0;
+    pace_pref_path(path, sizeof path);
+    fp = fopen(path, "wb");
+    if (fp) {
+        fprintf(fp, "pacing=%s\n", exact ? "exact" : "smooth");
+        fclose(fp);
+    }
+}
+
+static int pace_smooth_active(void)
+{
+    return !pace_pref_exact && pace_vsync_ok && pace_hold > 0 &&
+           !pace_skip_wait;
+}
+
+static const char *pace_mode_name(void)
+{
+    if (pace_smooth_active()) {
+        return "smooth";
+    }
+    if (pace_vsync_ok) {
+        return pace_pref_exact ? "exact" : "exact (refresh not a multiple of 30)";
+    }
+    return pace_vsync_on ? "timer (vsync not verified)" : "timer (vsync off)";
+}
+
+/* Until 24 measured presents say otherwise, exact mode runs without
+ * sleeping so the probe sees how long a present blocks. A present that
+ * returns in under 3 ms is not waiting for vertical blank. */
+static int pace_vsync_probe(void)
+{
+    /* A minimised window or a driver switch can make a present stop
+     * blocking. Probe again now and then while vsync is unverified. */
+    if (pace_vsync_on && !pace_vsync_ok && pace_presents > 3000u) {
+        pace_presents = 0;
+        pace_iv_sum = 0.0;
+        pace_iv_n = 0;
+    }
+    return pace_vsync_on && pace_iv_n < 24 && pace_presents < 400u;
+}
+
+/* Refreshes per logic frame for the measured refresh, or 0 when the
+ * refresh is not within 2.5% of a multiple of 30 Hz (VRR, 75, 144...). */
+static int pace_hold_for(double hz)
+{
+    int k = (int)(hz / 30.0 + 0.5);
+
+    if (k < 2 || k > 8) {
+        return 0;
+    }
+    if (hz < (double)k * 30.0 * 0.975 || hz > (double)k * 30.0 * 1.025) {
+        return 0;
+    }
+    return k;
+}
+
+static void pace_note_present(void)
+{
+    uint64_t now = SDL_GetPerformanceCounter();
+
+    pace_presents++;
+    if (pace_last_present != 0u && pace_freq != 0u) {
+        double ms = (double)(now - pace_last_present) * 1000.0 / (double)pace_freq;
+
+        /* Skip hitches and the stage hold. */
+        if (ms > 0.0 && ms < 60.0) {
+            pace_iv_sum += ms;
+            pace_iv_n++;
+        }
+    }
+    pace_last_present = now;
+    if (pace_iv_n >= 24) {
+        double mean = pace_iv_sum / (double)pace_iv_n;
+        int ok = pace_vsync_on && mean >= 3.0;
+        double hz = mean > 0.0 ? 1000.0 / mean : 0.0;
+
+        /* In exact mode a slow loop can span several refreshes, so the
+         * measured rate is only trusted when it looks like one refresh. */
+        if (ok && (hz < 47.0 || hz > 362.0)) {
+            ok = pace_vsync_ok;
+            hz = pace_meas_hz;
+        }
+        if (ok != pace_vsync_ok || pace_hold_for(hz) != pace_hold) {
+            pace_next = 0;
+        }
+        pace_vsync_ok = ok;
+        if (ok) {
+            pace_meas_hz = hz;
+            pace_hold = pace_hold_for(hz);
+        } else {
+            pace_hold = 0;
+        }
+        pace_iv_sum = 0.0;
+        pace_iv_n = 0;
+    }
+}
+
+int sys_pace_present_count(void)
+{
+    if (frames_are_fast()) {
+        return 1;
+    }
+    return pace_smooth_active() ? pace_hold : 1;
+}
+
+const char *sys_pace_mode_name(void)
+{
+    pace_load_pref();
+    return pace_mode_name();
+}
+
 void sys_pace_startup(void)
 {
     SDL_DisplayMode mode;
@@ -514,6 +720,22 @@ void sys_pace_startup(void)
     pace_overlay_on = 0;
     pace_f8_was = 0;
 
+    pace_load_pref();
+    pace_vsync_on = 0;
+    pace_vsync_ok = 0;
+    pace_hold = 0;
+    pace_iv_sum = 0.0;
+    pace_iv_n = 0;
+    pace_presents = 0;
+    pace_last_present = 0;
+    if (g_rb_renderer) {
+        SDL_RendererInfo ri;
+
+        if (SDL_GetRendererInfo(g_rb_renderer, &ri) == 0 &&
+            (ri.flags & SDL_RENDERER_PRESENTVSYNC) != 0) {
+            pace_vsync_on = 1;
+        }
+    }
     if (g_rb_window) {
         index = SDL_GetWindowDisplayIndex(g_rb_window);
         if (index >= 0 && SDL_GetCurrentDisplayMode(index, &mode) == 0) {
@@ -550,9 +772,10 @@ void sys_pace_startup(void)
 #endif
     fprintf(stderr,
             "pace: strategy=%s logic_hz=%.3f refresh=%d window_refresh=%d "
-            "vsync_driver=%d vsync_used=off timer_hz=%llu timer_ms=%d\n",
+            "vsync_driver=%d vsync_requested=%d pacing=%s timer_hz=%llu timer_ms=%d\n",
             pace_strategy, (double)RB_WAIT_HZ / 3.0, pace_refresh,
-            pace_window_refresh, pace_vsync_driver,
+            pace_window_refresh, pace_vsync_driver, pace_vsync_on,
+            pace_pref_exact ? "exact" : "smooth",
             (unsigned long long)pace_freq, pace_timer_ms);
     pace_write_log();
 }
@@ -589,9 +812,12 @@ void sys_pace_set_mode(unsigned count, int skip_wait)
     if (pace_freq == 0u) {
         return;
     }
-    /* N/2 * 3/92 s. Count 2 is the capture lock. */
-    pace_period = (pace_freq * 3ull * (uint64_t)pace_count) /
-                  ((uint64_t)RB_WAIT_HZ * 2ull);
+    /* The logic period stays on the capture lock, 3/92 s. The wait word
+     * [bp+0x60] shares its value with the stock field, which RBRANK.DAT
+     * saves, so a stale 3 would have made the period 20.4 Hz and a 1
+     * 61.3 Hz. Neither matches the capture, so the count is only kept
+     * for the log. */
+    pace_period = (pace_freq * 3ull) / (uint64_t)RB_WAIT_HZ;
     if (pace_period == 0u) {
         pace_period = 1u;
     }
@@ -616,15 +842,44 @@ int sys_pace_frame_start(void)
     if (pace_period == 0u) {
         sys_pace_startup();
     }
-    now = SDL_GetPerformanceCounter();
-    if (pace_next != 0u && now < pace_next) {
-        pace_sleep_until(pace_next);
+    pace_load_pref();
+    if (pace_smooth_active()) {
+        /* The presents that follow block for pace_hold refreshes, so
+         * one logic frame per loop is the whole clock. */
         now = SDL_GetPerformanceCounter();
+        pace_next = 0;
+        if (pace_origin == 0u) {
+            pace_origin = now;
+        }
+        pace_steps++;
+        if ((pace_steps % 60u) == 0u) {
+            pace_write_log();
+        }
+        return 1;
     }
-    steps = rb_pace_due(now, &pace_next, pace_period, RB_PACE_CATCH_MAX, &slowed);
-    if (steps < 1) {
-        steps = 1;
-        pace_next = now + pace_period;
+    now = SDL_GetPerformanceCounter();
+    if (pace_vsync_ok || pace_vsync_probe()) {
+        /* Exact with vsync: the present blocks for one refresh, so do
+         * not sleep. Run whatever logic frames are due (often 0). */
+        if (pace_next != 0u && now < pace_next) {
+            return 0;
+        }
+        steps = rb_pace_due(now, &pace_next, pace_period, RB_PACE_CATCH_MAX,
+                            &slowed);
+        if (steps < 1) {
+            return 0;
+        }
+    } else {
+        if (pace_next != 0u && now < pace_next) {
+            pace_sleep_until(pace_next);
+            now = SDL_GetPerformanceCounter();
+        }
+        steps = rb_pace_due(now, &pace_next, pace_period, RB_PACE_CATCH_MAX,
+                            &slowed);
+        if (steps < 1) {
+            steps = 1;
+            pace_next = now + pace_period;
+        }
     }
     if (pace_origin == 0u) {
         pace_origin = now;
@@ -668,8 +923,8 @@ void sys_pace_overlay_draw(void)
     snprintf(line, sizeof(line), "PACE %s  lock %.2f Hz  now %.2f",
              pace_strategy, (double)RB_WAIT_HZ / 3.0, measured);
     sys_draw_text(8, 360, line, 0xFFFFFF00u);
-    snprintf(line, sizeof(line), "refresh %d  vsync off  timer %llu Hz",
-             pace_refresh, (unsigned long long)pace_freq);
+    snprintf(line, sizeof(line), "%s  refresh %.1f  hold %d",
+             pace_mode_name(), pace_meas_hz, pace_hold);
     sys_draw_text(8, 372, line, 0xFFFFFF00u);
     snprintf(line, sizeof(line), "catch +%llu  slow %llu  F8 hides",
              (unsigned long long)pace_caught,
@@ -699,6 +954,7 @@ void sys_present(void)
     SDL_RenderClear(g_rb_renderer);
     SDL_RenderCopy(g_rb_renderer, g_rb_texture, NULL, NULL);
     SDL_RenderPresent(g_rb_renderer);
+    pace_note_present();
 }
 
 uint32_t sys_ticks_ms(void)

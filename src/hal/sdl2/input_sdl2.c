@@ -728,6 +728,11 @@ static void note_capture(const SDL_Event *ev)
         take_key(ev->key.keysym.scancode);
         return;
     }
+    if (ev->type == SDL_CONTROLLERBUTTONDOWN && g_dev_is_pad &&
+        ev->cbutton.button == SDL_CONTROLLER_BUTTON_BACK) {
+        g_cap_result = -1; /* pad BACK cancels, like Esc */
+        return;
+    }
     if (ev->type == SDL_CONTROLLERBUTTONDOWN && g_dev_is_pad) {
         take_button((int)ev->cbutton.button, 1);
         return;
