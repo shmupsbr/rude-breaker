@@ -70,6 +70,10 @@ void gfx_blit_span(RbGfx *gfx, const uint8_t *src, uint32_t slen,
                    uint8_t src_planes, uint8_t dst_planes, uint8_t shift);
 
 int  gfx_active(const RbGfx *gfx);
+/* Host CONFIG menu: darken the graphics inside x0..x1, y0..y1 (pixels,
+ * end exclusive) before the text layer is painted, so the menu text
+ * does not sit on the title logo. on = 0 turns it off. */
+void gfx_set_panel(int on, int x0, int y0, int x1, int y1);
 /* blank_sides forces the 80 px columns black. The stage playfield does
  * that; the logo, title, and menus are drawn across the full 640. */
 void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,

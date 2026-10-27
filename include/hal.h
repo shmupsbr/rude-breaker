@@ -236,6 +236,14 @@ void sys_pace_resync(void);
 int sys_pace_overlay(void);
 void sys_pace_overlay_draw(void);
 int sys_pace_fast(void);
+/* Presents to make for the frame just rendered: refresh/30 in smooth
+ * mode on a verified-vsync 60/120/240 Hz display, otherwise 1. */
+int sys_pace_present_count(void);
+/* Player choice, saved to rudebreaker.ini beside the program.
+ * RUDEBR_PACING=smooth|exact overrides it. */
+int sys_pace_pref_exact(void);
+void sys_pace_set_pref_exact(int exact);
+const char *sys_pace_mode_name(void);
 
 void sys_clear(uint8_t r, uint8_t g, uint8_t b);
 /* Host RGBA8888 framebuffer, RB_NATIVE_W by RB_NATIVE_H, or NULL. */
@@ -295,6 +303,10 @@ void sys_set_rhythm_override(const char *path);
 void sys_fade_music(uint8_t speed);
 /* 0..10 from the samples last handed to the audio device. */
 int  sys_audio_level(void);
+/* Sound Test spectrum: up to 16 bands, 0..1, loudest since the last
+ * call. Returns how many were written (0 when there is no audio). */
+int  sys_audio_bands(float *out, int n);
+
 /* Freeze the output clock. Play and stop clear it. */
 void sys_audio_pause(int on);
 
