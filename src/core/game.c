@@ -11,6 +11,7 @@
 #include "assets.h"
 #include "exepath.h"
 #include "vm.h"
+#include "gfx.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +34,7 @@ static int          g_data_missing;
 static int          g_modern;
 static int          g_training;
 static int          g_menu_latched;
+static uint16_t     g_menu_prev = 0xFFFFu;
 static int          g_suspend;
 static int          g_suspend_closed;
 static int          g_page;
@@ -464,7 +466,7 @@ static void joy_auto(void)
 static int page_count(void)
 {
     switch (g_page) {
-    case PAGE_GAME:  return 7;
+    case PAGE_GAME:  return 8;
     case PAGE_CTRL:  return 3;
     case PAGE_KEYS:  return 10;
     case PAGE_SOUND: return 7;
@@ -513,6 +515,10 @@ static void change_value(RbGame *g, int dir)
             changed = 1;
         } else if (g_cursor == 5) {
             g_training = !g_training;
+            changed = 1;
+        } else if (g_cursor == 6) {
+            /* Host only, saved to rudebreaker.ini, not RBRANK.DAT. */
+            sys_pace_set_pref_exact(!sys_pace_pref_exact());
             changed = 1;
         }
     } else if (g_page == PAGE_CTRL && g_cursor == 0) {
@@ -580,7 +586,7 @@ static void activate_row(RbGame *g)
         menu_ok();
         return;
     }
-    if (g_page == PAGE_GAME && g_cursor == 6) {
+    if (g_page == PAGE_GAME && g_cursor == 7) {
         enter_page(PAGE_ROOT);
         menu_ok();
         return;
@@ -636,7 +642,35 @@ static void strip_menu_buttons(RbGame *g)
     g->input.buttons = (uint16_t)(g->input.buttons &
                                   (uint16_t)~(RB_BTN_UP | RB_BTN_DOWN |
                                                RB_BTN_LEFT | RB_BTN_RIGHT |
-                                               RB_BTN_A | RB_BTN_B));
+                                               RB_BTN_A | RB_BTN_B |
+                                               RB_BTN_START));
+    g->input.pad_buttons = 0;
+}
+
+/* Esc / pad B: one page up. On the root page it is the BACK row. */
+static void go_back(void)
+{
+    switch (g_page) {
+    case PAGE_KEYS:
+        enter_page(PAGE_CTRL);
+        g_cursor = 1;
+        break;
+    case PAGE_GAME:
+        enter_page(PAGE_ROOT);
+        break;
+    case PAGE_CTRL:
+        enter_page(PAGE_ROOT);
+        g_cursor = 1;
+        break;
+    case PAGE_SOUND:
+        enter_page(PAGE_ROOT);
+        g_cursor = 2;
+        break;
+    default:
+        handoff(2);
+        break;
+    }
+    menu_ok();
 }
 
 static void host_menu_input(RbGame *g, uint16_t *swallowed)
@@ -646,6 +680,7 @@ static void host_menu_input(RbGame *g, uint16_t *swallowed)
     int left;
     int right;
     int fire;
+    int back;
     int n;
 
     *swallowed = 0;
@@ -678,6 +713,7 @@ static void host_menu_input(RbGame *g, uint16_t *swallowed)
             g_suspend_closed = 0;
             g_menu_latched = 1;
             g_page = PAGE_ROOT;
+            g_menu_prev = 0xFFFFu;
             g_cursor = 0;
         } else {
             return;
@@ -690,6 +726,7 @@ static void host_menu_input(RbGame *g, uint16_t *swallowed)
         g_menu_latched = 1;
         g_page = PAGE_ROOT;
         g_cursor = 0;
+        g_menu_prev = 0xFFFFu;
     }
     if (g_capture) {
         int kind = 0;
@@ -705,14 +742,40 @@ static void host_menu_input(RbGame *g, uint16_t *swallowed)
         } else if (got < 0) {
             g_capture = 0;
         }
+        g_menu_prev = 0x3FFFu;
         strip_menu_buttons(g);
         return;
     }
-    up = btn_pressed(g, RB_BTN_UP);
-    down = btn_pressed(g, RB_BTN_DOWN);
-    left = btn_pressed(g, RB_BTN_LEFT);
-    right = btn_pressed(g, RB_BTN_RIGHT);
-    fire = btn_pressed(g, RB_BTN_A) || btn_pressed(g, RB_BTN_B);
+    /* Menus read the keyboard and the pad together. The pad bits live
+     * in pad_buttons (the VM only merges them while JOYSTICK is on), so
+     * the menu keeps its own edge state over both. Pad: stick, d-pad or
+     * hat move; A (or START) selects; B or BACK goes up one page.
+     * Keyboard: arrows move; Z/X/Enter select; Esc goes up one page. */
+    {
+        uint16_t kb = g->input.buttons;
+        uint16_t pd = g->input.pad_buttons;
+        uint16_t nav = (uint16_t)((kb | pd) &
+                                  (RB_BTN_UP | RB_BTN_DOWN |
+                                   RB_BTN_LEFT | RB_BTN_RIGHT));
+        uint16_t now;
+        uint16_t edge;
+
+        now = nav;
+        if ((kb & (RB_BTN_A | RB_BTN_B)) || (pd & (RB_BTN_A | RB_BTN_START))) {
+            now = (uint16_t)(now | 0x1000u);
+        }
+        if ((kb & RB_BTN_START) || (pd & (RB_BTN_B | RB_BTN_QUIT))) {
+            now = (uint16_t)(now | 0x2000u);
+        }
+        edge = (uint16_t)(now & (uint16_t)~g_menu_prev);
+        g_menu_prev = now;
+        up = (edge & RB_BTN_UP) != 0;
+        down = (edge & RB_BTN_DOWN) != 0;
+        left = (edge & RB_BTN_LEFT) != 0;
+        right = (edge & RB_BTN_RIGHT) != 0;
+        fire = (edge & 0x1000u) != 0;
+        back = (edge & 0x2000u) != 0;
+    }
     n = page_count();
     if (up) {
         g_cursor--;
@@ -732,6 +795,8 @@ static void host_menu_input(RbGame *g, uint16_t *swallowed)
         change_value(g, 1);
     } else if (fire) {
         activate_row(g);
+    } else if (back) {
+        go_back();
     }
     strip_menu_buttons(g);
 }
@@ -779,11 +844,156 @@ static const char *joy_value(void)
     return "IN USE";
 }
 
+/* Text columns are 8 px; each menu character is a 16 px cell (two
+ * columns). The longest label, RESTORE DEFAULTS, ends at column 35, so
+ * values start at column 40 (x = 320) and get 18 characters. */
+#define MENU_LABEL_COL 4
+#define MENU_VALUE_COL 40
+#define MENU_VALUE_W   18
+
 static void paint_line(int index, int row, const char *label, const char *value,
                        int hot)
 {
-    paint_option_row(4, 28, row, label, value, value ? 16 : 0,
-                     index == g_cursor, hot);
+    paint_option_row(MENU_LABEL_COL, MENU_VALUE_COL, row, label, value,
+                     value ? MENU_VALUE_W : 0, index == g_cursor, hot);
+}
+
+/* Rows are two text lines apart (one blank line between items). */
+static int menu_row(int first, int index)
+{
+    return first + index * 2;
+}
+
+/* Sound Test spectrum, drawn in pixels after present. Like the
+ * Distopika player's first layout: white bars, instant attack, about
+ * 0.3 s release, plus a peak cap that holds and then falls. */
+#define VU_N      16
+#define VU_X0     64
+#define VU_X1     576
+#define VU_TOP    296
+#define VU_BOTTOM 360
+static float    g_vu_lv[VU_N];
+static float    g_vu_pk[VU_N];
+static uint32_t g_vu_pk_t[VU_N];
+static uint32_t g_vu_last;
+
+static void vu_update(void)
+{
+    float in[VU_N];
+    uint32_t now = sys_ticks_ms();
+    float dt = g_vu_last ? (float)(now - g_vu_last) / 1000.0f : 0.033f;
+    float decay;
+    int i;
+    int got;
+
+    if (dt <= 0.0f) {
+        dt = 0.001f;
+    }
+    if (dt > 0.1f) {
+        dt = 0.1f;
+    }
+    g_vu_last = now;
+    memset(in, 0, sizeof in);
+    got = sys_audio_bands(in, VU_N);
+    /* Show whatever is audible (menu music included), not only a track
+     * started from this page. Pause already reads as silence. */
+    if (got <= 0) {
+        memset(in, 0, sizeof in);
+    }
+    /* 1 - e^(-dt / 0.3), without libm in the core. */
+    decay = dt / (0.3f + dt);
+    for (i = 0; i < VU_N; i++) {
+        float t = in[i];
+
+        if (t >= g_vu_lv[i]) {
+            g_vu_lv[i] = t;
+        } else {
+            g_vu_lv[i] += (t - g_vu_lv[i]) * decay;
+        }
+        if (g_vu_lv[i] < 0.002f) {
+            g_vu_lv[i] = 0.0f;
+        }
+        if (g_vu_lv[i] >= g_vu_pk[i]) {
+            g_vu_pk[i] = g_vu_lv[i];
+            g_vu_pk_t[i] = now;
+        } else if (now - g_vu_pk_t[i] > 450u) {
+            g_vu_pk[i] -= dt * 0.9f;
+            if (g_vu_pk[i] < g_vu_lv[i]) {
+                g_vu_pk[i] = g_vu_lv[i];
+            }
+        }
+    }
+}
+
+static void vu_fill(uint32_t *fb, int x0, int y0, int x1, int y1, uint32_t c,
+                    int alpha)
+{
+    int x;
+    int y;
+
+    for (y = y0; y < y1; y++) {
+        if (y < 0 || y >= RB_NATIVE_H) {
+            continue;
+        }
+        for (x = x0; x < x1; x++) {
+            uint32_t *d;
+            uint32_t r;
+            uint32_t g;
+            uint32_t b;
+
+            if (x < 0 || x >= RB_NATIVE_W) {
+                continue;
+            }
+            d = &fb[(size_t)y * RB_NATIVE_W + (size_t)x];
+            r = (((*d >> 24) & 0xFFu) * (uint32_t)(256 - alpha) +
+                 ((c >> 24) & 0xFFu) * (uint32_t)alpha) >> 8;
+            g = (((*d >> 16) & 0xFFu) * (uint32_t)(256 - alpha) +
+                 ((c >> 16) & 0xFFu) * (uint32_t)alpha) >> 8;
+            b = (((*d >> 8) & 0xFFu) * (uint32_t)(256 - alpha) +
+                 ((c >> 8) & 0xFFu) * (uint32_t)alpha) >> 8;
+            *d = (r << 24) | (g << 16) | (b << 8) | 0xFFu;
+        }
+    }
+}
+
+static void vu_draw(uint32_t *fb)
+{
+    int span = (VU_X1 - VU_X0) / VU_N;
+    int gap = span / 4;
+    int h = VU_BOTTOM - VU_TOP;
+    int i;
+
+    if (!fb) {
+        return;
+    }
+    /* Faint well and baseline so a silent meter still reads as a meter. */
+    vu_fill(fb, VU_X0 - 4, VU_TOP - 4, VU_X1 + 4 - gap, VU_BOTTOM + 3,
+            0x101828FFu, 150);
+    vu_fill(fb, VU_X0, VU_BOTTOM + 1, VU_X1 - gap, VU_BOTTOM + 2,
+            0x6080A0FFu, 200);
+    for (i = 0; i < VU_N; i++) {
+        int x = VU_X0 + i * span;
+        int bh = (int)(g_vu_lv[i] * (float)h + 0.5f);
+        int ph = (int)(g_vu_pk[i] * (float)h + 0.5f);
+
+        if (g_vu_lv[i] > 0.0f && bh < 2) {
+            bh = 2;
+        }
+        if (bh > 0) {
+            vu_fill(fb, x, VU_BOTTOM - bh, x + span - gap, VU_BOTTOM,
+                    0xFFFFFFFFu, 235);
+        }
+        if (ph > 0 && g_pl != 0) {
+            int py = VU_BOTTOM - ph - 3;
+
+            vu_fill(fb, x, py, x + span - gap, py + 2, 0x60E0FFFFu, 255);
+        }
+    }
+}
+
+static int sound_page_visible(void)
+{
+    return menu_visible() && g_vm && g_page == PAGE_SOUND;
 }
 
 static void host_menu_paint(void)
@@ -791,9 +1001,7 @@ static void host_menu_paint(void)
     int row;
     int i;
     char num[8];
-    char track[20];
-    char meter[12];
-    int bars;
+    char track[24];
     const char *title = "CONFIG";
     static const char *root_name[6] = {
         "GAMEPLAY", "CONTROLS", "SOUND TEST", "RANKING", "PASSWORD", "BACK"
@@ -804,9 +1012,13 @@ static void host_menu_paint(void)
     };
 
     if (!menu_visible() || !g_vm) {
+        gfx_set_panel(0, 0, 0, 0, 0);
         return;
     }
-    for (row = 0; row < 24; row++) {
+    /* Darken the title art behind the menu so the rows do not sit on
+     * the logo or on the (c) COMPILE 1996 line. */
+    gfx_set_panel(1, 16, 8, 624, 392);
+    for (row = 0; row < 25; row++) {
         vm_text_write(g_vm, 0, row, "", 40, 0);
     }
     if (g_page == PAGE_GAME) {
@@ -818,47 +1030,64 @@ static void host_menu_paint(void)
     } else if (g_page == PAGE_SOUND) {
         title = "SOUND TEST";
     }
-    vm_text_write(g_vm, 4, 2, title, 0, 0xE1u);
+    vm_text_write(g_vm, MENU_LABEL_COL, 1, title, 0, 0xE1u);
     if (g_page == PAGE_ROOT) {
         for (i = 0; i < 6; i++) {
-            paint_line(i, 4 + i, root_name[i], NULL, 0);
+            paint_line(i, menu_row(4, i), root_name[i], NULL, 0);
         }
     } else if (g_page == PAGE_GAME) {
-        paint_line(0, 4, "DIFFICULTY", k_diff[diff_index()], diff_index() != 2);
-        paint_line(1, 5, "SUICIDE BULLETS", suicide_on() ? "ON" : "OFF",
-                   suicide_on());
-        paint_line(2, 6, "SHIP SELECT", ship_on() ? "ON" : "OFF", ship_on());
-        paint_line(3, 7, "MOVE SPEED", speed_name(), speed_index() != 1);
-        paint_line(4, 8, "PALETTE", g_modern ? "MODERN" : "ORIGINAL", g_modern);
-        paint_line(5, 9, "TRAINING", g_training ? "ON" : "OFF", g_training);
-        paint_line(6, 10, "BACK", NULL, 0);
+        paint_line(0, menu_row(4, 0), "DIFFICULTY", k_diff[diff_index()],
+                   diff_index() != 2);
+        paint_line(1, menu_row(4, 1), "SUICIDE BULLETS",
+                   suicide_on() ? "ON" : "OFF", suicide_on());
+        paint_line(2, menu_row(4, 2), "SHIP SELECT", ship_on() ? "ON" : "OFF",
+                   ship_on());
+        paint_line(3, menu_row(4, 3), "MOVE SPEED", speed_name(),
+                   speed_index() != 1);
+        paint_line(4, menu_row(4, 4), "PALETTE",
+                   g_modern ? "MODERN" : "ORIGINAL", g_modern);
+        paint_line(5, menu_row(4, 5), "TRAINING", g_training ? "ON" : "OFF",
+                   g_training);
+        paint_line(6, menu_row(4, 6), "FRAME PACING",
+                   sys_pace_pref_exact() ? "EXACT" : "SMOOTH",
+                   sys_pace_pref_exact());
+        paint_line(7, menu_row(4, 7), "BACK", NULL, 0);
     } else if (g_page == PAGE_CTRL) {
-        paint_line(0, 4, "JOYSTICK", joy_value(), joy_flag());
-        paint_line(1, 5, "DEFINE KEYS", NULL, 0);
-        paint_line(2, 6, "BACK", NULL, 0);
+        paint_line(0, menu_row(4, 0), "JOYSTICK", joy_value(), joy_flag());
+        paint_line(1, menu_row(4, 1), "DEFINE KEYS", NULL, 0);
+        paint_line(2, menu_row(4, 2), "BACK", NULL, 0);
+        if (sys_joy_present()) {
+            vm_text_write(g_vm, MENU_LABEL_COL, 12, "PAD FOUND", 0, 0xA1u);
+            vm_text_write(g_vm, MENU_VALUE_COL, 12, sys_joy_name(),
+                          MENU_VALUE_W, 0xA1u);
+        } else {
+            vm_text_write(g_vm, MENU_LABEL_COL, 12, "PLUG IN A PAD ANY TIME",
+                          0, 0xA1u);
+        }
     } else if (g_page == PAGE_KEYS) {
         for (i = 0; i < 8; i++) {
             const char *value = sys_bind_label(i);
 
             if (g_capture && g_cursor == i) {
-                value = "PRESS A KEY";
+                value = "PRESS KEY OR PAD";
             }
-            paint_line(i, 4 + i, key_name[i], value, 0);
+            paint_line(i, menu_row(3, i), key_name[i], value, 0);
         }
-        paint_line(8, 12, key_name[8], NULL, 0);
-        paint_line(9, 13, key_name[9], NULL, 0);
+        paint_line(8, menu_row(3, 8), key_name[8], NULL, 0);
+        paint_line(9, menu_row(3, 9), key_name[9], NULL, 0);
     } else if (g_page == PAGE_SOUND) {
         const char *state = "STOP";
 
         snprintf(num, sizeof num, "%02d", g_bgm_no);
-        paint_line(0, 4, "SOUND", sound_on() ? "ON" : "OFF", sound_on());
-        paint_line(1, 5, "BGM", num, g_pl_kind == 0 && g_pl == 1);
+        paint_line(0, menu_row(3, 0), "SOUND", sound_on() ? "ON" : "OFF",
+                   sound_on());
+        paint_line(1, menu_row(3, 1), "BGM", num, g_pl_kind == 0 && g_pl == 1);
         snprintf(num, sizeof num, "%02d", g_se_no);
-        paint_line(2, 6, "SE", num, g_pl_kind == 1 && g_pl == 1);
-        paint_line(3, 7, "PLAY", NULL, 0);
-        paint_line(4, 8, "PAUSE", NULL, 0);
-        paint_line(5, 9, "STOP", NULL, 0);
-        paint_line(6, 10, "BACK", NULL, 0);
+        paint_line(2, menu_row(3, 2), "SE", num, g_pl_kind == 1 && g_pl == 1);
+        paint_line(3, menu_row(3, 3), "PLAY", NULL, 0);
+        paint_line(4, menu_row(3, 4), "PAUSE", NULL, 0);
+        paint_line(5, menu_row(3, 5), "STOP", NULL, 0);
+        paint_line(6, menu_row(3, 6), "BACK", NULL, 0);
         if (g_pl == 1) {
             state = "PLAY";
         } else if (g_pl == 2) {
@@ -867,20 +1096,16 @@ static void host_menu_paint(void)
         snprintf(track, sizeof track, "%s %02d  %s",
                  g_pl_kind ? "SE" : "BGM",
                  g_pl_kind ? g_se_no : g_bgm_no, state);
-        vm_text_write(g_vm, 4, 12, "TRACK", 0, 0xE1u);
-        vm_text_write(g_vm, 28, 12, track, 16, 0xA1u);
-        bars = sys_audio_level();
-        for (i = 0; i < 10; i++) {
-            meter[i] = (i < bars) ? '#' : '-';
-        }
-        meter[10] = 0;
-        vm_text_write(g_vm, 4, 13, "LEVEL", 0, 0xE1u);
-        vm_text_write(g_vm, 28, 13, meter, 10, g_pl == 1 ? 0xC1u : 0xA1u);
+        vm_text_write(g_vm, MENU_LABEL_COL, 17, "TRACK", 0, 0xE1u);
+        vm_text_write(g_vm, MENU_VALUE_COL, 17, track, MENU_VALUE_W,
+                      g_pl == 1 ? 0xC1u : 0xA1u);
     }
     if (g_capture) {
-        vm_text_write(g_vm, 4, 22, "ESC CANCELS", 0, 0xA1u);
+        vm_text_write(g_vm, MENU_LABEL_COL, 23, "ESC OR PAD BACK CANCELS", 0,
+                      0xA1u);
     } else {
-        vm_text_write(g_vm, 4, 22, "FIRE SELECTS    LEFT RIGHT CHANGES", 0, 0xA1u);
+        vm_text_write(g_vm, MENU_LABEL_COL, 23,
+                      "FIRE OK  ESC BACK  LEFT RIGHT SET", 0, 0xA1u);
     }
 }
 
@@ -1270,9 +1495,9 @@ static uint16_t script_token(const char *s, size_t n)
     return 0;
 }
 
-static uint16_t script_buttons(uint32_t frame)
+static uint16_t script_buttons_env(const char *env, uint32_t frame)
 {
-    const char *s = getenv("RUDEBR_SCRIPT");
+    const char *s = getenv(env);
     uint16_t bits = 0;
 
     if (!s || !s[0]) {
@@ -1332,7 +1557,12 @@ void game_update(RbGame *g)
     uint16_t swallowed = 0;
 
     g->frame++;
-    g->input.buttons = (uint16_t)(g->input.buttons | script_buttons(g->frame));
+    g->input.buttons = (uint16_t)(g->input.buttons |
+                                  script_buttons_env("RUDEBR_SCRIPT", g->frame));
+    /* Same syntax, pressed on the gamepad side (pad_buttons). */
+    g->input.pad_buttons = (uint16_t)(g->input.pad_buttons |
+                                      script_buttons_env("RUDEBR_PADSCRIPT",
+                                                         g->frame));
     user_buttons = g->input.buttons;
     host_menu_input(g, &swallowed);
     apply_host_options();
@@ -1452,6 +1682,14 @@ void game_render(const RbGame *g)
         return;
     }
     g_show_frame = 0;
+    /* The original SETTINGS screen is up but the host menu has not
+     * latched yet (it latches on the next update), or a handoff is
+     * still leaving it. Keep the previous picture so the original
+     * options page never reaches the screen. */
+    if (g_vm && ((script_settings() && !menu_visible()) ||
+                 g_handoff != 0 || (g_suspend && !g_suspend_closed))) {
+        return;
+    }
     host_menu_paint();
     sys_clear(8, 8, 24);
 
@@ -1462,6 +1700,10 @@ void game_render(const RbGame *g)
 
             if (frame) {
                 vm_present(g_vm, frame, RB_NATIVE_W, RB_NATIVE_H);
+                if (sound_page_visible()) {
+                    vu_update();
+                    vu_draw(frame);
+                }
             }
             break;
         }
@@ -1532,7 +1774,7 @@ void game_render(const RbGame *g)
     if (g_training && g->state == RB_STATE_PLAY) {
         sys_draw_text(8, 8, "TRAINING", 0x40FF40FFu);
     }
-    if (menu_visible()) {
+    if (menu_visible() || getenv("RUDEBR_SHOT_FRAME")) {
         const char *shot = getenv("RUDEBR_SHOT");
         static int saved;
         uint32_t *px;

@@ -95,6 +95,8 @@ struct RbVm {
     /* Host training switch. Not part of the script state, so a stage
      * reset leaves it alone. */
     int training;
+    /* Training medal blink, counts 0x4E draws. Host only. */
+    unsigned medal_blink;
     /* Set when native 0x9213 registers a score. Training never sets it. */
     int rank_commit;
     /* Pause (frame loop 0xBD9). Escape toggles [bp+0x72] bit 0x8000.
@@ -3492,13 +3494,46 @@ static void run_fetch(RbVm *vm, int ent)
                 gfx_compose(vm->gfx);
             }
             break;
-        case 0x4E:
+        case 0x4E: {
+            /* Training: hidden spots (script 0x4DE4, type 0x8220, bit
+             * 0x200 = not drawn) show the original hit flash in place,
+             * as if shot: the sprite drawn with draw byte 2 (the mono
+             * flash plane, palette 11, the same red a hit gives). Type
+             * and draw byte are changed only around this draw call and
+             * restored at once, so hits, reveal and scoring stay
+             * original. */
+            int lifted[ENT_N];
+            uint8_t attr_was[ENT_N];
+            int nl = 0;
+            int k;
+
+            vm->medal_blink++;
+            if (vm->training && (vm->medal_blink % 3u) == 0u &&
+                vm->view_chunk >= 2 && vm->view_chunk <= 6) {
+                for (k = 0; k < ENT_N; k++) {
+                    uint16_t t = eu16(vm, k, 0);
+
+                    if (vm->origin[k] == 0x4DE4u &&
+                        (t & 0x0220u) == 0x0220u) {
+                        su16(vm, k, 0, (uint16_t)(t & ~0x0200u));
+                        attr_was[nl] = vm->ent[k * ENT_STR + 0x4F];
+                        vm->ent[k * ENT_STR + 0x4F] = 2;
+                        lifted[nl++] = k;
+                    }
+                }
+            }
             gfx_draw_entities(vm->gfx, vm->ent, ENT_N, ENT_STR,
                               (const uint8_t *const *)vm->chunk, vm->clen,
                               vm->cof, (int)gu16(vm, 0x76),
                               (int)(int16_t)gu16(vm, 0x82),
                               vm->view_chunk >= 2 && vm->view_chunk <= 6);
+            for (k = 0; k < nl; k++) {
+                su16(vm, lifted[k], 0,
+                     (uint16_t)(eu16(vm, lifted[k], 0) | 0x0200u));
+                vm->ent[lifted[k] * ENT_STR + 0x4F] = attr_was[k];
+            }
             break;
+        }
         case 0x4D:
             scroll_4d(vm);
             break;

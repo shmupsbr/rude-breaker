@@ -489,11 +489,20 @@ static int wrap_line(int v)
 /* Entity sprites are 16x16 cells. The PC-98 blitter at 0x1132 drops a
  * whole cell when its world row is outside 0..23 or its column is
  * outside 4..34, so a large sprite steps onto the screen in bands.
- * A line that is already on screen keeps the GVRAM address 0x1132
- * used (world Y plus the scroll, wrapped into the page). The clip is
- * the line present will show. A stage starts at SAD = scroll + speed
- * - 1, so that line is world - speed + 1. The title starts at
- * scroll76, so the line is the world Y itself. */
+ * A cell it keeps is written in full at the GVRAM address 0x1132
+ * computes (world Y plus [bp+0x76], wrapped into the page); there is
+ * no per-line clip. Which lines the GDC then shows is decided by the
+ * SAD at present time, not here.
+ *
+ * pr9h: the stage path used to clip each line against a guessed
+ * screen line (world - speed + 1). By the time present runs, [bp+0x76]
+ * has already moved by the scroll speed, so on the fast stage 5 scroll
+ * (13..15 lines a frame) that guess was off by the whole speed. Lines
+ * of a boss rising from below the playfield were kept, landed on GVRAM
+ * lines the next SAD shows at the top, and painted over the HUD band.
+ * The cell rule below is the original's, and it never lets a cell
+ * outside rows 0..23 reach the page. The title (no scroll) keeps the
+ * per-line path it always had. */
 static void blit_sprite_smooth(RbGfx *gfx, const uint8_t *src, uint32_t len,
                                int px, int shift, uint8_t attr, int world_y,
                                int scroll76, int speed, int blank_sides)
@@ -527,10 +536,22 @@ static void blit_sprite_smooth(RbGfx *gfx, const uint8_t *src, uint32_t len,
         uint8_t g[24];
         int col;
         int world = world_y + row;
-        int screen = blank_sides ? (world - speed + 1) : world;
+        int screen = blank_sides ? (world + 1) : world;
         int gv;
         int drew = 0;
 
+        /* pr9k: clip per line exactly at the visible window, Y signed,
+         * never wrapped. Entities are drawn with [bp+0x76] before the
+         * frame's scroll step; present then runs with 0x76 lowered by
+         * [bp+0x84] and SAD = 0x76 + 0x84 - 1, i.e. the draw-time 0x76
+         * minus 1 (measured: delta is -speed on every stage frame). So
+         * the line present shows is world + 1 for every sprite, whatever
+         * the speed. pr9g used world - speed + 1 (off by the speed: the
+         * boss wrapped and lines were cut at the bottom); pr9j added a
+         * world < 384 cut that also ate the bottom of the screen. A line
+         * at screen >= 400 would wrap into the top and is dropped. The
+         * HUD text is painted over the sprites in present. */
+        (void)speed;
         if (screen < 0 || screen >= RB_GFX_H) {
             continue;
         }
@@ -1631,6 +1652,43 @@ static int row_in_tail(int scroll, int row)
     return 0;
 }
 
+static int g_panel_on;
+static int g_panel[4];
+
+void gfx_set_panel(int on, int x0, int y0, int x1, int y1)
+{
+    g_panel_on = on;
+    g_panel[0] = x0 < 0 ? 0 : x0;
+    g_panel[1] = y0 < 0 ? 0 : y0;
+    g_panel[2] = x1 > RB_GFX_W ? RB_GFX_W : x1;
+    g_panel[3] = y1 > RB_GFX_H ? RB_GFX_H : y1;
+}
+
+static void dim_panel(uint32_t *rgba, int w)
+{
+    int x;
+    int y;
+
+    if (!g_panel_on) {
+        return;
+    }
+    for (y = g_panel[1]; y < g_panel[3]; y++) {
+        for (x = g_panel[0]; x < g_panel[2]; x++) {
+            uint32_t p = rgba[(size_t)y * (size_t)w + (size_t)x];
+            uint32_t r = (p >> 24) & 0xFFu;
+            uint32_t g = (p >> 16) & 0xFFu;
+            uint32_t b = (p >> 8) & 0xFFu;
+
+            /* About 18 percent, with a slight blue so it is not flat. */
+            r = (r * 46u) >> 8;
+            g = (g * 46u) >> 8;
+            b = ((b * 46u) >> 8) + 6u;
+            rgba[(size_t)y * (size_t)w + (size_t)x] =
+                (r << 24) | (g << 16) | (b << 8) | 0xFFu;
+        }
+    }
+}
+
 void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
                  const uint8_t *text, uint32_t *rgba, int w, int h,
                  int blank_sides)
@@ -1737,5 +1795,6 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
             }
         }
     }
+    dim_panel(rgba, w);
     overlay_text(gfx, text, rgba, w);
 }

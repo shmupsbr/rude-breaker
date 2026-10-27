@@ -150,9 +150,9 @@ int main(int argc, char **argv)
         int i;
 
         sys_read_input(&game.input);
-        /* One present shows the latest logic frame. A short hitch runs
-         * a few extra VM frames first; the deadline does not depend on
-         * the monitor or on [bp+0x60]. */
+        /* Logic frames due now (0 in exact mode between ticks). A short
+         * hitch runs a few extra VM frames first; the deadline does not
+         * depend on the monitor or on [bp+0x60]. */
         steps = sys_pace_frame_start();
         for (i = 0; i < steps; i++) {
             game_update(&game);
@@ -170,7 +170,16 @@ int main(int argc, char **argv)
         }
         game_render(&game);
         sys_pace_overlay_draw();
-        sys_present();
+        {
+            /* Smooth mode holds each logic frame for refresh/30 vsynced
+             * presents. Exact mode presents every refresh, with 0 or
+             * more logic frames run before it. */
+            int n = sys_pace_present_count();
+
+            for (i = 0; i < n; i++) {
+                sys_present();
+            }
+        }
     }
     game_shutdown(&game);
     sys_pace_shutdown();
