@@ -35,6 +35,9 @@ You must supply these files from **your own legal copy** of the game.
 
 The rhythm ROM is optional: without it, the drums are silent. The other three files are required.
 
+### Distribution notice
+Do **not** distribute the game files. You may only use them if you own the game legally: the original *Disc Station Vol. 10* disc, or a purchase or subscription through Project EGG. If you do not own the game, you may play it for no more than **24 hours, for testing purposes only**, and must then delete the game files.
+
 ### Legal
 This is a non-commercial fan project with no affiliation to Compile, D4 Enterprise or Yamaha. Third-party licenses: SDL2 (zlib) and ymfm (BSD-3-Clause).
 
@@ -70,6 +73,9 @@ Você precisa tirar esses arquivos da **sua própria cópia legal** do jogo.
 5. Rode o `rudebreaker.exe`.
 
 A ROM de ritmo é opcional: sem ela, a bateria fica muda. Os outros três arquivos são obrigatórios.
+
+### Aviso de distribuição
+**Não** distribua os arquivos do jogo. Você só pode usá-los se tiver o jogo legalmente: o disco original da *Disc Station Vol. 10*, ou uma compra ou assinatura pela Project EGG. Se você não tem o jogo, pode jogá-lo por no máximo **24 horas, só pra fins de teste**, e depois deve apagar os arquivos do jogo.
 
 ### Aviso legal
 Projeto de fã, sem fins comerciais e sem vínculo com a Compile, a D4 Enterprise ou a Yamaha. Licenças de terceiros: SDL2 (zlib) e ymfm (BSD-3-Clause).
