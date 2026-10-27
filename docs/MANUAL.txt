@@ -1,0 +1,270 @@
+RUDE BREAKER - PC PORT - USER MANUAL
+====================================
+
+Build pr9n tester build - 2026-10-25
+
+
+1. WHAT THIS IS
+---------------
+
+This is a Windows PC port of Rude Breaker, the vertical shoot 'em up
+Compile made for the NEC PC-98 (Disc Station, 1996).
+
+The port does not remake the game. It runs the original game scripts
+and logic from the original data files. Enemy patterns, scoring, boss
+HP and difficulty all come from the original code. Music is the
+original FPLAY driver playing on an emulated YM2608 (ymfm).
+
+The PC side handles the window, sound output, keyboard and gamepad,
+frame pacing, and a set of options in the CONFIG menu.
+
+IMPORTANT: the game data (SGM1.DAT, SONG.DAT, FPLAY.COM) and the
+Yamaha rhythm ROM are copyrighted. They are NOT part of the public
+port and must not be redistributed. This build includes them only
+because it is a private test build. Please do not share it.
+
+
+2. INSTALLING AND RUNNING
+-------------------------
+
+Unzip the folder anywhere and run rudebreaker.exe. Nothing needs to be
+installed.
+
+Files in the folder:
+
+  rudebreaker.exe       The game.
+  SDL2.dll              Window, sound and gamepad library. Required.
+  SGM1.DAT              Original stages, sprites and scripts. Required.
+  SONG.DAT              Original music data. Required for music.
+  FPLAY.COM             Original music driver. Required for music.
+  ym2608_adpcm_rom.bin  Yamaha rhythm ROM. Optional.
+  LICENSE-ymfm.txt      License of the ymfm sound chip emulator.
+  LICENSE-SDL2.txt      License of the SDL2 library.
+  MANUAL.txt / .md      This manual.
+
+Files the game creates next to the exe:
+
+  RBRANK.DAT       The original save file: the hi-score table and the
+                   game settings (difficulty and the GAMEPLAY options).
+                   It is created with the original table if missing.
+                   Delete it to reset scores and settings.
+  rudebreaker.cfg  PC options: palette, training, key and pad
+                   bindings.
+  rudebreaker.ini  Frame pacing choice: pacing=smooth or pacing=exact.
+  pace.txt         A small timing report (see section 7). Safe to
+                   delete.
+
+
+3. CONTROLS
+-----------
+
+Keyboard (defaults):
+
+  Move              Arrow keys, W A S D, or keypad 8 4 6 2
+  Fire / confirm    Z, Space, or keypad 0
+  Mode              X, N, M, Enter, or keypad Enter
+                    (switches the side pods between attack and
+                    defense)
+  Special           Left or Right Shift
+  Pause / back      Escape
+  Quit              F10
+  Timing overlay    F8 (shows the frame pacing info, see section 7)
+
+Gamepad:
+
+  Any standard PC gamepad (XInput or DirectInput) is detected
+  automatically. You can plug it in or unplug it while the game is
+  running.
+
+  Move              Left stick or D-pad
+  Fire / confirm    South button (A on Xbox pads)
+  Mode              East button (B)
+  Special           West button (X)
+  Pause             Start
+  Quit              Back / Select
+
+In the menus, Escape (keyboard) or the B button (pad) goes back one
+page.
+
+The window can be resized. The picture keeps the original 640x400
+aspect.
+
+
+4. TITLE SCREEN AND CONFIG MENU
+-------------------------------
+
+The logo, title, ranking display and intro are the original screens.
+Press Fire at the title to start, or open CONFIG from the title menu.
+
+CONFIG has these pages:
+
+GAMEPLAY
+
+  DIFFICULTY       VERY EASY, EASY, NORMAL, HARD, VERY HARD. These are
+                   the original game's own difficulty levels. NORMAL
+                   is the original default. Saved in RBRANK.DAT.
+
+  SUICIDE BULLETS  ON: enemies fire bullets back when they are
+                   destroyed, as in the original option. OFF: they don't.
+
+  SHIP SELECT      The original game's option of the same name. It
+                   turns the intro scene before the game on or off. It
+                   does NOT let you pick a different ship.
+
+  MOVE SPEED       SLOW, NORMAL, FAST. The ship's movement speed, as in
+                   the original.
+
+  PALETTE          ORIGINAL: the PC-98 colors. MODERN: Filipe's color
+                   rebalance of the game.
+
+  TRAINING         ON: practice mode (see section 5). OFF: normal game.
+
+  FRAME PACING     SMOOTH or EXACT (see section 7).
+
+  BACK
+
+CONTROLS
+
+  JOYSTICK         Shows whether a gamepad is in use, and its name.
+                   Change it with left/right.
+  DEFINE KEYS      Remap UP, DOWN, LEFT, RIGHT, FIRE, MODE, SHIFT and
+                   PAUSE. Select an action, then press the new key or
+                   pad button. RESTORE DEFAULTS puts back the keys
+                   listed in section 3.
+  BACK
+
+SOUND TEST
+
+  SOUND            Music and sound effects ON or OFF.
+  BGM              Choose a music track (0-47) with left/right; Fire
+                   plays it.
+  SE               Choose a sound effect (0-47) with left/right; Fire
+                   plays it.
+  PLAY / PAUSE / STOP   Player controls.
+  The bars at the bottom are a VU meter of what is playing.
+  (Some numbers are silent: they are empty in the original data.)
+
+RANKING            Opens the original hi-score table.
+
+PASSWORD           Opens the original password screen.
+
+BACK               Returns to the title.
+
+
+5. TRAINING MODE
+----------------
+
+TRAINING is for practice:
+
+  - Your ship cannot be hit. You never lose the weapon or a life.
+  - The hidden medal spots flash red in place all the time, the same
+    red flash you normally only see while shooting them, so you can
+    learn where they are. You still have to shoot a spot until the
+    medal is revealed, as in the normal game, and scoring is unchanged.
+  - Scores from a training run are not entered in the hi-score table,
+    and nothing is saved to RBRANK.DAT from that run.
+
+Turn TRAINING off to play normally.
+
+
+6. SCORES, SAVING AND THE ORIGINAL SECRETS
+------------------------------------------
+
+Hi-scores and settings are saved in RBRANK.DAT, in the original
+format. A new score is saved when you enter your name.
+
+Difficulty and all gameplay rules work as in the original.
+
+The original debug cheat is still in the code. During the game, pause
+with Escape and type N E K O C O. Then:
+
+  2   toggle invincibility
+  3   toggle the debug display
+  1   hold to run without the frame wait (fast forward)
+  4   jump to the ending
+
+This is the original's hidden feature and is left as it was.
+
+
+7. FRAME PACING AND VSYNC
+-------------------------
+
+The original game logic runs at about 30.67 frames per second. That
+speed is kept on every PC, so the game is never faster than the
+original.
+
+The port waits for your monitor's refresh (vsync) when the graphics
+driver allows it:
+
+  SMOOTH (default)  On a 60, 120 or 240 Hz monitor each game frame
+                    is shown for exactly 2, 4 or 8 refreshes. Motion
+                    is perfectly even. The game then runs at 30.00
+                    frames per second, about 2% slower than the
+                    original, which you won't notice.
+
+  EXACT             The game runs at exactly 30.67 frames per second
+                    and every refresh shows the newest frame. Motion
+                    has a slight regular unevenness on 60 Hz screens.
+
+On other refresh rates (75, 144, 165 Hz...) the game always uses EXACT.
+If vsync isn't available, a timer paces the game at 30.67.
+
+F8 shows a small overlay with the mode, the measured refresh rate and
+timing stats. The same information is written to pace.txt next to the
+exe when the game starts and when you quit. It is useful if you report a smoothness problem.
+
+
+8. ORIGINAL OPTIONS REMOVED ON PURPOSE
+--------------------------------------
+
+The original options menu had some items that this port does not
+show:
+
+  AUTO SHOT, WAIT, PRIORITY, FRAME SKIP, SWAP KEYS
+
+They were there to work around the speed and limits of the PC-98
+hardware, or are covered by the PC controls. A modern PC runs the
+game at full speed with no slowdown or frame skipping, the speed is
+fixed by the port's pacing (section 7), and DEFINE KEYS replaces key
+swapping. The original's separate INVINCIBLE and NAME ENTRY items are
+replaced by TRAINING.
+
+
+9. KNOWN LIMITATIONS
+--------------------
+
+  - Vsync and SMOOTH pacing have not yet been tested on every kind of
+    monitor and graphics card. If motion is not smooth, try EXACT and
+    send pace.txt.
+  - This is a test build. Please report anything that looks or
+    sounds different from the original.
+
+
+10. REPORTING BUGS
+------------------
+
+When something looks, sounds or feels wrong, please send:
+
+  1. What happened and what you expected instead.
+  2. The steps to make it happen again (stage, mode, menu, what you
+     pressed). Say if it happens every time or only sometimes.
+  3. A screenshot or a short video, if you can.
+  4. Your Windows version, graphics card, monitor refresh rate, and
+     the controller you use (keyboard or which gamepad).
+  5. The PACING setting (SMOOTH or EXACT) and the file pace.txt from
+     the game folder (it is rewritten each time you quit, so copy it
+     right after the problem).
+  6. The build name: pr9n.
+
+Send it to Filipe Gracioli / shmupsbr.
+
+
+11. CREDITS
+-----------
+
+  Rude Breaker (c) Compile, 1996. Original game, graphics, music and
+               program.
+  ymfm         YM2608 sound emulation by Aaron Giles, BSD 3-Clause
+               license (see LICENSE-ymfm.txt).
+  SDL2         Simple DirectMedia Layer, zlib license.
+  PC port      Filipe Gracioli / shmupsbr.
