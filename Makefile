@@ -1,7 +1,6 @@
-# Rude Breaker — Phase 1 (SDL2) / Phase 2 (X68000)
+# Rude Breaker — PC port (SDL2)
 # Usage:
 #   make              # SDL2 host build
-#   make PLATFORM=x68k
 #   make test-assets  # parse extracted SGM1 if present
 
 PLATFORM ?= sdl2
@@ -51,19 +50,8 @@ ifeq ($(PLATFORM),sdl2)
   EXE     ?=
   TARGET  := $(BUILD)/rudebreaker$(EXE)
   LINK    := $(CXX)
-else ifeq ($(PLATFORM),x68k)
-  HAL_SRCS := \
-	src/hal/x68k/video_x68k.c \
-	src/hal/x68k/audio_x68k.c \
-	src/hal/x68k/input_x68k.c
-  CFLAGS  += -DRB_PLATFORM_X68K
-  # Human68k cross compiler — override on the command line if needed.
-  CC      ?= human68k-gcc
-  TARGET  := $(BUILD)/rudebreaker.x
-  YMFM_SRCS :=
-  LINK    := $(CC)
 else
-  $(error Unknown PLATFORM=$(PLATFORM); use sdl2 or x68k)
+  $(error Unknown PLATFORM=$(PLATFORM); use sdl2)
 endif
 
 SRCS := $(CORE_SRCS) $(HAL_SRCS)
@@ -76,8 +64,7 @@ all: dirs $(TARGET) test-endian
 
 dirs:
 	@mkdir -p $(BUILD)/$(PLATFORM)/src/core \
-	          $(BUILD)/$(PLATFORM)/src/hal/sdl2 \
-	          $(BUILD)/$(PLATFORM)/src/hal/x68k
+	          $(BUILD)/$(PLATFORM)/src/hal/sdl2
 
 $(TARGET): $(OBJS)
 	$(LINK) -o $@ $^ $(LDFLAGS)
@@ -104,3 +91,5 @@ test-endian: dirs
 
 clean:
 	rm -rf $(BUILD)
+
+
