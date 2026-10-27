@@ -34,35 +34,85 @@ void sys_read_input(RbInput *out)
         out->axis_x = 1;
     }
 
-    /* Joystick 0 via IOCS. */
+    /* Joystick 0 via IOCS. Merged only while the script's joystick
+     * flag is set; the pad bit lets that row turn the flag on. */
     joy = _iocs_joyget(0);
+    out->pad = 1;
     if (!(joy & 0x01)) {
-        out->buttons |= RB_BTN_UP;
-        out->axis_y = -1;
+        out->pad_buttons |= RB_BTN_UP;
     }
     if (!(joy & 0x02)) {
-        out->buttons |= RB_BTN_DOWN;
-        out->axis_y = 1;
+        out->pad_buttons |= RB_BTN_DOWN;
     }
     if (!(joy & 0x04)) {
-        out->buttons |= RB_BTN_LEFT;
-        out->axis_x = -1;
+        out->pad_buttons |= RB_BTN_LEFT;
     }
     if (!(joy & 0x08)) {
-        out->buttons |= RB_BTN_RIGHT;
-        out->axis_x = 1;
+        out->pad_buttons |= RB_BTN_RIGHT;
     }
     if (!(joy & 0x20)) {
-        out->buttons |= RB_BTN_A;
+        out->pad_buttons |= RB_BTN_A;
     }
     if (!(joy & 0x40)) {
-        out->buttons |= RB_BTN_B;
+        out->pad_buttons |= RB_BTN_B;
     }
 
     /* ESC group — treat as quit. */
     if (_iocs_bitsns(0) & 0x80) {
         out->buttons |= RB_BTN_QUIT;
     }
+}
+
+void sys_bind_begin(void)
+{
+}
+
+int sys_bind_result(int *kind, int *a, int *b)
+{
+    (void)kind;
+    (void)a;
+    (void)b;
+    return 0;
+}
+
+void sys_bind_restore(void)
+{
+}
+
+int sys_bind_set(int action, int kind, int a, int b)
+{
+    (void)action;
+    (void)kind;
+    (void)a;
+    (void)b;
+    return 0;
+}
+
+const char *sys_bind_label(int action)
+{
+    (void)action;
+    return "DEFAULT";
+}
+
+void sys_bind_write(void *file)
+{
+    (void)file;
+}
+
+int sys_bind_read_line(const char *line)
+{
+    (void)line;
+    return 0;
+}
+
+const char *sys_joy_name(void)
+{
+    return "";
+}
+
+int sys_joy_present(void)
+{
+    return 0;
 }
 
 #else

@@ -7,3 +7,6 @@ dist/
 # Yamaha copyright. Never commit the YM2608 rhythm ROM or a dump of it.
 ym2608_adpcm_rom.bin
 ym2608_rom*.zip
+
+# Host options. Written next to the disk files when the player changes one.
+rudebreaker.cfg

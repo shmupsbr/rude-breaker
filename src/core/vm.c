@@ -92,6 +92,22 @@ struct RbVm {
     /* Set when opcode 0x0D loads the next stage. The host holds the
      * picture; the VM itself keeps running. */
     int stage_gap;
+    /* Host training switch. Not part of the script state, so a stage
+     * reset leaves it alone. */
+    int training;
+    /* Training medal blink, counts 0x4E draws. Host only. */
+    unsigned medal_blink;
+    /* Set when native 0x9213 registers a score. Training never sets it. */
+    int rank_commit;
+    /* Pause (frame loop 0xBD9). Escape toggles [bp+0x72] bit 0x8000.
+     * The saved cells are the row the word PAUSE overwrites. */
+    int pause_hold;
+    int pause_saved;
+    uint16_t pause_blink;
+    uint8_t pause_cells[20];
+    uint8_t pause_attr[20];
+    /* 1 on a page-flip iteration. Frame skip leaves this 0. */
+    int show_frame;
     RbGfx *gfx;
 };
 
@@ -286,6 +302,8 @@ static uint32_t lz_decompress(const uint8_t *src, uint32_t src_n,
     return di;
 }
 
+static void install_menu_extension(RbVm *vm);
+
 static int ensure_chunk(RbVm *vm, unsigned index)
 {
     uint32_t sz = 0;
@@ -311,7 +329,46 @@ static int ensure_chunk(RbVm *vm, unsigned index)
     n = lz_decompress(src, sz, dst, CHUNK_CAP, NULL);
     vm->chunk[index] = dst;
     vm->clen[index] = n;
+    if (index == 1u) {
+        install_menu_extension(vm);
+    }
     return 0;
+}
+
+/* Settings cursor E0 runs from 2 (BACK) through 19 (NAME ENTRY). The
+ * dispatcher at 0x80F3 used to wrap anything else back to 2. Palette
+ * and training are host rows on that same cursor, stored as E0 20 and
+ * 21. The cave lets those two values ride the frame loop; the host
+ * draws the text and applies the keys. */
+static void install_menu_extension(RbVm *vm)
+{
+    uint8_t *p = vm->chunk[1];
+    static const uint8_t cave[] = {
+        0x25, 0xE0, 0x00, 0x14, 0x13, 0xB0,
+        0x25, 0xE0, 0x00, 0x15, 0x13, 0xB0,
+        0x2B, 0xE0, 0x00, 0x02,
+        0x05, 0x1A, 0x80,
+        0x05, 0x1A, 0x80
+    };
+
+    if (!p || vm->clen[1] < 0x80FAu ||
+        0xB000u + sizeof cave > CHUNK_CAP) {
+        return;
+    }
+    if (p[0x80F3] == 0x2Bu && p[0x80F4] == 0xE0u &&
+        p[0x80F5] == 0x00u && p[0x80F6] == 0x02u) {
+        p[0x80F3] = 0x05;
+        p[0x80F4] = 0x00;
+        p[0x80F5] = 0xB0;
+        p[0x80F6] = 0x00;
+        p[0x80F7] = 0x00;
+        p[0x80F8] = 0x00;
+        p[0x80F9] = 0x00;
+    }
+    memcpy(p + 0xB000, cave, sizeof cave);
+    if (vm->clen[1] < 0xB000u + sizeof cave) {
+        vm->clen[1] = 0xB000u + (uint32_t)sizeof cave;
+    }
 }
 
 /* ---- RNG 0xE5D / 0xE4E -------------------------------------------------- */
@@ -1313,6 +1370,18 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
     if (!cs) {
         return;
     }
+    /* Ranking qualify at 0x91AF. The caller treats E0 >= 10 as "this
+     * run does not enter the table" and jumps back to the title, so
+     * name entry never starts. 0x9213 writes the score into the rank
+     * block. Training does neither, and the host does not write
+     * RBRANK.DAT for that run. */
+    if (vm->training && ip0 == 0x91AFu) {
+        vm->g[0xE0] = 0xFFu;
+        return;
+    }
+    if (vm->training && ip0 == 0x9213u) {
+        return;
+    }
     memset(r, 0, sizeof r);
     r[6] = (uint16_t)(ent * ENT_STR);
     vm->nat_ds = 0;
@@ -2122,6 +2191,19 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             stk[--sp] = (uint16_t)(int16_t)(int8_t)cs[ip++];
             continue;
         }
+        /* OUT imm8 / OUT DX. Native 0x9F91 writes [bp+0xE0] to port
+         * 0x74 and returns. The port has no such device; dropping the
+         * write lets the RETF run. Aborting here used to skip it. */
+        if (op == 0xE6u || op == 0xE7u) {
+            if ((uint32_t)ip >= len) {
+                return;
+            }
+            ip++;
+            continue;
+        }
+        if (op == 0xEEu || op == 0xEFu) {
+            continue;
+        }
 
         vm->nat_miss++;
         vm->nat_miss_ip = ip0;
@@ -2701,6 +2783,24 @@ static void note_miss(RbVm *vm, int ent, uint8_t op, uint16_t ip)
     vm->mode[ent] = MODE_FOREVER;
 }
 
+/* Stage chunks 2..6 spawn the ship at 0x4F6E, the hit proxy at
+ * 0x5641, and the second body at 0x5CF4. Chunk 1's copies are six
+ * bytes later. Those are the scripts whose 0x50 tests hurt the player. */
+static int player_body_origin(uint16_t origin)
+{
+    switch (origin) {
+    case 0x4F6Eu:
+    case 0x5641u:
+    case 0x5CF4u:
+    case 0x4F74u:
+    case 0x5647u:
+    case 0x5CFAu:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 static void run_fetch(RbVm *vm, int ent)
 {
     int steps = 0;
@@ -2822,6 +2922,11 @@ static void run_fetch(RbVm *vm, int ent)
             a = rd16(vm, ent, di);
             su16(vm, ent, 8, (uint16_t)(di + 2u));
             x86_native(vm, ent, a);
+            /* Name entry calls 0x9128 then 0x9213. The insert is the
+             * moment the original has a finished record. */
+            if (a == 0x9213u && !vm->training) {
+                vm->rank_commit = 1;
+            }
             if (eu16(vm, ent, 0) == 0) {
                 return;
             }
@@ -2838,6 +2943,10 @@ static void run_fetch(RbVm *vm, int ent)
             sgu16(vm, 0x60, gu16(vm, 0x62));
             break;
         case 0x10:
+            /* Menu entries are `10 01 00`, `10 02 00`, and `10 03 00`.
+             * The same immediate is the vsync wait [bp+0x60] and the
+             * stock field [bp+0x62]. The host period is N/2 * 3/92 s,
+             * so count 2 stays on the capture lock. */
             a = rd16(vm, ent, di);
             sgu16(vm, 0x60, a);
             sgu16(vm, 0x62, a);
@@ -3385,11 +3494,46 @@ static void run_fetch(RbVm *vm, int ent)
                 gfx_compose(vm->gfx);
             }
             break;
-        case 0x4E:
+        case 0x4E: {
+            /* Training: hidden spots (script 0x4DE4, type 0x8220, bit
+             * 0x200 = not drawn) show the original hit flash in place,
+             * as if shot: the sprite drawn with draw byte 2 (the mono
+             * flash plane, palette 11, the same red a hit gives). Type
+             * and draw byte are changed only around this draw call and
+             * restored at once, so hits, reveal and scoring stay
+             * original. */
+            int lifted[ENT_N];
+            uint8_t attr_was[ENT_N];
+            int nl = 0;
+            int k;
+
+            vm->medal_blink++;
+            if (vm->training && (vm->medal_blink % 3u) == 0u &&
+                vm->view_chunk >= 2 && vm->view_chunk <= 6) {
+                for (k = 0; k < ENT_N; k++) {
+                    uint16_t t = eu16(vm, k, 0);
+
+                    if (vm->origin[k] == 0x4DE4u &&
+                        (t & 0x0220u) == 0x0220u) {
+                        su16(vm, k, 0, (uint16_t)(t & ~0x0200u));
+                        attr_was[nl] = vm->ent[k * ENT_STR + 0x4F];
+                        vm->ent[k * ENT_STR + 0x4F] = 2;
+                        lifted[nl++] = k;
+                    }
+                }
+            }
             gfx_draw_entities(vm->gfx, vm->ent, ENT_N, ENT_STR,
                               (const uint8_t *const *)vm->chunk, vm->clen,
-                              vm->cof, (int)gu16(vm, 0x76));
+                              vm->cof, (int)gu16(vm, 0x76),
+                              (int)(int16_t)gu16(vm, 0x82),
+                              vm->view_chunk >= 2 && vm->view_chunk <= 6);
+            for (k = 0; k < nl; k++) {
+                su16(vm, lifted[k], 0,
+                     (uint16_t)(eu16(vm, lifted[k], 0) | 0x0200u));
+                vm->ent[lifted[k] * ENT_STR + 0x4F] = attr_was[k];
+            }
             break;
+        }
         case 0x4D:
             scroll_4d(vm);
             break;
@@ -3401,6 +3545,20 @@ static void run_fetch(RbVm *vm, int ent)
             int hit = 0;
 
             di = (uint16_t)(di + 2u);
+            /* Player body scripts test enemy shots and collisions with
+             * mask 0x00C0 or 0x00E0 and then subtract from the target's
+             * HP word. Training treats that test as a miss: the ship's
+             * own counter is not decremented, so there is no weapon
+             * loss and no death. Item scripts and player shots use
+             * other origins and still run. */
+            if (vm->training && player_body_origin(vm->origin[ent]) &&
+                (mask == 0x00C0u || mask == 0x00E0u) &&
+                rd8(vm, ent, di) == 0x02u &&
+                rd8(vm, ent, (uint16_t)(di + 1u)) == 0x3Cu) {
+                skip_subops(vm, ent, &di);
+                su16(vm, ent, 8, di);
+                break;
+            }
             start = di;
             for (i = 0; i < ENT_N; i++) {
                 uint16_t t = eu16(vm, i, 0);
@@ -3597,11 +3755,30 @@ void vm_reset_boot(RbVm *vm)
     vm->loads = 0;
     vm->quit = 0;
     vm->boot = 0;
+    vm->pause_hold = 0;
+    vm->pause_saved = 0;
+    vm->pause_blink = 0;
     vm->rng_mix = 0x1234u;
     vm->rng_cf = 0;
     sgu16(vm, 0x5C, 0x1234u);
-    sgu16(vm, 0x62, 3);
-    sgu16(vm, 0x60, 3);
+    /* Loader 0x1648, no saved config: word [bp+0x62] = 2. Opcode 0x0F
+     * copies that into the vsync wait [bp+0x60]. It is the menu stock,
+     * not the HUD. Boot calls 0x9F98, which stores byte [bp+0xCA] = 3.
+     * Starting a game at 0x78C6 calls 0x9FA9 (D2 = CA) and then
+     * subtracts 1, so the HUD byte [bp+0xD2] is 2. Nothing copies 0x62
+     * into D2, and this reset does not assign D2 either: the script is
+     * the source. Continue returns through the title and runs 0x78C6
+     * again, so the next game starts at 2 as well. vm_reset_play is the
+     * lab entry and still leaves D2 at 0. */
+    sgu16(vm, 0x62, 2);
+    sgu16(vm, 0x60, 2);
+    /* Same loader path: word [bp+0xB2] = 2 and byte [bp+0xC9] = 7.
+     * Spawn scripts do HP <<= [bp+0xB2], so bosses and formation
+     * enemies have four times the raw hit points. The config menu's
+     * middle step writes this same pair. */
+    sgu16(vm, 0xB2, 2);
+    vm->g[0xC9] = 7;
+    vm->rank_commit = 0;
     memset(vm->rank, 0, sizeof vm->rank);
     memset(vm->text, 0, sizeof vm->text);
     vm->text_di = 0;
@@ -3656,11 +3833,17 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
     vm->loads = 0;
     vm->quit = 0;
     vm->boot = 0;
+    vm->pause_hold = 0;
+    vm->pause_saved = 0;
+    vm->pause_blink = 0;
     vm->rng_mix = 0x1234u;
     vm->rng_cf = 0;
     sgu16(vm, 0x5C, 0x1234u);
-    sgu16(vm, 0x62, 3);
-    sgu16(vm, 0x60, 3);
+    sgu16(vm, 0x62, 2);
+    sgu16(vm, 0x60, 2);
+    sgu16(vm, 0xB2, 2);
+    vm->g[0xC9] = 7;
+    vm->rank_commit = 0;
     /* Chunk 1's pre-stage script (0x9507) arms the mode byte before it
      * loads a stage. The stage chunk never writes it back to 1, and the
      * ship native ignores the mode button while the byte is still 0.
@@ -3689,6 +3872,131 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
     vm->mode[0] = MODE_FETCH;
 }
 
+/* Game image 0x1948, copied by loader 0x1648 when RBRANK.DAT is absent.
+ * Ten records, 100000 down to 10000. The name cells are 01 32. The
+ * first three records are stage 2 and the rest are stage 1. */
+static void rank_default_records(uint8_t *dst)
+{
+    int i;
+
+    for (i = 0; i < 10; i++) {
+        uint8_t *rec = dst + i * 22;
+        uint32_t score = 100000u - (uint32_t)i * 10000u;
+        int k;
+
+        write_u16_le(rec, (uint16_t)score);
+        write_u16_le(rec + 2u, (uint16_t)(score >> 16));
+        for (k = 0; k < 8; k++) {
+            rec[4 + k * 2] = 0x01u;
+            rec[5 + k * 2] = 0x32u;
+        }
+        rec[0x14] = (i < 3) ? 2u : 1u;
+        rec[0x15] = 0;
+    }
+}
+
+static void rank_default_file(uint8_t file[230])
+{
+    memset(file, 0, 230);
+    write_u16_le(file + 2, 2);
+    write_u16_le(file + 4, 2);
+    file[6] = 1;
+    file[7] = 7;
+    rank_default_records(file + 10);
+}
+
+static void rank_apply_file(RbVm *vm, const uint8_t *file)
+{
+    uint16_t flags = (uint16_t)(read_u16_le(file) & 0x7FFFu);
+
+    memcpy(vm->rank, file + 10, 220);
+    if (RANK_SIZE > 220u) {
+        memset(vm->rank + 220, 0, RANK_SIZE - 220u);
+    }
+    /* Loader 0x16C6. Bit 15 of the debug word is cleared on the way in. */
+    sgu16(vm, 0x72, flags);
+    sgu16(vm, 0xB2, read_u16_le(file + 2));
+    sgu16(vm, 0x62, read_u16_le(file + 4));
+    set_g8(vm, 0xC7, file[6]);
+    set_g8(vm, 0xC9, file[7]);
+    set_g8(vm, 0xB9, (uint8_t)(vm->g[0xB9] | file[8]));
+    set_g8(vm, 0xC0, file[9]);
+    set_g8(vm, 0xC1, 0);
+    sgu16(vm, 0x8A, read_u16_le(vm->rank));
+    sgu16(vm, 0x8C, read_u16_le(vm->rank + 2));
+}
+
+void vm_rank_load(RbVm *vm, const uint8_t *bytes, size_t n)
+{
+    uint8_t file[230];
+
+    if (!vm) {
+        return;
+    }
+    if (bytes && n == 230u) {
+        memcpy(file, bytes, 230);
+    } else {
+        rank_default_file(file);
+    }
+    rank_apply_file(vm, file);
+    vm->rank_commit = 0;
+}
+
+void vm_rank_export(const RbVm *vm, uint8_t *out)
+{
+    if (!out) {
+        return;
+    }
+    if (!vm) {
+        rank_default_file(out);
+        return;
+    }
+    /* Save side of 0x15B6. The debug word is stored whole. */
+    memset(out, 0, 230);
+    write_u16_le(out, gu16(vm, 0x72));
+    write_u16_le(out + 2, gu16(vm, 0xB2));
+    write_u16_le(out + 4, gu16(vm, 0x62));
+    out[6] = vm->g[0xC7];
+    out[7] = vm->g[0xC9];
+    out[8] = (uint8_t)(vm->g[0xB9] & 0x04u);
+    out[9] = vm->g[0xC0];
+    memcpy(out + 10, vm->rank, 220);
+}
+
+int vm_take_rank_commit(RbVm *vm)
+{
+    int pending;
+
+    if (!vm) {
+        return 0;
+    }
+    pending = vm->rank_commit;
+    vm->rank_commit = 0;
+    return pending;
+}
+
+uint16_t vm_peak_hp(const RbVm *vm)
+{
+    int i;
+    uint16_t peak = 0;
+
+    if (!vm) {
+        return 0;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        uint16_t hp;
+
+        if (eu16(vm, i, 0) == 0) {
+            continue;
+        }
+        hp = eu16(vm, i, 0x3C);
+        if (hp > peak) {
+            peak = hp;
+        }
+    }
+    return peak;
+}
+
 void vm_set_hiscore(RbVm *vm, uint32_t score)
 {
     if (!vm) {
@@ -3698,15 +4006,174 @@ void vm_set_hiscore(RbVm *vm, uint32_t score)
     sgu16(vm, 0x8C, (uint16_t)(score >> 16));
 }
 
+void vm_set_training(RbVm *vm, int on)
+{
+    if (!vm) {
+        return;
+    }
+    vm->training = on ? 1 : 0;
+}
+
+int vm_training(const RbVm *vm)
+{
+    return vm && vm->training;
+}
+
+void vm_set_grade(RbVm *vm, int modern)
+{
+    (void)vm;
+    gfx_set_grade(modern);
+}
+
+void vm_set_global_u8(RbVm *vm, uint8_t field, uint8_t value)
+{
+    if (!vm) {
+        return;
+    }
+    set_g8(vm, (int)field, value);
+}
+
+void vm_pretend_held(RbVm *vm, uint16_t game_bits)
+{
+    if (!vm) {
+        return;
+    }
+    vm->prev_held = (uint16_t)(vm->prev_held | game_bits);
+}
+
+void vm_text_write(RbVm *vm, int col, int row, const char *s, int width,
+                   uint8_t attr)
+{
+    uint16_t di;
+    uint16_t a;
+    int i;
+    int n;
+    int limit;
+
+    if (!vm || row < 0 || row > 24 || col < 0) {
+        return;
+    }
+    if (!s) {
+        s = "";
+    }
+    /* Pad past the terminator. The next literal in the binary is not
+     * a blank, and reading it painted a stray glyph in the last cell. */
+    n = (int)strlen(s);
+    limit = width > 0 ? width : n;
+    di = (uint16_t)((unsigned)col * 2u + (unsigned)row * 160u);
+    a = (uint16_t)(0x5700u | attr);
+    for (i = 0; i < limit; i++) {
+        unsigned char ch = (i < n) ? (unsigned char)s[i] : (unsigned char)' ';
+
+        if (ch >= 'a' && ch <= 'z') {
+            ch = (unsigned char)(ch - 32u);
+        }
+        if (ch == ' ') {
+            if ((uint32_t)di + 0x2003u < TEXT_SIZE) {
+                memset(vm->text + di, 0, 4);
+                memset(vm->text + 0x2000u + di, 0, 4);
+            }
+        } else {
+            uint16_t left = (uint16_t)(0x0003u | ((uint16_t)ch << 8));
+
+            text_pair(vm, di, left, (uint16_t)(left | 0x0080u), a);
+        }
+        di = (uint16_t)(di + 4u);
+    }
+}
+
+void vm_text_settle_row(RbVm *vm, int row)
+{
+    int col;
+
+    if (!vm || row < 0 || row > 24) {
+        return;
+    }
+    for (col = 0; col < 80; col++) {
+        unsigned off = (unsigned)row * 0xA0u + (unsigned)col * 2u;
+        uint8_t ch = vm->text[off];
+        uint8_t ch2 = vm->text[off + 1u];
+
+        if (ch2 == 0 && (ch == 0 || ch == 0x20u)) {
+            continue;
+        }
+        if (vm->text[0x2000u + off] == 0x41u) {
+            vm->text[0x2000u + off] = (col < 50) ? 0xE1u : 0xA1u;
+        }
+    }
+}
+
+int vm_text_has_jis(const RbVm *vm, uint16_t a, uint16_t b)
+{
+    uint8_t a0;
+    uint8_t a1;
+    uint8_t b0;
+    uint8_t b1;
+    int row;
+
+    if (!vm) {
+        return 0;
+    }
+    a0 = (uint8_t)(((a >> 8) & 0x7Fu) - 0x20u);
+    a1 = (uint8_t)(a & 0xFFu);
+    b0 = (uint8_t)(((b >> 8) & 0x7Fu) - 0x20u);
+    b1 = (uint8_t)(b & 0xFFu);
+    for (row = 0; row < 25; row++) {
+        int col;
+
+        for (col = 0; col < 76; col += 2) {
+            unsigned off = (unsigned)row * 0xA0u + (unsigned)col * 2u;
+
+            if (vm->text[off] == a0 && vm->text[off + 1] == a1 &&
+                vm->text[off + 4] == b0 && vm->text[off + 5] == b1) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
 void vm_set_input(RbVm *vm, const RbInput *in)
 {
     uint16_t held;
     uint16_t edge;
+    uint16_t flags;
 
     if (!vm) {
         return;
     }
     held = held_from(in);
+    flags = gu16(vm, 0x72);
+    /* A connected pad is the port's stand-in for the READJS driver.
+     * The joystick row will not set bit 0x400 until B9 bit 3 is on. */
+    if (in && in->pad) {
+        vm->g[0xB9] = (uint8_t)(vm->g[0xB9] | 0x08u);
+    }
+    if (in && (flags & 0x0400u)) {
+        RbInput pad;
+
+        memset(&pad, 0, sizeof pad);
+        pad.buttons = (uint16_t)(in->pad_buttons &
+                                 (RB_BTN_UP | RB_BTN_DOWN | RB_BTN_LEFT |
+                                  RB_BTN_RIGHT | RB_BTN_A | RB_BTN_B | RB_BTN_C));
+        held = (uint16_t)(held | held_from(&pad));
+    }
+    /* Poll 0x7997. Bit 0x200 exchanges fire and mode. */
+    if (flags & 0x0200u) {
+        uint16_t fire = (uint16_t)(held & 0x0010u);
+        uint16_t mode = (uint16_t)(held & 0x0020u);
+
+        held = (uint16_t)(held & (uint16_t)~0x0030u);
+        if (fire) {
+            held = (uint16_t)(held | 0x0020u);
+        }
+        if (mode) {
+            held = (uint16_t)(held | 0x0010u);
+        }
+    }
+    if (in) {
+        vm->g[0xC2] = in->chord;
+    }
     edge = (uint16_t)((~vm->prev_held | 0x0040u) & held);
     vm->held = held;
     sgu16(vm, 0x6C, held);
@@ -3748,6 +4215,30 @@ uint16_t vm_global_u16(const RbVm *vm, uint8_t field)
         return 0;
     }
     return (uint16_t)vm->g[field] | ((uint16_t)vm->g[field + 1u] << 8);
+}
+
+void vm_palette_rgb(const RbVm *vm, uint8_t rgb[16][3])
+{
+    if (!rgb) {
+        return;
+    }
+    gfx_palette_rgb(vm ? vm->gfx : NULL, rgb);
+}
+
+int vm_count_attr(const RbVm *vm, uint8_t attr)
+{
+    int i;
+    int n = 0;
+
+    if (!vm) {
+        return 0;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        if (eu16(vm, i, 0) != 0 && eu8(vm, i, 0x4F) == attr) {
+            n++;
+        }
+    }
+    return n;
 }
 
 uint16_t vm_origin_ip(const RbVm *vm, uint16_t origin)
@@ -3807,10 +4298,176 @@ void vm_debug_origins(const RbVm *vm)
     }
 }
 
+/* 0xD62, only while the pause bit is already set. The sequence is
+ * N-E-K-O-C-O in [bp+0xC2] (bits 0x08, 0x02, 0x04, 0x10, 0x01, 0x10).
+ * The last step sets debug bit 0x800. A wrong key clears the progress.
+ * Once the bit is on, any chord key or a 1..4 edge clears it again. */
+static void debug_chord(RbVm *vm)
+{
+    uint8_t c3 = vm->g[0xC3];
+    uint8_t c2 = vm->g[0xC2];
+
+    if (gu16(vm, 0x72) & 0x0800u) {
+        if ((gu16(vm, 0x6E) & 0x3F00u) != 0 || c2 != 0) {
+            sgu16(vm, 0x72, (uint16_t)(gu16(vm, 0x72) & 0xF7FFu));
+        }
+        return;
+    }
+    if (c3 & 0x10u) {
+        if (c2 & 0x10u) {
+            vm->g[0xC3] = 0;
+            sgu16(vm, 0x72, (uint16_t)(gu16(vm, 0x72) | 0x0800u));
+            return;
+        }
+    } else if (c3 & 0x08u) {
+        if (c2 & 0x01u) {
+            vm->g[0xC3] = (uint8_t)(c3 | 0x10u);
+            return;
+        }
+    } else if (c3 & 0x04u) {
+        if (c2 & 0x10u) {
+            vm->g[0xC3] = (uint8_t)(c3 | 0x08u);
+            return;
+        }
+    } else if (c3 & 0x02u) {
+        if (c2 & 0x04u) {
+            vm->g[0xC3] = (uint8_t)(c3 | 0x04u);
+            return;
+        }
+    } else if (c3 & 0x01u) {
+        if (c2 & 0x02u) {
+            vm->g[0xC3] = (uint8_t)(c3 | 0x02u);
+            return;
+        }
+    } else if (c2 & 0x08u) {
+        vm->g[0xC3] = (uint8_t)(c3 | 0x01u);
+        return;
+    }
+    if (c2 != 0) {
+        vm->g[0xC3] = 0;
+    }
+}
+
+/* 0xCE6. Escape toggles pause. The other keys run only after the
+ * NEKOCO chord has set bit 0x800. Key 2 toggles invincible bit 0x0100
+ * (the same bit the INVINCIBLE menu row writes) and sets [bp+0xC4].
+ * Key 3 toggles the debug HUD bit 0x2000. Key 1 held sets bit 0x4000,
+ * which skips the vsync wait. Key 4 sets [bp+0xCC], the ending flag.
+ * Edge bits 0x0100 and 0x0200 are in the routine and are never set by
+ * the keyboard poll. */
+static void apply_debug_keys(RbVm *vm)
+{
+    uint16_t flags = gu16(vm, 0x72);
+    uint16_t edge;
+    uint16_t held;
+
+    if (flags & 0x8000u) {
+        debug_chord(vm);
+        flags = gu16(vm, 0x72);
+    }
+    edge = gu16(vm, 0x6E);
+    held = gu16(vm, 0x6C);
+    if (edge & 0x0080u) {
+        flags = (uint16_t)(flags ^ 0x8000u);
+    }
+    if (flags & 0x0800u) {
+        if (edge & 0x1000u) {
+            flags = (uint16_t)(flags ^ 0x0100u);
+            vm->g[0xC4] = 1;
+        }
+        if (edge & 0x0800u) {
+            flags = (uint16_t)(flags ^ 0x2000u);
+        }
+        if (edge & 0x0100u) {
+            flags = (uint16_t)(flags ^ 0x1000u);
+        }
+        flags = (uint16_t)(flags & 0xBFFFu);
+        if (held & 0x2000u) {
+            flags = (uint16_t)(flags | 0x4000u);
+        }
+    }
+    sgu16(vm, 0x72, flags);
+    if (flags & 0x0800u) {
+        if (edge & 0x0400u) {
+            vm->g[0xCC] = 1;
+        }
+        if (edge & 0x0200u) {
+            uint8_t bl = (uint8_t)((vm->g[0xC0] + 1u) & 3u);
+
+            vm->g[0xC0] = bl;
+            vm->g[0xC1] = bl;
+        }
+    }
+}
+
+static void hud_line(RbVm *vm, int row, const char *text)
+{
+    vm_text_write(vm, 58, row, text, 8, 0xE1u);
+}
+
+/* 0x1717. Two-letter tags and the values the original prints down the
+ * right side. The port's glyphs are two columns wide, so the column
+ * is 58 instead of 72 and the lines still end on the screen. */
+static void debug_hud(RbVm *vm)
+{
+    char line[16];
+    int i;
+    unsigned alive = 0;
+    uint16_t mx;
+    uint16_t my;
+
+    if ((gu16(vm, 0x72) & 0x2000u) == 0) {
+        return;
+    }
+    snprintf(line, sizeof line, "Ic %05u", (unsigned)gu16(vm, 0x5C));
+    hud_line(vm, 0, line);
+    snprintf(line, sizeof line, "Id %05u", (unsigned)gu16(vm, 0x66));
+    hud_line(vm, 1, line);
+    snprintf(line, sizeof line, "Gd %05u", (unsigned)gu16(vm, 0x74));
+    hud_line(vm, 2, line);
+    snprintf(line, sizeof line, "Sp %05u", (unsigned)gu16(vm, 0x82));
+    hud_line(vm, 3, line);
+    snprintf(line, sizeof line, "Mp %05u", (unsigned)gu16(vm, 0x7C));
+    hud_line(vm, 4, line);
+    snprintf(line, sizeof line, "Zd %05u", (unsigned)gu16(vm, 0x68));
+    hud_line(vm, 5, line);
+    snprintf(line, sizeof line, "Ti %02X", (unsigned)vm->g[0xB9]);
+    hud_line(vm, 6, line);
+    mx = (uint16_t)((gu16(vm, 0x96) - 0x48u) & 0xFFF0u);
+    snprintf(line, sizeof line, "Mx %04X", (unsigned)mx);
+    hud_line(vm, 8, line);
+    my = (uint16_t)((gu16(vm, 0x98) - 0x10u + gu16(vm, 0x7A)) >> 4);
+    snprintf(line, sizeof line, "My %04X", (unsigned)my);
+    hud_line(vm, 9, line);
+    snprintf(line, sizeof line, "Fl %05u", (unsigned)vm->g[0xE0]);
+    hud_line(vm, 10, line);
+    for (i = 0; i < ENT_N; i++) {
+        if (eu16(vm, i, 0) != 0) {
+            alive++;
+        }
+    }
+    snprintf(line, sizeof line, "Ac %05u", alive);
+    hud_line(vm, 13, line);
+    snprintf(line, sizeof line, "Ec %05u", (unsigned)gu16(vm, 0xAE));
+    hud_line(vm, 14, line);
+    snprintf(line, sizeof line, "Ew %05u", (unsigned)gu16(vm, 0xB0));
+    hud_line(vm, 15, line);
+    snprintf(line, sizeof line, "Cf %04X", (unsigned)gu16(vm, 0x72));
+    hud_line(vm, 17, line);
+    snprintf(line, sizeof line, "Ts %02X", (unsigned)vm->g[0xB9]);
+    hud_line(vm, 18, line);
+    snprintf(line, sizeof line, "Uc %05u", (unsigned)vm->g[0xDF]);
+    hud_line(vm, 19, line);
+    snprintf(line, sizeof line, "Hk %02X", (unsigned)vm->g[0xC2]);
+    hud_line(vm, 20, line);
+    snprintf(line, sizeof line, "Hs %02X", (unsigned)vm->g[0xC3]);
+    hud_line(vm, 21, line);
+}
+
 /* 0x5EF5: OUT 0x64, then spin until the vsync counter [bp+0x5C] has
  * advanced by [bp+0x60]. That counter is also the RNG seed, so the port
- * does not bump it. The host timer in sys_wait_vblank sleeps the same
- * count. The stores below are what later script reads can observe. */
+ * does not bump it. The host timer sleeps N/2 * 3/92 s for that count.
+ * The stores below are what later script reads can observe. */
 static void hook_5ef5(RbVm *vm)
 {
     uint16_t old = gu16(vm, 0x5E);
@@ -3832,31 +4489,121 @@ static void hook_6c0b(RbVm *vm)
     vm->g[0xB8] = 0;
 }
 
+/* After the entity scan. C0 == 0 presents every iteration. C0 == N
+ * presents once, stores N in C1, then skips N iterations. Each
+ * iteration still waits, so the logic rate does not change. Bit
+ * 0x4000 skips that wait. The scroll copy 0xFB9 runs only on a
+ * present iteration. Opcode 0x4C already skips compose while C1 != 0. */
+static void frame_present_or_skip(RbVm *vm)
+{
+    uint8_t c0 = vm->g[0xC0];
+    uint8_t c1 = vm->g[0xC1];
+    int skip = 0;
+
+    if (c0 != 0) {
+        if (c1 != 0) {
+            skip = 1;
+            vm->g[0xC1] = (uint8_t)(c1 - 1u);
+        } else {
+            vm->g[0xC1] = c0;
+        }
+    }
+    vm->show_frame = skip ? 0 : 1;
+    if ((gu16(vm, 0x72) & 0x4000u) == 0) {
+        hook_5ef5(vm);
+    }
+    if (!skip) {
+        sgu16(vm, 0x84, gu16(vm, 0x82));
+    }
+    hook_6c0b(vm);
+}
+
+/* 0xBD9 copies ten text cells at column 10, row 23, then blinks PAUSE
+ * there. Even frames use attribute 0x81, odd frames 0xC1. */
+static void pause_save_cells(RbVm *vm)
+{
+    if (vm->pause_saved) {
+        return;
+    }
+    memcpy(vm->pause_cells, vm->text + 0xE74u, 20);
+    memcpy(vm->pause_attr, vm->text + 0x2000u + 0xE74u, 20);
+    vm->pause_saved = 1;
+}
+
+static void pause_restore_cells(RbVm *vm)
+{
+    if (!vm->pause_saved) {
+        return;
+    }
+    memcpy(vm->text + 0xE74u, vm->pause_cells, 20);
+    memcpy(vm->text + 0x2000u + 0xE74u, vm->pause_attr, 20);
+    vm->pause_saved = 0;
+}
+
+static void pause_draw(RbVm *vm)
+{
+    static const uint8_t glyphs[5] = {0x3Fu, 0x30u, 0x44u, 0x42u, 0x34u};
+    uint16_t di = text_cursor(10, 23);
+    uint16_t attr;
+    int i;
+
+    vm->pause_blink = (uint16_t)(vm->pause_blink + 1u);
+    attr = (vm->pause_blink & 1u) ? 0x00C1u : 0x0081u;
+    for (i = 0; i < 5; i++) {
+        uint16_t ax = (uint16_t)(0x0056u | ((uint16_t)glyphs[i] << 8));
+
+        text_pair(vm, di, ax,
+                  (uint16_t)((ax & 0xFF00u) | 0x00D6u), attr);
+        di = (uint16_t)(di + 4u);
+    }
+}
+
 void vm_frame(RbVm *vm)
 {
     int i;
+    uint16_t flags;
 
     if (!vm) {
         return;
     }
-    /* 0x2FD0 stores AX=2 only when a script is entered. Handlers
-     * return to 0x2FD6, so AL stays in the CPU across opcodes and
-     * across frames. Opcode 0x3B uses that low 3 bits as the span
-     * shift, and 0x3C/0x3D leave the fill color there. Clearing AL
-     * here forced every later 0x3B to shift 0 and dropped the title
-     * overlays. run_entity sets 2 on the first entry only. */
+    /* 0xCE6 then 0xBD9. The chord runs only while already paused.
+     * Escape's edge toggles the pause bit before any entity runs. */
+    apply_debug_keys(vm);
+    flags = gu16(vm, 0x72);
+    if (flags & 0x8000u) {
+        pause_save_cells(vm);
+        vm->pause_hold = 1;
+        pause_draw(vm);
+        vm->show_frame = 1;
+        vm->prev_held = vm->held;
+        return;
+    }
+    if (vm->pause_hold) {
+        pause_restore_cells(vm);
+        vm->pause_hold = (vm->held & 0x0080u) != 0;
+        if (vm->pause_hold) {
+            vm->show_frame = 1;
+            vm->prev_held = vm->held;
+            return;
+        }
+    }
+    /* 0x1717, then the entity scan. 0x2FD0 stores AX=2 only when a
+     * script is entered. Handlers return to 0x2FD6, so AL stays in
+     * the CPU across opcodes and across frames. Opcode 0x3B uses
+     * that low 3 bits as the span shift, and 0x3C/0x3D leave the
+     * fill color there. Clearing AL here forced every later 0x3B to
+     * shift 0 and dropped the title overlays. run_entity sets 2 on
+     * the first entry only. */
+    debug_hud(vm);
     for (i = 0; i < ENT_N; i++) {
         run_entity(vm, i);
     }
-    /* Frame loop 0x09DB / 0x0A01 / 0x0A25. 0x5EF5 is the timer wait.
-     * 0x0FB9 then copies the scroll speed into [bp+0x84]. Map-locked
-     * enemies add that word to Y, so a stage that leaves it at the
-     * init zero never brings them on screen and never clears [bp+0xAE].
-     * The GDC register writes in the same routine are display-only.
+    /* Frame loop 0x0978 / 0x09CE. 0x5EF5 is the timer wait. 0x0FB9
+     * copies the scroll speed into [bp+0x84] on a present iteration.
+     * Map-locked enemies add that word to Y. The GDC register writes
+     * and the PIC mask in the same routine are display hardware.
      * 0x6C0B flushes the staged palette. */
-    hook_5ef5(vm);
-    sgu16(vm, 0x84, gu16(vm, 0x82));
-    hook_6c0b(vm);
+    frame_present_or_skip(vm);
     vm->prev_held = vm->held;
 }
 
@@ -3988,6 +4735,11 @@ unsigned vm_vsync_count(const RbVm *vm)
     }
     n = gu16(vm, 0x60);
     return n == 0u ? 1u : n;
+}
+
+int vm_frame_shown(const RbVm *vm)
+{
+    return vm && vm->show_frame;
 }
 
 void vm_ack_boot(RbVm *vm)

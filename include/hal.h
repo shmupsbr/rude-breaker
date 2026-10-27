@@ -75,15 +75,18 @@ static inline void write_u32_le(uint8_t *p, uint32_t v)
 
 #define RB_NATIVE_W     640
 #define RB_NATIVE_H     400
-/* One count of the loader's vsync wait ([bp+0x60], usually 3).
- * The capture's cruise background (4 px per logic frame) moves at
- * about 122 px/s, and a later 2 px section moves at about 60 px/s,
- * so a logic frame is about 30.7 Hz. Three counts at 92 Hz sleep
- * that long. 120 Hz per count was 40 logic Hz, about 1.3x ahead of
- * the capture. Not the host refresh rate, and not one PC-98 vertical
- * blank (56.42 Hz) per count: three of those would be ~19 Hz. */
+/* Logic period for menu wait count N ([bp+0x60]) is N/2 * 3/92 s.
+ * N = 2 is the capture lock: cruise scroll is 4 px per logic frame at
+ * about 122 px/s, so one logic frame is 3/92 s (about 30.7 Hz).
+ * Count 1 is about 61 Hz. Count 3 is about 20 Hz. Bit 0x4000 of the
+ * debug word skips that wait. 120 Hz per count was about 1.3x ahead
+ * of the capture. Not the host refresh, and not one PC-98 vertical
+ * blank (56.42 Hz): three of those would be about 19 Hz. */
 #define RB_WAIT_HZ      92
-#define RB_TARGET_FPS   RB_WAIT_HZ
+#define RB_TARGET_FPS   (RB_WAIT_HZ / 3)
+/* Repay at most this many logic frames after a hitch. Past the cap
+ * the clock drops the debt and the game slows instead of skipping. */
+#define RB_PACE_CATCH_MAX 4
 
 /* X68000 Phase-2 outer raster (640x400 centered in 640x480) */
 #define RB_X68K_OUTER_H 480
@@ -95,6 +98,14 @@ typedef struct RB_PACKED RbInput {
     uint16_t buttons;   /* bitfield: see RB_BTN_* */
     int16_t  axis_x;    /* -1, 0, +1 */
     int16_t  axis_y;    /* -1, 0, +1 */
+    /* 1 when a gamepad is attached. The menu ORs this into B9 bit 3
+     * before it will set the joystick flag. */
+    uint8_t  pad;
+    /* PC-98 key matrix copy at [bp+0xC2]. N E K O C, in that bit order. */
+    uint8_t  chord;
+    /* Gamepad buttons, same RB_BTN_* bits. Merged only while the
+     * joystick flag [bp+0x72] bit 0x400 is set. */
+    uint16_t pad_buttons;
 } RbInput;
 
 #define RB_BTN_UP       0x0001u
@@ -202,12 +213,37 @@ void sys_shutdown(void);
 /* stderr, plus a dialog when a real video driver is up. */
 void sys_message(const char *title, const char *text);
 
-/* Sleep `counts` PC-98 wait ticks (1/RB_WAIT_HZ each). A zero count still
- * waits one tick, which is the GDC edge that follows the counter. */
+/* Sleep `counts` of 1/RB_WAIT_HZ. Kept for the X68000 backend. The SDL
+ * loop paces with sys_pace_frame_start and does not call this. */
 void sys_wait_vblank(unsigned counts);
 /* Hold the last presented frame. The audio callback keeps running. */
 void sys_idle(unsigned ms);
 void sys_present(void);
+
+/* Detect the display and the timer, then lock the logic clock. */
+void sys_pace_startup(void);
+void sys_pace_shutdown(void);
+/* Sleep until at least one logic frame is due. Returns how many frames
+ * to run now, from 1 to RB_PACE_CATCH_MAX. RUDEBR_FAST returns 1 and
+ * does not sleep. */
+int sys_pace_frame_start(void);
+/* Next periods use wait count N as N/2 * 3/92 s. skip_wait is the
+ * debug bit 0x4000: one step, no sleep, and no catch-up afterwards. */
+void sys_pace_set_mode(unsigned count, int skip_wait);
+/* Forget lateness. Used after the two-second stage hold. */
+void sys_pace_resync(void);
+/* F8 toggles a timing overlay drawn on top of the game frame. */
+int sys_pace_overlay(void);
+void sys_pace_overlay_draw(void);
+int sys_pace_fast(void);
+/* Presents to make for the frame just rendered: refresh/30 in smooth
+ * mode on a verified-vsync 60/120/240 Hz display, otherwise 1. */
+int sys_pace_present_count(void);
+/* Player choice, saved to rudebreaker.ini beside the program.
+ * RUDEBR_PACING=smooth|exact overrides it. */
+int sys_pace_pref_exact(void);
+void sys_pace_set_pref_exact(int exact);
+const char *sys_pace_mode_name(void);
 
 void sys_clear(uint8_t r, uint8_t g, uint8_t b);
 /* Host RGBA8888 framebuffer, RB_NATIVE_W by RB_NATIVE_H, or NULL. */
@@ -217,6 +253,39 @@ void sys_draw_rect(const RbRect *rect, uint32_t rgba);
 void sys_draw_text(int16_t x, int16_t y, const char *utf8, uint32_t rgba);
 
 void sys_read_input(RbInput *out);
+
+/* One slot per action. DEFAULT keeps the built-in key and pad map.
+ * KEY is an SDL scancode. BUTTON is a controller or joystick button.
+ * AXIS uses a = axis index and b = -1 or +1. HAT uses a = hat index
+ * and b = the SDL hat mask. */
+#define RB_ACT_UP     0
+#define RB_ACT_DOWN   1
+#define RB_ACT_LEFT   2
+#define RB_ACT_RIGHT  3
+#define RB_ACT_FIRE   4
+#define RB_ACT_MODE   5
+#define RB_ACT_SHIFT  6
+#define RB_ACT_PAUSE  7
+#define RB_ACT_COUNT  8
+
+#define RB_BIND_DEFAULT 0
+#define RB_BIND_KEY     1
+#define RB_BIND_BUTTON  2
+#define RB_BIND_AXIS    3
+#define RB_BIND_HAT     4
+
+/* Arm capture. The next key, button, or axis edge is stored. Escape
+ * cancels. sys_bind_result returns 1, -1, or 0 and clears the result. */
+void sys_bind_begin(void);
+int  sys_bind_result(int *kind, int *a, int *b);
+void sys_bind_restore(void);
+int  sys_bind_set(int action, int kind, int a, int b);
+const char *sys_bind_label(int action);
+void sys_bind_write(void *file);
+int  sys_bind_read_line(const char *line);
+/* Empty string when no device is open. The first live device wins. */
+const char *sys_joy_name(void);
+int  sys_joy_present(void);
 
 int  sys_play_sound(uint16_t id, uint8_t vol);
 int  sys_play_music(uint16_t track_id);
@@ -232,6 +301,14 @@ int  sys_audio_bind_mem(const uint8_t *com, size_t com_n,
 void sys_set_rhythm_override(const char *path);
 /* Opcode 0x46, INT 7Fh AH=4. speed is the fade step the driver stores. */
 void sys_fade_music(uint8_t speed);
+/* 0..10 from the samples last handed to the audio device. */
+int  sys_audio_level(void);
+/* Sound Test spectrum: up to 16 bands, 0..1, loudest since the last
+ * call. Returns how many were written (0 when there is no audio). */
+int  sys_audio_bands(float *out, int n);
+
+/* Freeze the output clock. Play and stop clear it. */
+void sys_audio_pause(int on);
 
 /* Milliseconds since sys_init (debug / Phase 1 only; core must not rely). */
 uint32_t sys_ticks_ms(void);

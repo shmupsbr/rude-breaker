@@ -28,13 +28,23 @@ void gfx_fill(RbGfx *gfx, uint16_t di, uint16_t nbytes, uint16_t rows, uint8_t c
 void gfx_copy_row(RbGfx *gfx, uint16_t screen_row, uint16_t src_row);
 void gfx_compose(RbGfx *gfx);
 
+/* scroll_speed is [bp+0x82], the speed the next present copies into
+ * [bp+0x84]. blank_sides is the stage window (chunks 2..6). */
 void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
                        const uint8_t *const *chunk, const uint32_t *clen,
-                       const uint8_t *cof, int scroll76);
+                       const uint8_t *cof, int scroll76, int scroll_speed,
+                       int blank_sides);
 
 void gfx_palette_abs(RbGfx *gfx, const uint8_t *p, uint32_t n);
 void gfx_palette_delta(RbGfx *gfx, const uint8_t *p, uint32_t n);
 void gfx_palette_step(RbGfx *gfx, uint8_t shift);
+/* 4-bit DAC sample expanded the way present does (level * 17).
+ * Channel 0 is red, 1 green, 2 blue. This is the original PC-98
+ * color, before the optional modern grade. */
+void gfx_palette_rgb(const RbGfx *gfx, uint8_t rgb[16][3]);
+/* 0 = original 4-bit lookup (level * 17). 1 = the measured modern
+ * grade, applied to the same 4-bit sample so a fade still tracks. */
+void gfx_set_grade(int modern);
 /* Loader 0x6C0B. The analog DAC reads the palette; it does not
  * store the sampled level back into the fade words. */
 void gfx_dac_flush(RbGfx *gfx);
@@ -60,9 +70,13 @@ void gfx_blit_span(RbGfx *gfx, const uint8_t *src, uint32_t slen,
                    uint8_t src_planes, uint8_t dst_planes, uint8_t shift);
 
 int  gfx_active(const RbGfx *gfx);
+/* Host CONFIG menu: darken the graphics inside x0..x1, y0..y1 (pixels,
+ * end exclusive) before the text layer is painted, so the menu text
+ * does not sit on the title logo. on = 0 turns it off. */
+void gfx_set_panel(int on, int x0, int y0, int x1, int y1);
 /* blank_sides forces the 80 px columns black. The stage playfield does
  * that; the logo, title, and menus are drawn across the full 640. */
-void gfx_present(const RbGfx *gfx, int scroll76, int scroll_speed,
+void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
                  const uint8_t *text, uint32_t *rgba, int w, int h,
                  int blank_sides);
 

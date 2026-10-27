@@ -169,6 +169,42 @@ uint32_t sys_ticks_ms(void)
     return (uint32_t)_iocs_timeadrs() * 10u;
 }
 
+void sys_pace_startup(void)
+{
+}
+
+void sys_pace_shutdown(void)
+{
+}
+
+void sys_pace_set_mode(unsigned count, int skip_wait) { (void)count; (void)skip_wait; }
+
+int sys_pace_frame_start(void)
+{
+    /* Two vertical blanks stand in for the locked 3/92 s period until
+     * this backend is timed on real silicon. */
+    sys_wait_vblank(2);
+    return 1;
+}
+
+void sys_pace_resync(void)
+{
+}
+
+int sys_pace_overlay(void)
+{
+    return 0;
+}
+
+void sys_pace_overlay_draw(void)
+{
+}
+
+int sys_pace_fast(void)
+{
+    return 0;
+}
+
 #else /* !RB_PLATFORM_X68K */
 
 /* Silence empty translation unit when accidentally listed in SDL builds. */

@@ -59,6 +59,10 @@ static FILE *note_log;
  * immediately. Spacing between stages is a hold of the picture in the
  * host, not a fade in this player. */
 static int bgm_track = -1;
+/* Ticks of the player timer left to ignore other sound effects after
+ * the extend jingle 0x0C. 90 ticks is about 1.5 s at the 58.9 Hz timer.
+ * Music (AH=0) keeps running. */
+static int extend_guard;
 
 static void note_log_open(void)
 {
@@ -1549,6 +1553,9 @@ static void service_timer(void)
     if (isr_busy || !ready) {
         return;
     }
+    if (extend_guard > 0) {
+        extend_guard--;
+    }
     isr_busy = 1;
     enter_iret(0x1000);
     isr_busy = 0;
@@ -1626,6 +1633,40 @@ int fplay_bind_mem(const uint8_t *com, size_t com_n,
         copy = MEM_N - 0x4000u;
     }
     memcpy(mem + 0x4000, song, copy);
+    /* Effect 0x1D is the power-up sting (bytecode 43 1D ahead of the
+     * +100 / power-byte native). Its voice is slot 8, FM type 4, which
+     * is the same oscillator as the score tick 0x25 and the same work
+     * slot as the player shot 0x16. Those fire while the item is
+     * collected and replace the sting before it can sound. Point this
+     * one voice at slot 9 and FM type 3 so it overlaps the music. */
+    if (mem[0x75E6] == 0x01 && mem[0x75E7] == 0x07 && mem[0x75EE] == 0x04) {
+        mem[0x75E7] = 0x06;
+        mem[0x75EE] = 0x03;
+    }
+    /* 0x1C is the weapon / P-capsule collect. Channel 0x08 is slot 7,
+     * the score tick. Move the channel to 0x0E (slot 1) and keep
+     * SSG type 1. */
+    if (mem[0x75C9] == 0x01 && mem[0x75CA] == 0x08 && mem[0x75D1] == 0x01) {
+        mem[0x75CA] = 0x0E;
+    }
+    /* 0x26 and 0x28 are the point-object chirps. Both sit on a slot
+     * the score tick or the shot replaces. Keep the FM type so the
+     * timbre stays, and use the otherwise idle channels 0x0F and 0x0C. */
+    if (mem[0x7797] == 0x01 && mem[0x7798] == 0x08 && mem[0x779F] == 0x05) {
+        mem[0x7798] = 0x0F;
+    }
+    if (mem[0x77F3] == 0x01 && mem[0x77F4] == 0x07 && mem[0x77FB] == 0x05) {
+        mem[0x77F4] = 0x0C;
+    }
+    /* 0x0C is the extend jingle: six voices on slots 4..9. The score
+     * tick and the shot delete the slot 7 and slot 8 voices. Park
+     * those two on idle channels and keep their types. */
+    if (mem[0x71C4] == 0x06 && mem[0x71E9] == 0x08 && mem[0x71F0] == 0x03 &&
+        mem[0x71F5] == 0x07 && mem[0x71FC] == 0x04) {
+        mem[0x71E9] = 0x0C;
+        mem[0x71F5] = 0x0D;
+    }
+    extend_guard = 0;
     flags = IF | 2u;
     r[R_SP] = 0xFFFE;
     ip = 0;
@@ -1692,6 +1733,13 @@ void fplay_command(uint8_t ah, uint8_t al)
     }
     if (ah == 3) {
         bgm_track = -1;
+    }
+    if (ah == 1) {
+        if (al == 0x0C) {
+            extend_guard = 90;
+        } else if (extend_guard > 0) {
+            return;
+        }
     }
     run_player(ah, al);
 }

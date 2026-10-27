@@ -58,6 +58,16 @@ void sys_fade_music(uint8_t speed)
     (void)speed;
 }
 
+int sys_audio_level(void)
+{
+    return 0;
+}
+
+void sys_audio_pause(int on)
+{
+    (void)on;
+}
+
 #else
 
 typedef int rb_audio_x68k_placeholder;

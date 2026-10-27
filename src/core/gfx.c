@@ -11,6 +11,9 @@
 #define MAP_COLS 30
 #define MAP_ROWS 25
 #define MAP_N    (MAP_COLS * MAP_ROWS)
+/* A replaced 16-line row at intro speed 15 sits up to 29 lines before
+ * the GDC start address. Those lines are the bottom of the picture. */
+#define SCROLL_TAIL 32
 
 struct RbGfx {
     uint8_t *pix;
@@ -19,6 +22,10 @@ struct RbGfx {
      * which is what the PC-98 does by rebuilding the hidden page (GRCG
      * tile restore plus the 0xA4/0xA6 page flip) before the sprites. */
     uint8_t *bg;
+    /* Previous pixels of a scroll row that was just replaced. Present
+     * keeps them on the lines the second GDC partition still shows. */
+    uint8_t *hold;
+    uint8_t hold_on[MAP_ROWS];
     int paint_bg;
     uint16_t map[MAP_N];
     const uint8_t *bank[256];
@@ -39,9 +46,11 @@ RbGfx *gfx_create(void)
     }
     gfx->pix = (uint8_t *)calloc((size_t)RB_GFX_W * (size_t)RB_GFX_H, 1);
     gfx->bg = (uint8_t *)calloc((size_t)RB_GFX_W * (size_t)RB_GFX_H, 1);
-    if (!gfx->pix || !gfx->bg) {
+    gfx->hold = (uint8_t *)calloc((size_t)RB_GFX_W * (size_t)RB_GFX_H, 1);
+    if (!gfx->pix || !gfx->bg || !gfx->hold) {
         free(gfx->pix);
         free(gfx->bg);
+        free(gfx->hold);
         free(gfx);
         return NULL;
     }
@@ -56,6 +65,7 @@ void gfx_destroy(RbGfx *gfx)
     }
     free(gfx->pix);
     free(gfx->bg);
+    free(gfx->hold);
     free(gfx);
 }
 
@@ -66,6 +76,10 @@ void gfx_reset(RbGfx *gfx)
     }
     memset(gfx->pix, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
     memset(gfx->bg, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    if (gfx->hold) {
+        memset(gfx->hold, 0, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    }
+    memset(gfx->hold_on, 0, sizeof gfx->hold_on);
     gfx->paint_bg = 1;
     memset(gfx->map, 0, sizeof gfx->map);
     memset(gfx->bank, 0, sizeof gfx->bank);
@@ -201,6 +215,28 @@ void gfx_copy_row(RbGfx *gfx, uint16_t screen_row, uint16_t src_row)
     src = (uint32_t)src_row * 0x3Cu;
     if (src + 0x3Cu > gfx->blen[0x16]) {
         return;
+    }
+    /* 0x108E ORs the new cell into the slot selected by [bp+0x76].
+     * That slot is the one just before the scan start, so partition 2
+     * puts it at the bottom of the screen. The incoming cell belongs
+     * at the top once the start address reaches it. Until then the
+     * bottom has to keep scrolling the cell that was already there.
+     * The first fill of an empty ring has nothing to keep. */
+    if (gfx->hold) {
+        int live = 0;
+
+        for (col = 0; col < MAP_COLS; col++) {
+            if (gfx->map[(size_t)screen_row * MAP_COLS + (size_t)col] != 0) {
+                live = 1;
+                break;
+            }
+        }
+        if (live) {
+            size_t off = (size_t)screen_row * 16u * (size_t)RB_GFX_W;
+
+            memcpy(gfx->hold + off, gfx->bg + off, 16u * (size_t)RB_GFX_W);
+            gfx->hold_on[screen_row] = 1;
+        }
     }
     for (col = 0; col < MAP_COLS; col++) {
         uint16_t w = (uint16_t)map[src] | ((uint16_t)map[src + 1] << 8);
@@ -439,9 +475,139 @@ static void blit_sprite(RbGfx *gfx, const uint8_t *src, uint32_t len,
     }
 }
 
+static int wrap_line(int v)
+{
+    while (v < 0) {
+        v += RB_GFX_H;
+    }
+    while (v >= RB_GFX_H) {
+        v -= RB_GFX_H;
+    }
+    return v;
+}
+
+/* Entity sprites are 16x16 cells. The PC-98 blitter at 0x1132 drops a
+ * whole cell when its world row is outside 0..23 or its column is
+ * outside 4..34, so a large sprite steps onto the screen in bands.
+ * A cell it keeps is written in full at the GVRAM address 0x1132
+ * computes (world Y plus [bp+0x76], wrapped into the page); there is
+ * no per-line clip. Which lines the GDC then shows is decided by the
+ * SAD at present time, not here.
+ *
+ * pr9h: the stage path used to clip each line against a guessed
+ * screen line (world - speed + 1). By the time present runs, [bp+0x76]
+ * has already moved by the scroll speed, so on the fast stage 5 scroll
+ * (13..15 lines a frame) that guess was off by the whole speed. Lines
+ * of a boss rising from below the playfield were kept, landed on GVRAM
+ * lines the next SAD shows at the top, and painted over the HUD band.
+ * The cell rule below is the original's, and it never lets a cell
+ * outside rows 0..23 reach the page. The title (no scroll) keeps the
+ * per-line path it always had. */
+static void blit_sprite_smooth(RbGfx *gfx, const uint8_t *src, uint32_t len,
+                               int px, int shift, uint8_t attr, int world_y,
+                               int scroll76, int speed, int blank_sides)
+{
+    /* attr 2 is the one-frame hit flash. The score native stores 2 in
+     * the draw byte when HP changes, and the next call replaces it.
+     * The mono plane is painted with palette index 11. */
+    int mono = (attr == 2);
+    int bright = (attr & 1u) == 0u;
+    int wide = 16 + (shift ? 8 : 0);
+    int row;
+    uint32_t need = mono ? 32u : 128u;
+    int x0 = blank_sides ? 80 : 0;
+    int x1 = blank_sides ? 560 : RB_GFX_W;
+    int marked_low = 0;
+    int marked_high = 0;
+
+    if (!src || len < need) {
+        return;
+    }
+    if (shift < 0) {
+        shift = 0;
+    }
+    if (shift > 7) {
+        shift = 7;
+    }
+    for (row = 0; row < 16; row++) {
+        uint8_t mask[24];
+        uint8_t b[24];
+        uint8_t r[24];
+        uint8_t g[24];
+        int col;
+        int world = world_y + row;
+        int screen = blank_sides ? (world + 1) : world;
+        int gv;
+        int drew = 0;
+
+        /* pr9k: clip per line exactly at the visible window, Y signed,
+         * never wrapped. Entities are drawn with [bp+0x76] before the
+         * frame's scroll step; present then runs with 0x76 lowered by
+         * [bp+0x84] and SAD = 0x76 + 0x84 - 1, i.e. the draw-time 0x76
+         * minus 1 (measured: delta is -speed on every stage frame). So
+         * the line present shows is world + 1 for every sprite, whatever
+         * the speed. pr9g used world - speed + 1 (off by the speed: the
+         * boss wrapped and lines were cut at the bottom); pr9j added a
+         * world < 384 cut that also ate the bottom of the screen. A line
+         * at screen >= 400 would wrap into the top and is dropped. The
+         * HUD text is painted over the sprites in present. */
+        (void)speed;
+        if (screen < 0 || screen >= RB_GFX_H) {
+            continue;
+        }
+        gv = wrap_line(world + scroll76);
+        decode_plane(src + row * 2, shift, mask);
+        if (!mono) {
+            decode_plane(src + 32 + row * 2, shift, b);
+            decode_plane(src + 64 + row * 2, shift, r);
+            decode_plane(src + 96 + row * 2, shift, g);
+        }
+        for (col = 0; col < wide; col++) {
+            int sx = px + col;
+            uint8_t idx;
+
+            if (sx < x0 || sx >= x1 || !mask[col]) {
+                continue;
+            }
+            if (mono) {
+                idx = 11;
+            } else {
+                idx = 0;
+                if (b[col]) {
+                    idx |= 1u;
+                }
+                if (r[col]) {
+                    idx |= 2u;
+                }
+                if (g[col]) {
+                    idx |= 4u;
+                }
+                if (bright) {
+                    idx |= 8u;
+                }
+            }
+            put_idx(gfx, sx, gv, idx);
+            drew = 1;
+        }
+        if (!drew) {
+            continue;
+        }
+        if (gv >= 384) {
+            if (!marked_high) {
+                mark_dirty(gfx, px, gv, wide);
+                marked_high = 1;
+            }
+        } else if (!marked_low) {
+            mark_dirty(gfx, px, gv, wide);
+            marked_low = 1;
+        }
+    }
+}
+
 void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
                        const uint8_t *const *chunk, const uint32_t *clen,
-                       const uint8_t *cof, int scroll76)
+                       const uint8_t *cof, int scroll76, int scroll_speed,
+                       int blank_sides)
 {
     int i;
 
@@ -460,7 +626,6 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
         int16_t y;
         int wcells;
         int hcells;
-        int sy;
         uint16_t pat;
         uint16_t seg;
         uint8_t shift;
@@ -486,10 +651,6 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
         y = (int16_t)((uint16_t)slot[0x24] | ((uint16_t)slot[0x25] << 8));
         x = (int16_t)(x - (int16_t)(wcells << 3));
         y = (int16_t)(y - (int16_t)(hcells << 3));
-        sy = (int)y + scroll76;
-        if (sy >= 0x190) {
-            sy -= 0x190;
-        }
         pat = (uint16_t)slot[0x38] | ((uint16_t)slot[0x39] << 8);
         seg = (uint16_t)slot[0x3A] | ((uint16_t)slot[0x3B] << 8);
         shift = (uint8_t)((uint8_t)x & slot[0x4E]);
@@ -507,34 +668,27 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
             continue;
         }
         for (row = 0; row < hcells; row++) {
-            int ycell = (int)(y >> 4) + row;
-            int draw = (ycell >= 0 && ycell < 0x18);
             int col;
 
             for (col = 0; col < wcells; col++) {
-                int xcell = (int)(x >> 4) + col;
                 unsigned poff = (unsigned)pat + (unsigned)row * (unsigned)wcells +
                                 (unsigned)col;
                 uint8_t index;
                 uint32_t off;
                 int px;
-                int py;
 
                 if (poff >= slen) {
                     continue;
                 }
                 index = script[poff];
-                if (!draw || xcell < 4 || xcell >= 0x23) {
-                    continue;
-                }
                 off = pattern_off(index);
                 if (off >= gfx->blen[seg]) {
                     continue;
                 }
                 px = ((int)(x >> 3) + col * 2) * 8;
-                py = sy + row * 16;
-                blit_sprite(gfx, sheet + off, gfx->blen[seg] - off, px, py,
-                            (int)shift, attr);
+                blit_sprite_smooth(gfx, sheet + off, gfx->blen[seg] - off, px,
+                                   (int)shift, attr, (int)y + row * 16,
+                                   scroll76, scroll_speed, blank_sides);
             }
         }
     }
@@ -579,9 +733,19 @@ void gfx_palette_abs(RbGfx *gfx, const uint8_t *p, uint32_t n)
 void gfx_palette_delta(RbGfx *gfx, const uint8_t *p, uint32_t n)
 {
     const uint8_t *end;
+    int i;
+    int c0;
 
     if (!gfx || !p) {
         return;
+    }
+    /* 0x6CAB zeros the whole delta table before the stream. A later
+     * step keeps adding those words, so a partial stream must not
+     * leave the previous fade's deltas in the other colors. */
+    for (i = 0; i < 16; i++) {
+        for (c0 = 0; c0 < 3; c0++) {
+            gfx->dpal[i][c0] = 0;
+        }
     }
     end = p + n;
     for (;;) {
@@ -620,6 +784,156 @@ static int dac_level(int16_t w)
         return 15;
     }
     return (int)(((uint16_t)w & 0xFFu) >> 4);
+}
+
+/* Modern grade, one row per settled palette the stages actually hold.
+ * src is the 4-bit PC-98 level. A 0 modern channel with a 0 src channel
+ * is black; graded entries are marked in `use` (bit per index). Indexes
+ * that are not marked stay on level * 17. Fades scale the modern color
+ * by the current level over that settled level, per channel, so the
+ * picture still fades instead of popping. It is not one channel curve:
+ * stage 4 index 0 red level 3 becomes 32, and index 1 red level 3 stays 51. */
+#define GRADE_N 6
+static const uint8_t GRADE_SRC[GRADE_N][16][3] = {
+    { /* stage 1 */
+        {2,1,2},{9,4,3},{3,4,4},{4,5,6},{6,5,5},{8,7,7},{13,9,4},{11,11,10},
+        {9,4,4},{0,0,0},{8,7,10},{14,6,6},{15,12,7},{8,5,12},{12,12,15},{15,15,15}
+    },
+    { /* stage 2 */
+        {2,1,1},{12,10,5},{4,4,4},{7,5,5},{9,7,6},{11,9,9},{10,3,4},{12,11,11},
+        {9,4,4},{0,0,0},{8,7,10},{14,6,6},{15,12,7},{8,5,12},{12,12,15},{15,15,15}
+    },
+    { /* stage 3 */
+        {2,3,2},{11,8,2},{7,8,7},{10,10,8},{4,5,4},{3,4,5},{5,5,6},{6,7,8},
+        {9,4,4},{0,0,0},{8,7,10},{14,6,6},{15,12,7},{8,5,12},{12,12,15},{15,15,15}
+    },
+    { /* stage 4 */
+        {3,3,2},{3,4,3},{12,2,2},{4,5,4},{4,6,6},{6,8,7},{9,9,7},{10,10,9},
+        {9,4,4},{0,0,0},{8,7,10},{14,6,6},{15,12,7},{8,5,12},{12,12,15},{15,15,15}
+    },
+    { /* stage 5 */
+        {3,3,3},{3,4,5},{12,2,2},{5,5,6},{6,7,8},{9,10,9},{11,11,9},{12,12,11},
+        {9,4,4},{0,0,0},{8,7,10},{14,6,6},{15,12,7},{8,5,12},{12,12,15},{15,15,15}
+    },
+    { /* stage 5 boss */
+        {3,3,3},{11,6,3},{12,2,2},{11,8,5},{12,11,10},{9,10,9},{11,11,9},{12,12,11},
+        {9,4,4},{0,0,0},{8,7,10},{14,6,6},{15,12,7},{8,5,12},{12,12,15},{15,15,15}
+    }
+};
+/* Bit i set: index i uses GRADE_DST instead of level * 17. */
+static const uint16_t GRADE_USE[GRADE_N] = {
+    (1u << 0) | (1u << 10) | (1u << 11),
+    (1u << 0) | (1u << 10) | (1u << 11),
+    (1u << 0) | (1u << 6) | (1u << 7) | (1u << 10) | (1u << 11),
+    (1u << 0) | (1u << 4) | (1u << 5) | (1u << 6) | (1u << 10) | (1u << 11),
+    (1u << 1) | (1u << 3) | (1u << 4) | (1u << 10) | (1u << 11),
+    (1u << 1) | (1u << 3) | (1u << 4) | (1u << 10) | (1u << 11)
+};
+static const uint8_t GRADE_DST[GRADE_N][16][3] = {
+    { {12,1,13},{0},{0},{0},{0},{0},{0},{0},{0},{0},{125,110,162},{231,92,88} },
+    { {11,1,1},{0},{0},{0},{0},{0},{0},{0},{0},{0},{125,110,162},{231,92,88} },
+    { {36,48,48},{0},{0},{0},{0},{0},{77,86,105},{86,104,124},{0},{0},{125,110,162},{231,92,88} },
+    { {32,48,32},{0},{0},{0},{53,86,88},{113,129,105},{160,161,125},{0},{0},{0},{125,110,162},{231,92,88} },
+    { {0},{31,49,69},{0},{69,69,87},{86,104,124},{0},{0},{0},{0},{0},{125,110,162},{231,92,88} },
+    { {0},{176,88,29},{0},{185,150,113},{198,179,160},{0},{0},{0},{0},{0},{125,110,162},{231,92,88} }
+};
+
+static int g_modern;
+
+void gfx_set_grade(int modern)
+{
+    g_modern = modern ? 1 : 0;
+}
+
+/* Which settled palette the current DAC levels are fading toward.
+ * -1 keeps every index on the original lookup (title, intro). */
+static int grade_scene(const RbGfx *gfx)
+{
+    int level[16][3];
+    int idx;
+    int ch;
+    int best = -1;
+    int best_dist = 0x7fffffff;
+    int scene;
+
+    if (!gfx) {
+        return -1;
+    }
+    for (idx = 0; idx < 16; idx++) {
+        for (ch = 0; ch < 3; ch++) {
+            level[idx][ch] = dac_level(gfx->pal[idx][ch]);
+        }
+    }
+    for (scene = 0; scene < GRADE_N; scene++) {
+        int dist = 0;
+        int ok = 1;
+
+        for (idx = 0; idx < 16 && ok; idx++) {
+            for (ch = 0; ch < 3; ch++) {
+                int src = GRADE_SRC[scene][idx][ch];
+                int cur = level[idx][ch];
+
+                if (cur > src) {
+                    ok = 0;
+                    break;
+                }
+                dist += src - cur;
+            }
+        }
+        if (ok && dist < best_dist) {
+            best_dist = dist;
+            best = scene;
+        }
+    }
+    return best;
+}
+
+static void expand_index(int scene, int idx, int r4, int g4, int b4,
+                         int *R, int *G, int *B)
+{
+    int ch;
+    int cur[3];
+    int out[3];
+
+    cur[0] = r4;
+    cur[1] = g4;
+    cur[2] = b4;
+    if (scene < 0 || idx < 0 || idx > 15 ||
+        (GRADE_USE[scene] & (1u << idx)) == 0) {
+        *R = r4 * 17;
+        *G = g4 * 17;
+        *B = b4 * 17;
+        return;
+    }
+    for (ch = 0; ch < 3; ch++) {
+        int src = GRADE_SRC[scene][idx][ch];
+
+        if (src <= 0 || cur[ch] >= src) {
+            out[ch] = GRADE_DST[scene][idx][ch];
+        } else {
+            out[ch] = (GRADE_DST[scene][idx][ch] * cur[ch]) / src;
+        }
+    }
+    *R = out[0];
+    *G = out[1];
+    *B = out[2];
+}
+
+void gfx_palette_rgb(const RbGfx *gfx, uint8_t rgb[16][3])
+{
+    int idx;
+    int ch;
+
+    if (!rgb) {
+        return;
+    }
+    for (idx = 0; idx < 16; idx++) {
+        for (ch = 0; ch < 3; ch++) {
+            int v = gfx ? dac_level(gfx->pal[idx][ch]) : 0;
+
+            rgb[idx][ch] = (uint8_t)(v * 17);
+        }
+    }
 }
 
 void gfx_palette_step(RbGfx *gfx, uint8_t shift)
@@ -1313,7 +1627,69 @@ static void overlay_text(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, 
     overlay_english(gfx, text, rgba, w);
 }
 
-void gfx_present(const RbGfx *gfx, int scroll76, int scroll_speed,
+static int sad_dist(int scroll, int src)
+{
+    int dist = scroll - src;
+
+    if (dist < 0) {
+        dist += RB_GFX_H;
+    }
+    return dist;
+}
+
+static int row_in_tail(int scroll, int row)
+{
+    int line;
+    int base = row * 16;
+
+    for (line = 0; line < 16; line++) {
+        int dist = sad_dist(scroll, base + line);
+
+        if (dist >= 1 && dist <= SCROLL_TAIL) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int g_panel_on;
+static int g_panel[4];
+
+void gfx_set_panel(int on, int x0, int y0, int x1, int y1)
+{
+    g_panel_on = on;
+    g_panel[0] = x0 < 0 ? 0 : x0;
+    g_panel[1] = y0 < 0 ? 0 : y0;
+    g_panel[2] = x1 > RB_GFX_W ? RB_GFX_W : x1;
+    g_panel[3] = y1 > RB_GFX_H ? RB_GFX_H : y1;
+}
+
+static void dim_panel(uint32_t *rgba, int w)
+{
+    int x;
+    int y;
+
+    if (!g_panel_on) {
+        return;
+    }
+    for (y = g_panel[1]; y < g_panel[3]; y++) {
+        for (x = g_panel[0]; x < g_panel[2]; x++) {
+            uint32_t p = rgba[(size_t)y * (size_t)w + (size_t)x];
+            uint32_t r = (p >> 24) & 0xFFu;
+            uint32_t g = (p >> 16) & 0xFFu;
+            uint32_t b = (p >> 8) & 0xFFu;
+
+            /* About 18 percent, with a slight blue so it is not flat. */
+            r = (r * 46u) >> 8;
+            g = (g * 46u) >> 8;
+            b = ((b * 46u) >> 8) + 6u;
+            rgba[(size_t)y * (size_t)w + (size_t)x] =
+                (r << 24) | (g << 16) | (b << 8) | 0xFFu;
+        }
+    }
+}
+
+void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
                  const uint8_t *text, uint32_t *rgba, int w, int h,
                  int blank_sides)
 {
@@ -1346,17 +1722,36 @@ void gfx_present(const RbGfx *gfx, int scroll76, int scroll_speed,
             scroll -= RB_GFX_H;
         }
     }
+    /* One scene for the whole frame. The grade scales each palette
+     * index from that scene's settled 4-bit color, so a fade still
+     * tracks the script. Original mode leaves scene at -1. */
+    {
+    int scene = g_modern ? grade_scene(gfx) : -1;
+
     for (y = 0; y < RB_GFX_H; y++) {
         int src = y + scroll;
         int x;
+        int tail = 0;
 
         if (src >= RB_GFX_H) {
             src -= RB_GFX_H;
+        }
+        /* Partition 2 continues from line 0, so a GVRAM line just
+         * before SAD is the bottom row. A held row still has the cell
+         * from before this slot was replaced. Sprite pixels differ
+         * from the background page and stay. */
+        if (blank_sides && gfx->hold && gfx->hold_on[src >> 4]) {
+            int dist = sad_dist(scroll, src);
+
+            if (dist >= 1 && dist <= SCROLL_TAIL) {
+                tail = 1;
+            }
         }
         for (x = 0; x < RB_GFX_W; x++) {
             uint8_t idx;
             int ch;
             uint32_t px = 0xFFu;
+            size_t at;
 
             /* Stage captures keep the 80 px side columns pure black.
              * GVRAM is 640 wide and index 0 is the stage color, so those
@@ -1367,15 +1762,39 @@ void gfx_present(const RbGfx *gfx, int scroll76, int scroll_speed,
                 rgba[(size_t)y * (size_t)w + (size_t)x] = 0x000000FFu;
                 continue;
             }
-            idx = gfx->pix[(size_t)src * RB_GFX_W + (size_t)x];
-            for (ch = 0; ch < 3; ch++) {
-                int v = dac_level(gfx->pal[idx][ch]);
-
-                px |= (uint32_t)(v * 17) << (8 + (2 - ch) * 8);
+            at = (size_t)src * RB_GFX_W + (size_t)x;
+            idx = gfx->pix[at];
+            if (tail && idx == gfx->bg[at]) {
+                idx = gfx->hold[at];
             }
-            /* pal[][0] is red, [1] green, [2] blue, matching ports AC/AA/AE. */
+            {
+                int lv[3];
+                int rgb[3];
+
+                for (ch = 0; ch < 3; ch++) {
+                    lv[ch] = dac_level(gfx->pal[idx][ch]);
+                }
+                /* pal[][0] is red, [1] green, [2] blue, matching ports AC/AA/AE.
+                 * The grade, when on, replaces level*17 after the DAC sample. */
+                expand_index(scene, (int)idx, lv[0], lv[1], lv[2],
+                             &rgb[0], &rgb[1], &rgb[2]);
+                px |= (uint32_t)rgb[0] << 24;
+                px |= (uint32_t)rgb[1] << 16;
+                px |= (uint32_t)rgb[2] << 8;
+            }
             rgba[(size_t)y * (size_t)w + (size_t)x] = px;
         }
     }
+    }
+    if (blank_sides) {
+        int row;
+
+        for (row = 0; row < MAP_ROWS; row++) {
+            if (gfx->hold_on[row] && !row_in_tail(scroll, row)) {
+                gfx->hold_on[row] = 0;
+            }
+        }
+    }
+    dim_panel(rgba, w);
     overlay_text(gfx, text, rgba, w);
 }
