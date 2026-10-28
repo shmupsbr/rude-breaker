@@ -2,6 +2,7 @@
 # Usage:
 #   make              # SDL2 host build
 #   make test-assets  # parse extracted SGM1 if present
+#   make linux        # Linux build: binary loads libSDL2-2.0.so.0 from its own folder first
 
 PLATFORM ?= sdl2
 BUILD    := build
@@ -42,6 +43,11 @@ ifeq ($(PLATFORM),sdl2)
   SDL2_LIBS   ?= $(shell pkg-config --libs sdl2)
   CFLAGS  += $(SDL2_CFLAGS) -DSDL_MAIN_HANDLED
   LDFLAGS += $(SDL2_LIBS)
+  # Linux: look for a bundled libSDL2-2.0.so.0 next to the binary first,
+  # and link the C++ runtime statically so only libc/libm are needed.
+  ifeq ($(LINUX_BUNDLE),1)
+    LDFLAGS += -Wl,-rpath,'$$ORIGIN' -static-libstdc++ -static-libgcc
+  endif
   # timeBeginPeriod. The .exe cross link is the Windows build.
   ifneq ($(EXE),)
     LDFLAGS += -lwinmm
@@ -58,9 +64,12 @@ SRCS := $(CORE_SRCS) $(HAL_SRCS)
 OBJS := $(SRCS:%.c=$(BUILD)/$(PLATFORM)/%.o) \
         $(YMFM_SRCS:%.cpp=$(BUILD)/$(PLATFORM)/%.o)
 
-.PHONY: all clean test-assets test-endian vm-check dirs
+.PHONY: all linux clean test-assets test-endian vm-check dirs
 
 all: dirs $(TARGET) test-endian
+
+linux:
+	$(MAKE) LINUX_BUNDLE=1 all
 
 dirs:
 	@mkdir -p $(BUILD)/$(PLATFORM)/src/core \
