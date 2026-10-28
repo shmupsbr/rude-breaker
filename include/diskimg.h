@@ -12,7 +12,7 @@ typedef struct RbDisk {
     int      ok;          /* SGM1.DAT, FPLAY.COM, and SONG.DAT were all read */
     int      saw_image;   /* a disk image or a zip of one was opened */
     char     label[1024]; /* path named in the missing-files dialog */
-    char     rhythm_dir[1024];
+    char     data_dir[1024];
     uint8_t *sgm1;
     size_t   sgm1_n;
     uint8_t *fplay;

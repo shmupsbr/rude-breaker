@@ -1,6 +1,5 @@
 /**
- * Directory of the running executable. Shared by asset lookup and the
- * optional YM2608 rhythm ROM search.
+ * Directory of the running executable, used by asset lookup.
  */
 #ifndef RUDEBREAKER_EXEPATH_H
 #define RUDEBREAKER_EXEPATH_H

@@ -295,10 +295,7 @@ int  sys_audio_bind(const char *dir);
 /* Same player, from buffers already read out of a directory or a disk image. */
 int  sys_audio_bind_mem(const uint8_t *com, size_t com_n,
                         const uint8_t *song, size_t song_n,
-                        const char *rhythm_dir);
-/* Optional path to ym2608_adpcm_rom.bin. NULL clears it. The file is
- * not shipped; a missing ROM leaves ADPCM-A silent. */
-void sys_set_rhythm_override(const char *path);
+                        const char *data_dir);
 /* Opcode 0x46, INT 7Fh AH=4. speed is the fade step the driver stores. */
 void sys_fade_music(uint8_t speed);
 /* 0..10 from the samples last handed to the audio device. */
