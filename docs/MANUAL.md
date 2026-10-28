@@ -1,7 +1,7 @@
 RUDE BREAKER - PC PORT - USER MANUAL
 ====================================
 
-Build pr9n tester build - 2026-10-25
+Build pr9o tester build - 2026-10-28
 
 
 1. WHAT THIS IS
@@ -13,14 +13,15 @@ Compile made for the NEC PC-98 (Disc Station, 1996).
 The port does not remake the game. It runs the original game scripts
 and logic from the original data files. Enemy patterns, scoring, boss
 HP and difficulty all come from the original code. Music is the
-original FPLAY driver playing on an emulated YM2608 (ymfm).
+original FPLAY driver playing on an emulated YM2203 (ymfm), the
+PC-98 FM sound chip the game was written for.
 
 The PC side handles the window, sound output, keyboard and gamepad,
 frame pacing, and a set of options in the CONFIG menu.
 
-IMPORTANT: the game data (SGM1.DAT, SONG.DAT, FPLAY.COM) and the
-Yamaha rhythm ROM are copyrighted. They are NOT part of the public
-port and must not be redistributed. This build includes them only
+IMPORTANT: the game data (SGM1.DAT, SONG.DAT, FPLAY.COM) is
+copyrighted. It is NOT part of the public port and must not be
+redistributed. This build includes it only
 because it is a private test build. Please do not share it.
 
 
@@ -37,7 +38,6 @@ Files in the folder:
   SGM1.DAT              Original stages, sprites and scripts. Required.
   SONG.DAT              Original music data. Required for music.
   FPLAY.COM             Original music driver. Required for music.
-  ym2608_adpcm_rom.bin  Yamaha rhythm ROM. Optional.
   LICENSE-ymfm.txt      License of the ymfm sound chip emulator.
   LICENSE-SDL2.txt      License of the SDL2 library.
   MANUAL.txt / .md      This manual.
@@ -254,7 +254,7 @@ When something looks, sounds or feels wrong, please send:
   5. The PACING setting (SMOOTH or EXACT) and the file pace.txt from
      the game folder (it is rewritten each time you quit, so copy it
      right after the problem).
-  6. The build name: pr9n.
+  6. The build name: pr9o.
 
 Send it to Filipe Gracioli / shmupsbr.
 
@@ -264,7 +264,7 @@ Send it to Filipe Gracioli / shmupsbr.
 
   Rude Breaker (c) Compile, 1996. Original game, graphics, music and
                program.
-  ymfm         YM2608 sound emulation by Aaron Giles, BSD 3-Clause
+  ymfm         YM2203 sound emulation by Aaron Giles, BSD 3-Clause
                license (see LICENSE-ymfm.txt).
   SDL2         Simple DirectMedia Layer, zlib license.
   PC port      Filipe Gracioli / shmupsbr.
