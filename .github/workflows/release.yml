@@ -84,11 +84,10 @@ jobs:
           generate_release_notes: true
           body: |
             Playable builds of the Rude Breaker port. The zip does not include
-            the game disk or the Yamaha YM2608 rhythm ROM.
+            the game disk.
 
             Copy SGM1.DAT, FPLAY.COM, and SONG.DAT from your own disk into the
             same folder as the program. RBRANK.DAT is optional. SGC.COM,
-            READJS.COM, and RUDEBR.BAT are not read. ym2608_adpcm_rom.bin
-            (8192 bytes, CRC32 23c9e0d8) is optional, beside the program.
+            READJS.COM, and RUDEBR.BAT are not read.
 
             Controls are in the README inside each zip.
