@@ -911,7 +911,7 @@ static int open_image_file(const char *path, RbDisk *d)
     rc = open_image_bytes(img, n, path, d);
     free(img);
     set_str(d->label, sizeof(d->label), path);
-    parent_dir(path, d->rhythm_dir, sizeof(d->rhythm_dir));
+    parent_dir(path, d->data_dir, sizeof(d->data_dir));
     return rc;
 }
 
@@ -946,7 +946,7 @@ static int open_loose_dir(const char *dir, RbDisk *d)
     take_loose(d, dir, "SONG.DAT", &d->song, &d->song_n);
     take_loose(d, dir, "RBRANK.DAT", &d->rank, &d->rank_n);
     set_str(d->label, sizeof(d->label), dir);
-    set_str(d->rhythm_dir, sizeof(d->rhythm_dir), dir);
+    set_str(d->data_dir, sizeof(d->data_dir), dir);
     d->ok = d->sgm1 && d->fplay && d->song;
     d->saw_image = 0;
     return d->ok ? 0 : -1;

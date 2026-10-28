@@ -66,21 +66,14 @@ static void choose_source(int argc, char **argv, char *out, size_t n)
 
     out[0] = 0;
     for (i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--ym2608-rom") == 0) {
-            if (i + 1 < argc) {
-                sys_set_rhythm_override(argv[++i]);
-            }
-            continue;
-        }
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             fprintf(stderr,
-                    "usage: rudebreaker [folder-or-disk-image] [--ym2608-rom file]\n"
+                    "usage: rudebreaker [folder-or-disk-image]\n"
                     "\n"
                     "Put SGM1.DAT, FPLAY.COM, and SONG.DAT next to this program,\n"
                     "or drop a PC-98 disk image there. Images: .hdm .fdi .d88\n"
-                    ".hdi .nhd, or a zip of one of those. RBRANK.DAT and\n"
-                    "ym2608_adpcm_rom.bin are optional. SGC.COM, READJS.COM,\n"
-                    "and RUDEBR.BAT are not read.\n");
+                    ".hdi .nhd, or a zip of one of those. RBRANK.DAT is\n"
+                    "optional. SGC.COM, READJS.COM, and RUDEBR.BAT are not read.\n");
             exit(0);
         }
         if (!cli) {

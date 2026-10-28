@@ -1178,8 +1178,7 @@ static void report_missing(const RbDisk *disk)
              "  FPLAY.COM    required   %s\n"
              "  SONG.DAT     required   %s\n"
              "  RBRANK.DAT   optional   %s\n\n"
-             "SGC.COM, READJS.COM, and RUDEBR.BAT are on the disk and are not read.\n"
-             "ym2608_adpcm_rom.bin is optional (8192 bytes, CRC32 23c9e0d8).\n",
+             "SGC.COM, READJS.COM, and RUDEBR.BAT are on the disk and are not read.\n",
              (disk && disk->saw_image) ? "Opened disk image" : "Folder",
              where,
              got(disk ? disk->sgm1 : NULL),
@@ -1316,7 +1315,7 @@ void game_init(RbGame *g, const RbDisk *disk)
     }
 
     if (sys_audio_bind_mem(disk->fplay, disk->fplay_n, disk->song, disk->song_n,
-                           disk->rhythm_dir) == 0 &&
+                           disk->data_dir) == 0 &&
         assets_load_mem(&g_assets, disk->sgm1, disk->sgm1_n,
                         disk->song, disk->song_n,
                         disk->rank, disk->rank_n) == 0) {
