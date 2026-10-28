@@ -5,9 +5,10 @@
  * COM's own segment. SONG.DAT is copied to 0x4000, the address AH=9 reads
  * it to, and near-called init at 0xBD0 counts the tracks. Play, stop, and
  * fade enter the real handler at 0x801 so it returns with IRET. The timer
- * IRQ is the ISR at 0x1000, run from the mixer at the YM2608 timer-A rate.
+ * IRQ is the ISR at 0x1000, run from the mixer at the OPN timer-A rate.
  *
- * OUT 0x188/0x18A (and the second pair 0x18C/0x18E) go to a YM2608.
+ * OUT 0x188/0x18A (and the second pair 0x18C/0x18E) go to the YM2203 emulation
+ * (only 0x188/0x18A reach the chip; FPLAY never uses the second pair).
  * IN 0x188 returns busy-bit clear; the driver's SFMADR spins while that
  * bit is set. The register file is mirrored so the timer period still
  * comes from 0x24/0x25.
@@ -45,7 +46,7 @@ static int unknown_op;
 static uint16_t unknown_ip;
 
 static uint8_t opn_reg[2][256];
-/* YM2608 prescale. Address writes 0x2D/0x2E/0x2F select 6, 3, or 2.
+/* OPN prescale. Address writes 0x2D/0x2E/0x2F select 6, 3, or 2.
  * The timer IRQ period is (1024-TA) * 24 * prescale clocks. */
 static int opn_prescale = 6;
 static uint8_t opn_latch[2];
@@ -92,7 +93,7 @@ static void note_log_write(int bank, uint8_t addr, uint8_t val)
         unsigned fnum;
         unsigned block;
 
-        /* YM2608 key field is 0,1,2 then 4,5,6. */
+        /* OPN key field is 0,1,2 then 4,5,6. */
         if (slot == 3 || slot > 6) {
             return;
         }
@@ -1323,7 +1324,7 @@ static int cpu_step(void)
 
         if (port == 0x188u || port == 0x18Cu) {
             opn_latch[port == 0x18Cu] = val;
-            /* Prescale is armed by the address write, same as ym2608. */
+            /* Prescale is armed by the address write, same as the chip. */
             if (port == 0x188u) {
                 if (val == 0x2Du) {
                     opn_prescale = 6;
@@ -1530,8 +1531,8 @@ static int timer_samples(void)
     if (prescale < 2u) {
         prescale = 6u;
     }
-    /* 44100 * 24 * prescale * (1024-TA) / 7987200.
-     * ymfm's OPNA timer is (1024-TA) operator clocks, and each operator
+    /* 44100 * 24 * prescale * (1024-TA) / 7987200 (= 72 * prescale/6 per count at 3993600 Hz).
+     * ymfm's OPN timer is (1024-TA) operator clocks, and each operator
      * clock is `prescale` master clocks. Prescale 6 is 144 master clocks
      * per count. FPLAY programs TA=82 and leaves the prescale at 6, so
      * the tick is 748 samples, about 58.9 Hz, from this audio callback. */
@@ -1606,7 +1607,7 @@ int fplay_ready(void)
 
 int fplay_bind_mem(const uint8_t *com, size_t com_n,
                    const uint8_t *song, size_t song_n,
-                   const char *rhythm_dir)
+                   const char *data_dir)
 {
     size_t copy;
 
@@ -1670,7 +1671,7 @@ int fplay_bind_mem(const uint8_t *com, size_t com_n,
     flags = IF | 2u;
     r[R_SP] = 0xFFFE;
     ip = 0;
-    opna_autoload_rhythm(rhythm_dir);
+    (void)data_dir;
     opna_reset();
     sample_pos = 0;
     bgm_track = -1;
