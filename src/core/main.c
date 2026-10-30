@@ -128,7 +128,7 @@ int main(int argc, char **argv)
         snprintf(disk.label, sizeof(disk.label), "%s", source);
     }
 
-    if (sys_init("Rude Breaker") != 0) {
+    if (sys_init("Rude Breaker 30th AE") != 0) {
         fprintf(stderr, "sys_init failed\n");
         disk_free(&disk);
         return 1;

@@ -885,6 +885,47 @@ static int grade_scene(const RbGfx *gfx)
             best = scene;
         }
     }
+    if (best >= 0) {
+        return best;
+    }
+    /* The Compile logo holds the stage 1 field colors (indexes 0-7)
+     * with its own shades in some ungraded shared indexes (13, 14).
+     * Those keep level * 17 either way, so match on the field colors
+     * and the graded indexes only. The logo then starts on the same
+     * grade the game uses instead of switching to it when the shared
+     * indexes are reloaded after the logo. */
+    for (scene = 0; scene < GRADE_N; scene++) {
+        int dist = 0;
+        int ok = 1;
+
+        /* Index 0 (the field color) must sit on the scene's own
+         * settled value, which keeps black screens such as the
+         * rising title on the original lookup. */
+        for (ch = 0; ch < 3; ch++) {
+            if (level[0][ch] != GRADE_SRC[scene][0][ch]) {
+                ok = 0;
+            }
+        }
+        for (idx = 0; idx < 16 && ok; idx++) {
+            if (idx >= 8 && !(GRADE_USE[scene] & (1u << idx))) {
+                continue;
+            }
+            for (ch = 0; ch < 3; ch++) {
+                int src = GRADE_SRC[scene][idx][ch];
+                int cur = level[idx][ch];
+
+                if (cur > src) {
+                    ok = 0;
+                    break;
+                }
+                dist += src - cur;
+            }
+        }
+        if (ok && dist < best_dist) {
+            best_dist = dist;
+            best = scene;
+        }
+    }
     return best;
 }
 
@@ -1582,15 +1623,714 @@ static void overlay_english(const RbGfx *gfx, const uint8_t *text,
     }
 }
 
-static void overlay_text(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, int w)
+
+/* Compact stage HUD (row 1). The original row has no room for a speed
+ * readout, so when the SCORE / HI labels are on that row it is redrawn
+ * with the same glyphs packed to their ink: icon, lives, SCORE and the
+ * score field on the left edge of the playfield, HI and the hiscore
+ * field on the right edge, and SPD centered in the gap between them.
+ * Level 0 leaves the row exactly as the original draws it. */
+static int g_hud_speed;
+
+void gfx_set_hud_speed(int level)
+{
+    g_hud_speed = level < 0 ? 0 : (level > 3 ? 3 : level);
+}
+
+#define HUD_ROW   1
+#define HUD_LEFT  80
+#define HUD_RIGHT 560
+#define HUD_GAP   1
+#define HUD_DIGIT 14
+
+static uint16_t hud_cell(const uint8_t *text, int col)
+{
+    unsigned off = (unsigned)HUD_ROW * 0xA0u + (unsigned)col * 2u;
+
+    return (uint16_t)(text[off] | (text[off + 1u] << 8));
+}
+
+static uint32_t hud_rgb(const uint8_t *text, int col)
+{
+    unsigned off = 0x2000u + (unsigned)HUD_ROW * 0xA0u + (unsigned)col * 2u;
+    int color = (text[off] >> 5) & 7;
+
+    return 0xFFu |
+           ((uint32_t)TEXT_RGB[color][0] << 24) |
+           ((uint32_t)TEXT_RGB[color][1] << 16) |
+           ((uint32_t)TEXT_RGB[color][2] << 8);
+}
+
+/* Glyph id behind a left-half gaiji cell, or -1 for a blank cell. */
+static int hud_glyph(const RbGfx *gfx, const uint8_t *text, int col)
+{
+    uint16_t c = hud_cell(text, col);
+    uint8_t b0 = (uint8_t)c;
+    uint8_t b1 = (uint8_t)(c >> 8);
+    unsigned low = (unsigned)(b0 & 0x7Fu) + 0x20u;
+
+    if (b1 == 0 || low != 0x76u || (b0 & 0x80u) || !gfx->glyph_on[b1]) {
+        return -1;
+    }
+    return b1;
+}
+
+static void hud_ink(const RbGfx *gfx, int id, int *x0, int *x1, int *y0, int *y1)
+{
+    int r;
+    int c;
+
+    *x0 = 16; *x1 = -1; *y0 = 16; *y1 = -1;
+    for (r = 0; r < 16; r++) {
+        unsigned line = ((unsigned)gfx->glyph[id][r * 2] << 8) |
+                        gfx->glyph[id][r * 2 + 1];
+
+        for (c = 0; c < 16; c++) {
+            if (line & (0x8000u >> c)) {
+                if (c < *x0) *x0 = c;
+                if (c > *x1) *x1 = c;
+                if (r < *y0) *y0 = r;
+                if (r > *y1) *y1 = r;
+            }
+        }
+    }
+}
+
+static int hud_width(const RbGfx *gfx, int id)
+{
+    int x0, x1, y0, y1;
+
+    hud_ink(gfx, id, &x0, &x1, &y0, &y1);
+    return x1 < x0 ? 0 : x1 - x0 + 1;
+}
+
+/* Paints glyph id with its first ink column at x. Returns ink width. */
+static int hud_put(const RbGfx *gfx, uint32_t *rgba, int w, int x, int id,
+                   uint32_t rgb)
+{
+    int x0, x1, y0, y1;
+
+    hud_ink(gfx, id, &x0, &x1, &y0, &y1);
+    if (x1 < x0) {
+        return 0;
+    }
+    paint_glyph_half(rgba, w, x - x0, HUD_ROW * 16, gfx->glyph[id], 0, rgb);
+    paint_glyph_half(rgba, w, x - x0 + 8, HUD_ROW * 16, gfx->glyph[id], 1, rgb);
+    return x1 - x0 + 1;
+}
+
+/* Packed run of label glyphs (cols first..last step 2). */
+static int hud_label_width(const RbGfx *gfx, const uint8_t *text, int first, int last)
+{
+    int col;
+    int n = 0;
+    int width = 0;
+
+    for (col = first; col <= last; col += 2) {
+        int id = hud_glyph(gfx, text, col);
+
+        if (id >= 0) {
+            width += (n ? HUD_GAP : 0) + hud_width(gfx, id);
+            n++;
+        }
+    }
+    return width;
+}
+
+static int hud_label(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, int w,
+                     int x, int first, int last)
+{
+    int col;
+    int n = 0;
+
+    for (col = first; col <= last; col += 2) {
+        int id = hud_glyph(gfx, text, col);
+
+        if (id >= 0) {
+            x += n ? HUD_GAP : 0;
+            x += hud_put(gfx, rgba, w, x, id, hud_rgb(text, col));
+            n++;
+        }
+    }
+    return x;
+}
+
+/* Eight digit cells, each centered in a fixed slot so the number does
+ * not jitter as it changes. */
+static int hud_digits(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, int w,
+                      int x, int first)
+{
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        int id = hud_glyph(gfx, text, first + i * 2);
+
+        if (id >= 0) {
+            int gw = hud_width(gfx, id);
+
+            hud_put(gfx, rgba, w, x + (HUD_DIGIT - 1 - gw + 1) / 2, id,
+                    hud_rgb(text, first + i * 2));
+        }
+        x += HUD_DIGIT;
+    }
+    return x - 1;
+}
+
+static int hud_present(const RbGfx *gfx, const uint8_t *text)
+{
+    return g_hud_speed > 0 &&
+           hud_cell(text, 18) == 0x4256u && hud_cell(text, 50) == 0x3756u &&
+           hud_cell(text, 52) == 0x3856u && gfx->glyph_on[0x21];
+}
+
+static void hud_row(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, int w)
+{
+    int x = HUD_LEFT;
+    int left_end;
+    int hi_x;
+    int spd_w;
+    int cx;
+    int i;
+    uint32_t green = hud_rgb(text, 18);
+    uint32_t yellow = hud_rgb(text, 28);
+    /* S, P, D in the gaiji alphabet (0x7630 + letter). */
+    static const int spd[3] = {0x42, 0x3F, 0x33};
+
+    /* Ship icon and lives. */
+    x = hud_label(gfx, text, rgba, w, x, 10, 10);
+    x += 4;
+    x = hud_label(gfx, text, rgba, w, x, 14, 14);
+    x += 9;
+    x = hud_label(gfx, text, rgba, w, x, 18, 26);
+    x += 5;
+    left_end = hud_digits(gfx, text, rgba, w, x, 28);
+
+    /* Right group: hiscore field flush with the playfield edge. */
+    hi_x = HUD_RIGHT - 8 * HUD_DIGIT + 1;
+    hud_digits(gfx, text, rgba, w, hi_x, 54);
+    hi_x -= 5 + hud_label_width(gfx, text, 50, 52);
+    hud_label(gfx, text, rgba, w, hi_x, 50, 52);
+
+    /* SPD plus LOW / MID / MAX, centered in the gap. */
+    {
+        static const char *const word[3] = {"LOW", "MID", "MAX"};
+        const char *wd = word[g_hud_speed - 1];
+        int j;
+
+        spd_w = 0;
+        for (i = 0; i < 3; i++) {
+            spd_w += hud_width(gfx, spd[i]) + (i ? HUD_GAP : 0);
+        }
+        spd_w += 5;
+        for (j = 0; wd[j]; j++) {
+            spd_w += hud_width(gfx, 0x30 + (wd[j] - 'A')) + (j ? HUD_GAP : 0);
+        }
+        cx = left_end + 1 + ((hi_x - 1) - left_end - spd_w) / 2;
+        for (i = 0; i < 3; i++) {
+            if (!gfx->glyph_on[spd[i]]) {
+                return;
+            }
+            cx += (i ? HUD_GAP : 0);
+            cx += hud_put(gfx, rgba, w, cx, spd[i], green);
+        }
+        cx += 5;
+        for (j = 0; wd[j]; j++) {
+            int id = 0x30 + (wd[j] - 'A');
+
+            if (!gfx->glyph_on[id]) {
+                return;
+            }
+            cx += (j ? HUD_GAP : 0);
+            cx += hud_put(gfx, rgba, w, cx, id, yellow);
+        }
+    }
+}
+
+
+static int g_panel_on;
+
+/* Gaiji alphabet: digits at 0x21, letters at 0x30. -1 for a space. */
+static int brand_id(char c)
+{
+    if (c >= '0' && c <= '9') {
+        return 0x21 + (c - '0');
+    }
+    if (c >= 'A' && c <= 'Z') {
+        return 0x30 + (c - 'A');
+    }
+    return -1;
+}
+
+/* Title branding. The (c) COMPILE 1996 line is part of the title art
+ * (logo screen and title screen, same place). It is found by sampling
+ * points that are ink on both screens and points that are always
+ * blank; checking only that ink matches ink and differs from blank
+ * keeps the test true through the palette fades. */
+static const int16_t BRAND_ON[][2] = {
+    {239, 290}, {333, 298}, {234, 289}, {283, 292}, {402, 289}, {270, 297},
+    {235, 296}, {317, 296}, {390, 299}, {408, 294}, {271, 291}, {307, 289},
+    {220, 297}, {305, 288}, {218, 295}, {400, 295}, {243, 299}, {235, 288},
+    {320, 300}, {428, 295}, {320, 292}, {405, 300}, {375, 291}, {407, 298}
+};
+static const int16_t BRAND_OFF[][2] = {
+    {297, 285}, {363, 296}, {200, 283}, {377, 282}, {403, 282}, {270, 282},
+    {439, 300}, {429, 290}, {284, 302}, {432, 282}, {414, 305}, {237, 291},
+    {414, 302}, {398, 304}, {387, 291}, {209, 298}, {359, 291}, {202, 291},
+    {347, 303}, {198, 295}, {371, 282}, {236, 302}, {279, 285}, {315, 288}
+};
+
+/* 12-row title credit font (3-dot stems, like the game's own letters). */
+typedef struct { char c; uint8_t w; uint16_t rows[12]; } BrandGlyph;
+static const BrandGlyph BRAND_FONT[] = {
+    {'C', 9, {0x1FE, 0x1FF, 0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x1FF, 0x1FE}},
+    {'O', 9, {0x0FE, 0x1FF, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1FF, 0x0FE}},
+    {'0', 9, {0x0FE, 0x1FF, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1FF, 0x0FE}},
+    {'M', 9, {0x1C7, 0x1EF, 0x1FF, 0x1D7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7}},
+    {'P', 9, {0x0FF, 0x1FF, 0x1C7, 0x1C7, 0x1C7, 0x1FF, 0x0FF, 0x007, 0x007, 0x007, 0x007, 0x007}},
+    {'I', 3, {0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x007}},
+    {'L', 9, {0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x007, 0x1FF, 0x1FF}},
+    {'E', 9, {0x1FF, 0x1FF, 0x007, 0x007, 0x007, 0x0FF, 0x0FF, 0x007, 0x007, 0x007, 0x1FF, 0x1FF}},
+    {'S', 9, {0x1FE, 0x1FF, 0x007, 0x007, 0x007, 0x0FF, 0x1FE, 0x1C0, 0x1C0, 0x1C0, 0x1FF, 0x0FF}},
+    {'H', 9, {0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1FF, 0x1FF, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7}},
+    {'U', 9, {0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1FF, 0x0FE}},
+    {'B', 9, {0x0FF, 0x1FF, 0x1C7, 0x1C7, 0x1C7, 0x0FF, 0x0FF, 0x1C7, 0x1C7, 0x1C7, 0x1FF, 0x0FF}},
+    {'R', 9, {0x0FF, 0x1FF, 0x1C7, 0x1C7, 0x1C7, 0x1FF, 0x0FF, 0x077, 0x0E7, 0x1C7, 0x1C7, 0x1C7}},
+    {'1', 6, {0x03C, 0x03E, 0x03F, 0x03C, 0x038, 0x038, 0x038, 0x038, 0x038, 0x038, 0x038, 0x038}},
+    {'2', 9, {0x0FF, 0x1FF, 0x1C0, 0x1C0, 0x1C0, 0x1FE, 0x0FF, 0x007, 0x007, 0x007, 0x1FF, 0x1FF}},
+    {'6', 9, {0x1FE, 0x1FF, 0x007, 0x007, 0x007, 0x0FF, 0x1FF, 0x1C7, 0x1C7, 0x1C7, 0x1FF, 0x0FE}},
+    {'9', 9, {0x0FE, 0x1FF, 0x1C7, 0x1C7, 0x1C7, 0x1FF, 0x1FE, 0x1C0, 0x1C0, 0x1C0, 0x1FF, 0x0FF}},
+    {'3', 9, {0x0FF, 0x1FF, 0x1C0, 0x1C0, 0x1C0, 0x1FE, 0x1FE, 0x1C0, 0x1C0, 0x1C0, 0x1FF, 0x0FF}},
+    {'T', 9, {0x1FF, 0x1FF, 0x038, 0x038, 0x038, 0x038, 0x038, 0x038, 0x038, 0x038, 0x038, 0x038}},
+    {'A', 9, {0x0FE, 0x1FF, 0x1C7, 0x1C7, 0x1C7, 0x1FF, 0x1FF, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7}},
+    {'D', 9, {0x0FF, 0x1FF, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1FF, 0x0FF}},
+    {'K', 9, {0x1C7, 0x0E7, 0x077, 0x03F, 0x01F, 0x00F, 0x00F, 0x01F, 0x03F, 0x077, 0x0E7, 0x1C7}},
+    {'N', 9, {0x1C7, 0x1CF, 0x1DF, 0x1FF, 0x1FF, 0x1F7, 0x1E7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7}},
+    {'V', 9, {0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x0EE, 0x0EE, 0x07C, 0x07C, 0x038}},
+    {'Y', 9, {0x1C7, 0x1C7, 0x1C7, 0x1C7, 0x1FF, 0x0FE, 0x038, 0x038, 0x038, 0x038, 0x038, 0x038}},
+    {'@', 11, {0x0F8, 0x1FC, 0x306, 0x673, 0x61B, 0x61B, 0x61B, 0x61B, 0x673, 0x306, 0x1FC, 0x0F8}},
+};
+
+static const BrandGlyph *brand_glyph(char c)
+{
+    size_t i;
+
+    for (i = 0; i < sizeof BRAND_FONT / sizeof BRAND_FONT[0]; i++) {
+        if (BRAND_FONT[i].c == c) {
+            return &BRAND_FONT[i];
+        }
+    }
+    return NULL;
+}
+
+/* Width of a credit line: 2 dots between letters, 7 for a space. */
+static int credit_width(const char *s)
+{
+    int n = 0;
+    int first = 1;
+
+    for (; *s; s++) {
+        const BrandGlyph *g = brand_glyph(*s);
+
+        if (!g) {
+            n += 7;
+            first = 1;
+            continue;
+        }
+        n += (first ? 0 : 2) + g->w;
+        first = 0;
+    }
+    return n;
+}
+
+static void credit_text(uint32_t *rgba, int w, int x, int top,
+                        const char *s, uint32_t rgb)
+{
+    int first = 1;
+
+    for (; *s; s++) {
+        const BrandGlyph *g = brand_glyph(*s);
+        int r;
+        int c;
+
+        if (!g) {
+            x += 7;
+            first = 1;
+            continue;
+        }
+        x += first ? 0 : 2;
+        first = 0;
+        for (r = 0; r < 12; r++) {
+            if (top + r < 0 || top + r >= RB_GFX_H) {
+                continue;
+            }
+            for (c = 0; c < g->w; c++) {
+                if (g->rows[r] & (1u << c)) {
+                    rgba[(size_t)(top + r) * (size_t)w + (size_t)(x + c)] = rgb;
+                }
+            }
+        }
+        x += g->w;
+    }
+}
+
+/* Title layout, on an 8-dot baseline grid centred on x 320:
+ *   logo ink ends at y 222 (right end x 594)
+ *   30TH AE    credit font, 6 dots under the logo, level baseline
+ *   PUSH TRIGGER  baseline 264 (moved up 6 dots from the game's row)
+ *   (c) COMPILE 1996   baseline 288
+ *   (c) 2026 SHMUPSBR  baseline 304
+ * The art's own (c) COMPILE 1996 line is erased and redrawn in the
+ * smaller credit font so both credit lines match. */
+#define TITLE_PUSH_DY   (-6)
+#define TITLE_CREDIT1   277
+#define TITLE_CREDIT2   293
+#define TITLE_TAG_TOP   228
+#define RANK_CREDIT_TOP 386 /* ranking screen: free text row 24 */
+#define TITLE_TAG_RIGHT 586 /* 8 dots clear of the frame at x 595 */
+
+/* The art's credit line found dy rows away from its settled place.
+ * The title rises into view, so the art can sit anywhere on the page;
+ * points that fall off the page are skipped, and enough of the line
+ * must be visible for the test to count. */
+static int brand_at(const uint32_t *rgba, int w, int dy, uint32_t *ink_out)
+{
+    uint32_t ink = 0;
+    int have = 0;
+    int seen = 0;
+    size_t i;
+
+    for (i = 0; i < sizeof BRAND_ON / sizeof BRAND_ON[0]; i++) {
+        int y = BRAND_ON[i][1] + dy;
+        uint32_t p;
+
+        if (y < 0 || y >= RB_GFX_H) {
+            continue;
+        }
+        p = rgba[(size_t)y * (size_t)w + (size_t)BRAND_ON[i][0]];
+        if (!have) {
+            if ((p & 0xF0F0F000u) == 0) {
+                return 0;
+            }
+            ink = p;
+            have = 1;
+        } else if (p != ink) {
+            return 0;
+        }
+        seen++;
+    }
+    if (seen < 4) {
+        return 0;
+    }
+    for (i = 0; i < sizeof BRAND_OFF / sizeof BRAND_OFF[0]; i++) {
+        int y = BRAND_OFF[i][1] + dy;
+
+        if (y < 0 || y >= RB_GFX_H) {
+            continue;
+        }
+        if (rgba[(size_t)y * (size_t)w + (size_t)BRAND_OFF[i][0]] == ink) {
+            return 0;
+        }
+    }
+    *ink_out = ink;
+    return 1;
+}
+
+/* 1 when the text page holds anything besides row 16 (PUSH TRIGGER). */
+static int text_besides_push(const uint8_t *text)
 {
     int row;
     int col;
 
     if (!text) {
-        return;
+        return 0;
     }
     for (row = 0; row < 25; row++) {
+        if (row == 16) {
+            continue;
+        }
+        for (col = 0; col < 80; col++) {
+            unsigned off = (unsigned)row * 0xA0u + (unsigned)col * 2u;
+
+            if (!(text[off + 1] == 0 && (text[off] == 0 || text[off] == 0x20u))) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static void title_brand(const RbGfx *gfx, uint32_t *rgba, int w, int ranking)
+{
+    uint32_t ink = 0;
+    uint32_t blank = 0;
+    size_t i;
+    int x;
+    int y;
+    int dy;
+    int found = 0;
+    int width;
+    const char *line1 = "@ COMPILE 1996";
+    const char *line2 = "@ 2026 SHMUPSBR";
+    const char *tag = "30TH AE";
+
+    if (g_panel_on || w < RB_GFX_W) {
+        return;
+    }
+    for (i = 0; tag[i]; i++) {
+        if (brand_id(tag[i]) >= 0 && !gfx->glyph_on[brand_id(tag[i])]) {
+            return;
+        }
+    }
+    /* Settled place first, then the rows the rising title passes. */
+    if (brand_at(rgba, w, 0, &ink)) {
+        dy = 0;
+        found = 1;
+    } else {
+        for (dy = 1; dy < RB_GFX_H && !found; dy++) {
+            if (brand_at(rgba, w, dy, &ink)) {
+                found = 1;
+                break;
+            }
+            if (brand_at(rgba, w, -dy, &ink)) {
+                dy = -dy;
+                found = 1;
+                break;
+            }
+        }
+    }
+    if (!found) {
+        return;
+    }
+    for (i = 0; i < sizeof BRAND_OFF / sizeof BRAND_OFF[0]; i++) {
+        y = BRAND_OFF[i][1] + dy;
+        if (y >= 0 && y < RB_GFX_H) {
+            blank = rgba[(size_t)y * (size_t)w + (size_t)BRAND_OFF[i][0]];
+            break;
+        }
+    }
+    /* Erase the art's credit line. */
+    for (y = 285 + dy; y <= 302 + dy; y++) {
+        if (y < 0 || y >= RB_GFX_H) {
+            continue;
+        }
+        for (x = 200; x <= 440; x++) {
+            rgba[(size_t)y * (size_t)w + (size_t)x] = blank;
+        }
+    }
+    /* Lift PUSH TRIGGER (text row 16, ink y 256-270) onto the grid.
+     * Text is fixed on the page, so only the settled title has it. */
+    if (dy == 0) {
+        for (y = 254; y <= 272; y++) {
+            for (x = 216; x <= 424; x++) {
+                uint32_t *p = &rgba[(size_t)y * (size_t)w + (size_t)x];
+
+                if (*p != blank) {
+                    rgba[(size_t)(y + TITLE_PUSH_DY) * (size_t)w + (size_t)x] = *p;
+                    *p = blank;
+                }
+            }
+        }
+    }
+    if (ranking) {
+        /* The ranking table fills the odd text rows 1-23, so both
+         * credits share one line in the free row 24 (y 384-399), on a
+         * black band over the frame art. 30TH AE keeps its place in
+         * the free row 14, right of the NAME column. */
+        int w1 = credit_width(line1);
+        int w2 = credit_width(line2);
+        int gap = 16;
+        int total = w1 + gap + w2;
+        int x0 = 320 - total / 2;
+
+        for (y = RANK_CREDIT_TOP - 2; y < RB_GFX_H; y++) {
+            for (x = x0 - 8; x < x0 + total + 8; x++) {
+                rgba[(size_t)y * (size_t)w + (size_t)x] = 0x000000FFu;
+            }
+        }
+        credit_text(rgba, w, x0, RANK_CREDIT_TOP, line1, ink);
+        credit_text(rgba, w, x0 + w1 + gap, RANK_CREDIT_TOP, line2, ink);
+        width = credit_width(tag);
+        credit_text(rgba, w, TITLE_TAG_RIGHT - width + 1, TITLE_TAG_TOP, tag, ink);
+        return;
+    }
+    width = credit_width(line1);
+    credit_text(rgba, w, 320 - width / 2, TITLE_CREDIT1 + dy, line1, ink);
+    width = credit_width(line2);
+    credit_text(rgba, w, 320 - width / 2, TITLE_CREDIT2 + dy, line2, ink);
+    width = credit_width(tag);
+    credit_text(rgba, w, TITLE_TAG_RIGHT - width + 1, TITLE_TAG_TOP + dy, tag, ink);
+}
+
+/* Gaiji letters on a text row, as ASCII (left halves only; anything
+ * else reads as a space). */
+static void text_row_ascii(const uint8_t *text, int row, char *out)
+{
+    int col;
+
+    for (col = 0; col < 80; col++) {
+        unsigned off = (unsigned)row * 0xA0u + (unsigned)col * 2u;
+        uint8_t b0 = text[off];
+        uint8_t b1 = text[off + 1];
+        unsigned low = (unsigned)(b0 & 0x7Fu) + 0x20u;
+        char c = ' ';
+
+        if ((b0 & 0x80u) == 0 && (low == 0x76u || low == 0x77u) && b1 != 0) {
+            unsigned id = ((low << 8) | b1) - 0x7600u;
+
+            if (id >= 0x30u && id < 0x30u + 26u) {
+                c = (char)('A' + (id - 0x30u));
+            } else if (id >= 0x21u && id < 0x21u + 10u) {
+                c = (char)('0' + (id - 0x21u));
+            }
+        }
+        out[col] = c;
+    }
+    out[80] = 0;
+}
+
+/* Last ending card: PRESENTED BY / COMPILE 1996. Two more lines in
+ * the same font and color go under the poster, on the black below it. */
+static void ending_credit(const RbGfx *gfx, const uint8_t *text,
+                          uint32_t *rgba, int w)
+{
+    static const char *const add[2] = {
+        "30TH ANNIVERSARY EDITION", "BY SHMUPSBR 2026"
+    };
+    char line[81];
+    char above[81];
+    int row;
+    int k;
+
+    if (!text || w < RB_GFX_W) {
+        return;
+    }
+    for (row = 2; row < 19; row++) {
+        char *at;
+        unsigned off;
+        int color;
+        uint32_t rgb;
+
+        text_row_ascii(text, row, line);
+        at = strstr(line, "C O M P I L E");
+        if (!at) {
+            continue;
+        }
+        text_row_ascii(text, row - 2, above);
+        if (!strstr(above, "P R E S E N T E D")) {
+            continue;
+        }
+        off = (unsigned)row * 0xA0u + (unsigned)(at - line) * 2u;
+        color = (text[0x2000u + off] >> 5) & 7;
+        rgb = 0xFFu |
+              ((uint32_t)TEXT_RGB[color][0] << 24) |
+              ((uint32_t)TEXT_RGB[color][1] << 16) |
+              ((uint32_t)TEXT_RGB[color][2] << 8);
+        for (k = 0; k < 2; k++) {
+            const char *s = add[k];
+            int n = (int)strlen(s);
+            int x = 320 - n * 8;
+            int y = (row + 7 + k * 2) * 16;
+            int i;
+
+            for (i = 0; i < n; i++, x += 16) {
+                int id = brand_id(s[i]);
+
+                if (id < 0 || !gfx->glyph_on[id]) {
+                    continue;
+                }
+                paint_glyph_half(rgba, w, x, y, gfx->glyph[id], 0, rgb);
+                paint_glyph_half(rgba, w, x + 8, y, gfx->glyph[id], 1, rgb);
+            }
+        }
+        return;
+    }
+}
+
+/* Credit font text at an integer scale, centered on cx. */
+static void card_line(uint32_t *rgba, int w, int cx, int top, int scale,
+                      const char *s, uint32_t rgb)
+{
+    int x = cx - credit_width(s) * scale / 2;
+    int first = 1;
+
+    for (; *s; s++) {
+        const BrandGlyph *g = brand_glyph(*s);
+        int r;
+        int c;
+
+        if (!g) {
+            x += 7 * scale;
+            first = 1;
+            continue;
+        }
+        x += (first ? 0 : 2) * scale;
+        first = 0;
+        for (r = 0; r < 12 * scale; r++) {
+            int py = top + r;
+
+            if (py < 0 || py >= RB_GFX_H) {
+                continue;
+            }
+            for (c = 0; c < g->w * scale; c++) {
+                int px = x + c;
+
+                if (px >= 0 && px < w && (g->rows[r / scale] & (1u << (c / scale)))) {
+                    rgba[(size_t)py * (size_t)w + (size_t)px] = rgb;
+                }
+            }
+        }
+        x += g->w * scale;
+    }
+}
+
+static uint32_t card_rgb(int r, int g, int b, int level)
+{
+    return 0xFFu | ((uint32_t)(r * level / 16) << 24) |
+           ((uint32_t)(g * level / 16) << 16) | ((uint32_t)(b * level / 16) << 8);
+}
+
+/* 30th AE card shown before the Compile logo, centered where the logo
+ * explodes (y 186). level 0..16 fades it; colors are the logo red and
+ * the logo screen's pale blue under the Modern grade. */
+void gfx_intro_card(uint32_t *rgba, int w, int h, int level)
+{
+    int i;
+
+    if (!rgba || w < RB_GFX_W || h < RB_GFX_H) {
+        return;
+    }
+    for (i = 0; i < w * h; i++) {
+        rgba[i] = 0x000000FFu;
+    }
+    if (level <= 0) {
+        return;
+    }
+    if (level > 16) {
+        level = 16;
+    }
+    card_line(rgba, w, 320, 186 - 46, 2, "RUDE BREAKER",
+              card_rgb(231, 92, 88, level));
+    card_line(rgba, w, 320, 186 - 2, 1, "30TH ANNIVERSARY EDITION",
+              card_rgb(204, 204, 255, level));
+    card_line(rgba, w, 320, 186 + 22, 1, "BY SHMUPSBR 2026",
+              card_rgb(204, 204, 255, level));
+}
+
+static void overlay_text(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, int w)
+{
+    int row;
+    int col;
+    int hud;
+
+    if (!text) {
+        return;
+    }
+    hud = hud_present(gfx, text);
+    for (row = 0; row < 25; row++) {
+        if (hud && row == HUD_ROW) {
+            hud_row(gfx, text, rgba, w);
+            continue;
+        }
         for (col = 0; col < 80; col++) {
             unsigned off = (unsigned)row * 0xA0u + (unsigned)col * 2u;
             uint8_t b0;
@@ -1652,7 +2392,7 @@ static int row_in_tail(int scroll, int row)
     return 0;
 }
 
-static int g_panel_on;
+
 static int g_panel[4];
 
 void gfx_set_panel(int on, int x0, int y0, int x1, int y1)
@@ -1797,4 +2537,10 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
     }
     dim_panel(rgba, w);
     overlay_text(gfx, text, rgba, w);
+    /* The ranking table is text drawn over the same title art; it keeps
+     * the original look, so the 30th AE credits are left off there. */
+    if (!text_besides_push(text)) {
+        title_brand(gfx, rgba, w, 0);
+    }
+    ending_credit(gfx, text, rgba, w);
 }

@@ -29,10 +29,20 @@ static int          g_saw_move;
 static int          g_saw_clear;
 static int          g_saw_over;
 static int          g_data_missing;
-/* Host options. Default is the original palette and training off, so
- * the scripted checks keep the same picture and the same deaths. */
-static int          g_modern;
+/* Host options. Default is the modern palette, training off and rank
+ * on. */
+static int          g_modern = 1;
 static int          g_training;
+static int          g_rank_on = 1;
+/* 30th AE intro card before the Compile logo: about 3 s at the
+ * game's 30.67 Hz logic rate, 12-frame fades in and out. */
+#define CARD_FRAMES 92
+#define CARD_FADE   12
+static int          g_card;
+static int          g_card_hold;
+/* Old settings files predate the pr9p defaults (modern palette, ship
+ * select off). They are moved over once. */
+static int          g_cfg_v9p;
 static int          g_menu_latched;
 static uint16_t     g_menu_prev = 0xFFFFu;
 static int          g_suspend;
@@ -85,12 +95,15 @@ static void load_cfg(const RbGame *g)
     FILE *fp;
     char line[80];
 
-    g_modern = 0;
+    g_modern = 1;
     g_training = 0;
+    g_rank_on = 1;
+    g_cfg_v9p = 0;
     sys_bind_restore();
     cfg_path(g, path, sizeof path);
     fp = fopen(path, "r");
     if (!fp) {
+        g_cfg_v9p = -1;
         return;
     }
     while (fgets(line, sizeof line, fp)) {
@@ -102,11 +115,69 @@ static void load_cfg(const RbGame *g)
             g_training = 1;
         } else if (strncmp(line, "training=off", 12) == 0) {
             g_training = 0;
+        } else if (strncmp(line, "rank=on", 7) == 0) {
+            g_rank_on = 1;
+        } else if (strncmp(line, "rank=off", 8) == 0) {
+            g_rank_on = 0;
+        } else if (strncmp(line, "defaults=9q", 11) == 0) {
+            g_cfg_v9p = 1;
+        } else if (strncmp(line, "defaults=9p", 11) == 0) {
+            if (g_cfg_v9p != 1) {
+                g_cfg_v9p = 2;
+            }
         } else {
             sys_bind_read_line(line);
         }
     }
     fclose(fp);
+}
+
+/* ---- in-match state: speed button and rank ----------------------------
+ *
+ * While a match is on screen the host owns two values the menu also
+ * writes: the speed bits of [bp+0x72] (the speed button changes them)
+ * and the C9 copy enemy shots take at spawn (rank raises it; C9 itself
+ * stays on the chosen difficulty). The menu values are kept in
+ * g_live_menu_speed / g_live_c9 and are what RBRANK.DAT stores; live_park
+ * puts them back for the export and live_unpark restores the match. */
+static int      g_live;            /* 1 while the stage HUD is up */
+static int      g_live_parked;
+static int      g_live_menu_speed; /* 0 slow, 1 normal, 2 fast */
+static int      g_live_speed;
+static int      g_live_dir = 1;
+static uint8_t  g_live_c9;         /* the difficulty's own C9 */
+static uint8_t  g_live_c9_now;     /* rank-adjusted C9 for shot spawns */
+static uint16_t g_live_prev_btn;
+static uint32_t g_live_prev_score;
+static int      g_live_prev_lives;
+/* Rank, 8.8 fixed point, 0..RANK_MAX (Zanac's 0x9F scale). */
+#define RANK_MAX  (0x9Fu << 8)
+#define RANK_HALF (0x50u << 8)
+static uint32_t g_rank;
+
+static uint16_t flag_word(void);
+static void set_flag_word(uint16_t f);
+static int speed_index(void);
+static void set_speed(int i);
+
+static void live_park(void)
+{
+    if (!g_vm || !g_live || g_live_parked) {
+        return;
+    }
+    set_speed(g_live_menu_speed);
+    vm_set_global_u8(g_vm, 0xC9, g_live_c9);
+    g_live_parked = 1;
+}
+
+static void live_unpark(void)
+{
+    if (!g_vm || !g_live_parked) {
+        return;
+    }
+    set_speed(g_live_speed);
+    vm_set_global_u8(g_vm, 0xC9, g_live_c9);
+    g_live_parked = 0;
 }
 
 static uint8_t  g_rank_c9;
@@ -169,6 +240,7 @@ static void rank_flush(const RbGame *g)
     if (!g || !g_vm || g_training) {
         return;
     }
+    live_park();
     vm_rank_export(g_vm, fresh);
     rank_path(g, path, sizeof path);
     fp = fopen(path, "rb");
@@ -180,17 +252,20 @@ static void rank_flush(const RbGame *g)
         fclose(fp);
         if (n == sizeof old && memcmp(old, fresh, sizeof fresh) == 0) {
             rank_snapshot();
+            live_unpark();
             return;
         }
     }
     fp = fopen(path, "wb");
     if (!fp) {
+        live_unpark();
         return;
     }
     if (fwrite(fresh, 1, sizeof fresh, fp) == sizeof fresh) {
         rank_snapshot();
     }
     fclose(fp);
+    live_unpark();
 }
 
 static void rank_load(RbGame *g)
@@ -226,7 +301,14 @@ static void rank_sync(const RbGame *g)
     if (!g_vm || g_training) {
         return;
     }
-    if (commit || rank_header_changed()) {
+    if (commit) {
+        rank_flush(g);
+        return;
+    }
+    live_park();
+    commit = rank_header_changed();
+    live_unpark();
+    if (commit) {
         rank_flush(g);
     }
 }
@@ -241,9 +323,10 @@ static void save_cfg(const RbGame *g)
     if (!fp) {
         return;
     }
-    fprintf(fp, "palette=%s\ntraining=%s\n",
+    fprintf(fp, "palette=%s\ntraining=%s\nrank=%s\ndefaults=9q\n",
             g_modern ? "modern" : "original",
-            g_training ? "on" : "off");
+            g_training ? "on" : "off",
+            g_rank_on ? "on" : "off");
     sys_bind_write(fp);
     fclose(fp);
 }
@@ -466,9 +549,9 @@ static void joy_auto(void)
 static int page_count(void)
 {
     switch (g_page) {
-    case PAGE_GAME:  return 8;
+    case PAGE_GAME:  return 9;
     case PAGE_CTRL:  return 3;
-    case PAGE_KEYS:  return 10;
+    case PAGE_KEYS:  return 11;
     case PAGE_SOUND: return 7;
     default:         return 6;
     }
@@ -519,6 +602,10 @@ static void change_value(RbGame *g, int dir)
         } else if (g_cursor == 6) {
             /* Host only, saved to rudebreaker.ini, not RBRANK.DAT. */
             sys_pace_set_pref_exact(!sys_pace_pref_exact());
+            changed = 1;
+        } else if (g_cursor == 7) {
+            /* Host only, saved to the settings file. */
+            g_rank_on = !g_rank_on;
             changed = 1;
         }
     } else if (g_page == PAGE_CTRL && g_cursor == 0) {
@@ -586,7 +673,7 @@ static void activate_row(RbGame *g)
         menu_ok();
         return;
     }
-    if (g_page == PAGE_GAME && g_cursor == 7) {
+    if (g_page == PAGE_GAME && g_cursor == 8) {
         enter_page(PAGE_ROOT);
         menu_ok();
         return;
@@ -602,11 +689,11 @@ static void activate_row(RbGame *g)
         return;
     }
     if (g_page == PAGE_KEYS) {
-        if (g_cursor == 8) {
+        if (g_cursor == 9) {
             sys_bind_restore();
             save_cfg(g);
             menu_ok();
-        } else if (g_cursor == 9) {
+        } else if (g_cursor == 10) {
             enter_page(PAGE_CTRL);
             menu_ok();
         } else if (g_cursor >= 0 && g_cursor < RB_ACT_COUNT) {
@@ -827,9 +914,9 @@ static void paint_option_row(int col, int value_col, int row,
 static const char *speed_name(void)
 {
     switch (speed_index()) {
-    case 0:  return "SLOW";
-    case 2:  return "FAST";
-    default: return "NORMAL";
+    case 0:  return "LOW";
+    case 2:  return "MAX";
+    default: return "MID";
     }
 }
 
@@ -1006,9 +1093,9 @@ static void host_menu_paint(void)
     static const char *root_name[6] = {
         "GAMEPLAY", "CONTROLS", "SOUND TEST", "RANKING", "PASSWORD", "BACK"
     };
-    static const char *key_name[10] = {
+    static const char *key_name[11] = {
         "UP", "DOWN", "LEFT", "RIGHT", "FIRE", "MODE", "SHIFT", "PAUSE",
-        "RESTORE DEFAULTS", "BACK"
+        "SPEED", "RESTORE DEFAULTS", "BACK"
     };
 
     if (!menu_visible() || !g_vm) {
@@ -1051,7 +1138,9 @@ static void host_menu_paint(void)
         paint_line(6, menu_row(4, 6), "FRAME PACING",
                    sys_pace_pref_exact() ? "EXACT" : "SMOOTH",
                    sys_pace_pref_exact());
-        paint_line(7, menu_row(4, 7), "BACK", NULL, 0);
+        paint_line(7, menu_row(4, 7), "RANK", g_rank_on ? "ON" : "OFF",
+                   g_rank_on);
+        paint_line(8, menu_row(4, 8), "BACK", NULL, 0);
     } else if (g_page == PAGE_CTRL) {
         paint_line(0, menu_row(4, 0), "JOYSTICK", joy_value(), joy_flag());
         paint_line(1, menu_row(4, 1), "DEFINE KEYS", NULL, 0);
@@ -1065,16 +1154,16 @@ static void host_menu_paint(void)
                           0, 0xA1u);
         }
     } else if (g_page == PAGE_KEYS) {
-        for (i = 0; i < 8; i++) {
+        for (i = 0; i < RB_ACT_COUNT; i++) {
             const char *value = sys_bind_label(i);
 
             if (g_capture && g_cursor == i) {
                 value = "PRESS KEY OR PAD";
             }
-            paint_line(i, menu_row(3, i), key_name[i], value, 0);
+            paint_line(i, menu_row(2, i), key_name[i], value, 0);
         }
-        paint_line(8, menu_row(3, 8), key_name[8], NULL, 0);
-        paint_line(9, menu_row(3, 9), key_name[9], NULL, 0);
+        paint_line(9, menu_row(2, 9), key_name[9], NULL, 0);
+        paint_line(10, menu_row(2, 10), key_name[10], NULL, 0);
     } else if (g_page == PAGE_SOUND) {
         const char *state = "STOP";
 
@@ -1185,7 +1274,7 @@ static void report_missing(const RbDisk *disk)
              got(disk ? disk->fplay : NULL),
              got(disk ? disk->song : NULL),
              (disk && disk->rank) ? "found" : "absent");
-    sys_message("Rude Breaker — disk files needed", body);
+    sys_message("Rude Breaker 30th AE — disk files needed", body);
 }
 
 static void watch_smoke(RbGame *g)
@@ -1338,6 +1427,9 @@ void game_init(RbGame *g, const RbDisk *disk)
 
     vm_reset_boot(g_vm);
     rank_load(g);
+    if (getenv("RUDEBR_STAGE")) {
+        vm_reset_play(g_vm, (uint16_t)atoi(getenv("RUDEBR_STAGE")));
+    }
     {
         RbVmInfo info;
 
@@ -1345,7 +1437,24 @@ void game_init(RbGame *g, const RbDisk *disk)
         g->hiscore = info.hiscore;
     }
     load_cfg(g);
+    if (g_cfg_v9p != 1) {
+        /* One-time move to the pr9p defaults: modern palette and ship
+         * select OFF (weapons change in play through the capsules). */
+        if (g_cfg_v9p == 0) {
+            g_modern = 1;
+        }
+        if (g_cfg_v9p != 2) {
+            set_flag_word((uint16_t)(flag_word() | 0x0080u));
+        }
+        /* pr9p update: MOVE SPEED defaults to MID, once. */
+        set_speed(1);
+        save_cfg(g);
+        rank_flush(g);
+    }
     apply_host_options();
+    if (!getenv("RUDEBR_STAGE") && !env_on("RUDEBR_NOCARD")) {
+        g_card = CARD_FRAMES;
+    }
     g->state = RB_STATE_TITLE;
     if (env_on("RUDEBR_TRACE") || getenv("RUDEBR_STOP")) {
         fprintf(stderr, "smoke: title\n");
@@ -1461,6 +1570,9 @@ static uint16_t script_token(const char *s, size_t n)
     if (strcmp(buf, "B") == 0 || strcmp(buf, "X") == 0) {
         return RB_BTN_B;
     }
+    if (strcmp(buf, "SPEED") == 0) {
+        return RB_BTN_SPEED;
+    }
     if (strcmp(buf, "C") == 0) {
         return RB_BTN_C;
     }
@@ -1550,6 +1662,151 @@ static uint16_t script_buttons_env(const char *env, uint32_t frame)
     return bits;
 }
 
+/* Rank, after the Zanac port's ALC ("automatic level control"):
+ * one byte on a 0..0x9F scale that climbs while the player does well
+ * and is halved on a death. Zanac's difficulty rules carry over: the
+ * easy settings never pass half rank, the hard settings start at half
+ * rank, normal starts at zero with no cap. Rude Breaker's own
+ * difficulty writes byte C9, which every enemy shot copies when it
+ * spawns (op 0x08 into shot field 0x33). Rank adds up to RANK_SPAN on
+ * top of the chosen difficulty's C9, never past VERY HARD's 28, and
+ * only for that shot copy (vm_set_shot_c9). C9 itself always holds the
+ * chosen difficulty, since the bonus tables compare it with 4/7/10/28. */
+#define RANK_SPAN      7
+#define RANK_PER_FRAME 4u    /* +1 rank about every 64 frames alive */
+#define RANK_PER_SCORE 64u   /* +1/4 rank per frame the score moves */
+
+static int live_match(void)
+{
+    return vm_text_cell(g_vm, 18, 1) == 0x4256u &&
+           vm_text_cell(g_vm, 50, 1) == 0x3756u &&
+           vm_text_cell(g_vm, 52, 1) == 0x3856u;
+}
+
+static int live_diff(void)
+{
+    int i;
+
+    for (i = 0; i < 5; i++) {
+        if (k_c9[i] == g_live_c9) {
+            return i;
+        }
+    }
+    return 2;
+}
+
+static void live_reset_match(void)
+{
+    g_live_speed = g_live_menu_speed;
+    g_live_dir = g_live_menu_speed >= 2 ? -1 : 1;
+    g_rank = live_diff() >= 3 ? RANK_HALF : 0u;
+}
+
+static void live_update(RbGame *g)
+{
+    RbVmInfo info;
+    uint16_t flags;
+    uint16_t btn;
+    int lives;
+    int on;
+
+    if (!g_vm) {
+        return;
+    }
+    /* Smoke test: hold the debug ending flag (NEKOCO key 4). */
+    if (env_on("RUDEBR_ENDING")) {
+        vm_set_global_u8(g_vm, 0xCC, 1);
+    }
+    on = live_match() && !menu_visible();
+    vm_info(g_vm, &info);
+    lives = vm_global_u8(g_vm, 0xD2);
+    if (on && !g_live) {
+        g_live_menu_speed = speed_index();
+        g_live_c9 = vm_global_u8(g_vm, 0xC9);
+        g_live_c9_now = g_live_c9;
+        if (info.score == 0u) {
+            live_reset_match();
+        }
+        g_live = 1;
+        g_live_prev_score = info.score;
+        g_live_prev_lives = lives;
+        g_live_prev_btn = 0xFFFFu;
+    } else if (!on && g_live) {
+        set_speed(g_live_menu_speed);
+        vm_set_global_u8(g_vm, 0xC9, g_live_c9);
+        vm_set_shot_c9(g_vm, 0);
+        g_live = 0;
+    }
+    if (!g_live) {
+        gfx_set_hud_speed(0);
+        return;
+    }
+    flags = flag_word();
+    btn = g->input.buttons;
+    if (flags & 0x0400u) {
+        btn = (uint16_t)(btn | g->input.pad_buttons);
+    }
+    btn = (uint16_t)(btn & RB_BTN_SPEED);
+    if ((flags & 0x8000u) == 0u && btn && !(g_live_prev_btn & RB_BTN_SPEED)) {
+        /* LOW MID MAX MID LOW ... */
+        int next = g_live_speed + g_live_dir;
+
+        if (next > 2) {
+            g_live_dir = -1;
+            next = 1;
+        } else if (next < 0) {
+            g_live_dir = 1;
+            next = 1;
+        }
+        g_live_speed = next;
+    }
+    g_live_prev_btn = btn;
+    set_speed(g_live_speed);
+
+    if ((flags & 0x8000u) == 0u) {
+        uint32_t cap = live_diff() <= 1 ? RANK_HALF : RANK_MAX;
+
+        if (lives < g_live_prev_lives) {
+            g_rank >>= 1;
+        } else {
+            g_rank += RANK_PER_FRAME;
+            if (info.score != g_live_prev_score) {
+                g_rank += RANK_PER_SCORE;
+            }
+        }
+        if (g_rank > cap) {
+            g_rank = cap;
+        }
+        g_live_prev_score = info.score;
+        g_live_prev_lives = lives;
+    }
+    g_live_c9_now = g_live_c9;
+    if (g_rank_on && !g_training) {
+        unsigned add = (unsigned)((g_rank >> 8) * RANK_SPAN + 0x4Fu) / 0x9Fu;
+        unsigned c9 = g_live_c9 + add;
+
+        if (c9 > k_c9[4]) {
+            c9 = k_c9[4];
+        }
+        if (c9 < g_live_c9) {
+            c9 = g_live_c9;
+        }
+        g_live_c9_now = (uint8_t)c9;
+    }
+    /* C9 stays on the chosen difficulty; only shot spawns see rank. */
+    vm_set_global_u8(g_vm, 0xC9, g_live_c9);
+    vm_set_shot_c9(g_vm, g_live_c9_now != g_live_c9 ? g_live_c9_now : 0u);
+    gfx_set_hud_speed(g_live_speed + 1);
+    if (env_on("RUDEBR_RANKLOG") && (g->frame % 60u) == 0u) {
+        fprintf(stderr, "rank f=%u r=%u.%02u shot_c9=%u c9=%u hits=%u spd=%d lives=%d\n",
+                (unsigned)g->frame, (unsigned)(g_rank >> 8),
+                (unsigned)((g_rank & 0xFFu) * 100u / 256u),
+                (unsigned)g_live_c9_now, (unsigned)vm_global_u8(g_vm, 0xC9),
+                vm_shot_c9_hits(g_vm),
+                g_live_speed, lives);
+    }
+}
+
 void game_update(RbGame *g)
 {
     uint16_t user_buttons;
@@ -1572,7 +1829,23 @@ void game_update(RbGame *g)
         break;
 
     case RB_STATE_TITLE:
-        if (g_vm) {
+        if (g_vm && g_card > 0) {
+            /* 30th AE card; trigger or Start skips it. The VM waits
+             * until the button is let go, so the same press does not
+             * also skip the Compile logo. */
+            if (btn_pressed(g, RB_BTN_START) || btn_pressed(g, RB_BTN_A)) {
+                g_card = 0;
+                g_card_hold = 1;
+            } else {
+                g_card--;
+            }
+            g_show_frame = 1;
+        } else if (g_vm && g_card_hold) {
+            if (!(g->input.buttons & (RB_BTN_START | RB_BTN_A))) {
+                g_card_hold = 0;
+            }
+            g_show_frame = 1;
+        } else if (g_vm) {
             step_script(g);
         } else if (btn_pressed(g, RB_BTN_START) || btn_pressed(g, RB_BTN_A)) {
             g->score = 0;
@@ -1655,6 +1928,7 @@ void game_update(RbGame *g)
 
     g->input.buttons = user_buttons;
     host_menu_commit(g, swallowed);
+    live_update(g);
     rank_sync(g);
     if (g_vm) {
         if (vm_frame_shown(g_vm)) {
@@ -1697,6 +1971,20 @@ void game_render(const RbGame *g)
         if (g_vm) {
             uint32_t *frame = sys_frame_pixels();
 
+            if (frame && (g_card > 0 || g_card_hold)) {
+                int done = CARD_FRAMES - g_card;
+                int level = 16;
+
+                if (g_card_hold) {
+                    level = 0;
+                } else if (done < CARD_FADE) {
+                    level = done * 16 / CARD_FADE;
+                } else if (g_card < CARD_FADE) {
+                    level = g_card * 16 / CARD_FADE;
+                }
+                gfx_intro_card(frame, RB_NATIVE_W, RB_NATIVE_H, level);
+                break;
+            }
             if (frame) {
                 vm_present(g_vm, frame, RB_NATIVE_W, RB_NATIVE_H);
                 if (sound_page_visible()) {

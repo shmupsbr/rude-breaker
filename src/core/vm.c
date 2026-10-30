@@ -95,6 +95,10 @@ struct RbVm {
     /* Host training switch. Not part of the script state, so a stage
      * reset leaves it alone. */
     int training;
+    /* Host rank: value enemy shots copy in place of byte C9 at spawn.
+     * 0 = no rank, shots read C9 itself. */
+    uint8_t shot_c9;
+    unsigned shot_hits;
     /* Training medal blink, counts 0x4E draws. Host only. */
     unsigned medal_blink;
     /* Set when native 0x9213 registers a score. Training never sets it. */
@@ -883,7 +887,21 @@ static void one_subop(RbVm *vm, int script, int target, uint16_t *di)
         a = rd8(vm, script, *di);
         alu = rd8(vm, script, (uint16_t)(*di + 1u));
         b = rd8(vm, script, (uint16_t)(*di + 2u));
-        su8(vm, target, a, byte_alu(vm, alu, eu8(vm, target, a), vm->g[b]));
+        {
+            uint8_t gv = vm->g[b];
+
+            /* Shot spawn (08 33 00 C9): field 0x33 sets the bullet
+             * speed from the difficulty byte. Rank feeds this copy
+             * only; C9 itself keeps the chosen difficulty, so the
+             * bonus tables that compare C9 with 4/7/10/28 still match. */
+            if (b == 0xC9u && a == 0x33u && vm->shot_c9 != 0u) {
+                gv = vm->shot_c9;
+                if (getenv("RUDEBR_RANKLOG")) {
+                    vm->shot_hits++;
+                }
+            }
+            su8(vm, target, a, byte_alu(vm, alu, eu8(vm, target, a), gv));
+        }
         *di = (uint16_t)(*di + 3u);
         break;
     case 0x0A:
@@ -2072,6 +2090,19 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
                 } else if (regn == 1) { /* ROR */
                     cf = v & 1;
                     v = (uint16_t)(((v >> 1) | (cf ? sign : 0u)) & mask);
+                } else if (regn == 2) { /* RCL: rotate through carry */
+                    int out = (v & sign) != 0;
+
+                    v = (uint16_t)(((v << 1) | (cf ? 1u : 0u)) & mask);
+                    cf = out;
+                } else if (regn == 3) { /* RCR: rotate through carry */
+                    int out = v & 1;
+
+                    v = (uint16_t)(((v >> 1) | (cf ? sign : 0u)) & mask);
+                    cf = out;
+                } else if (regn == 6) { /* SAL, same as SHL */
+                    cf = (v & sign) != 0;
+                    v = (uint16_t)((v << 1) & mask);
                 }
             }
             zf = v == 0;
@@ -3898,6 +3929,9 @@ static void rank_default_records(uint8_t *dst)
 static void rank_default_file(uint8_t file[230])
 {
     memset(file, 0, 230);
+    /* Ship select OFF (bit 0x80): no weapon pick at the start, and the
+     * V / L / M capsules switch weapons during play. */
+    write_u16_le(file, 0x0080u);
     write_u16_le(file + 2, 2);
     write_u16_le(file + 4, 2);
     file[6] = 1;
@@ -4019,6 +4053,18 @@ int vm_training(const RbVm *vm)
     return vm && vm->training;
 }
 
+void vm_set_shot_c9(RbVm *vm, uint8_t v)
+{
+    if (vm) {
+        vm->shot_c9 = v;
+    }
+}
+
+unsigned vm_shot_c9_hits(const RbVm *vm)
+{
+    return vm ? vm->shot_hits : 0u;
+}
+
 void vm_set_grade(RbVm *vm, int modern)
 {
     (void)vm;
@@ -4101,6 +4147,28 @@ void vm_text_settle_row(RbVm *vm, int row)
             vm->text[0x2000u + off] = (col < 50) ? 0xE1u : 0xA1u;
         }
     }
+}
+
+uint16_t vm_text_cell(const RbVm *vm, int col, int row)
+{
+    unsigned off;
+
+    if (!vm || col < 0 || col >= 80 || row < 0 || row >= 25) {
+        return 0;
+    }
+    off = (unsigned)row * 0xA0u + (unsigned)col * 2u;
+    return (uint16_t)(vm->text[off] | (vm->text[off + 1u] << 8));
+}
+
+uint8_t vm_text_attr(const RbVm *vm, int col, int row)
+{
+    unsigned off;
+
+    if (!vm || col < 0 || col >= 80 || row < 0 || row >= 25) {
+        return 0;
+    }
+    off = 0x2000u + (unsigned)row * 0xA0u + (unsigned)col * 2u;
+    return vm->text[off];
 }
 
 int vm_text_has_jis(const RbVm *vm, uint16_t a, uint16_t b)
@@ -4355,6 +4423,16 @@ static void debug_chord(RbVm *vm)
  * which skips the vsync wait. Key 4 sets [bp+0xCC], the ending flag.
  * Edge bits 0x0100 and 0x0200 are in the routine and are never set by
  * the keyboard poll. */
+/* The stage HUD (SCORE and HI on text row 1) is up only while a match
+ * is being played. Title, attract, ranking and the config menu never
+ * draw it. */
+static int match_on_screen(const RbVm *vm)
+{
+    return vm_text_cell(vm, 18, 1) == 0x4256u &&
+           vm_text_cell(vm, 50, 1) == 0x3756u &&
+           vm_text_cell(vm, 52, 1) == 0x3856u;
+}
+
 static void apply_debug_keys(RbVm *vm)
 {
     uint16_t flags = gu16(vm, 0x72);
@@ -4367,7 +4445,9 @@ static void apply_debug_keys(RbVm *vm)
     }
     edge = gu16(vm, 0x6E);
     held = gu16(vm, 0x6C);
-    if (edge & 0x0080u) {
+    /* Escape pauses only during a match. Outside one it can still
+     * release a pause that is already on. */
+    if ((edge & 0x0080u) && ((flags & 0x8000u) || match_on_screen(vm))) {
         flags = (uint16_t)(flags ^ 0x8000u);
     }
     if (flags & 0x0800u) {
