@@ -123,6 +123,8 @@ typedef struct RB_PACKED RbInput {
 #define RB_BTN_2        0x0200u
 #define RB_BTN_3        0x0400u
 #define RB_BTN_4        0x0800u
+/* Host-only speed button (> >> >>>). The game script never sees it. */
+#define RB_BTN_SPEED    0x2000u
 
 /* ---- entities (shared layout for Phase 1 and Phase 2) ------------------- */
 
@@ -266,7 +268,8 @@ void sys_read_input(RbInput *out);
 #define RB_ACT_MODE   5
 #define RB_ACT_SHIFT  6
 #define RB_ACT_PAUSE  7
-#define RB_ACT_COUNT  8
+#define RB_ACT_SPEED  8
+#define RB_ACT_COUNT  9
 
 #define RB_BIND_DEFAULT 0
 #define RB_BIND_KEY     1

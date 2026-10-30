@@ -82,6 +82,9 @@ void vm_set_input(RbVm *vm, const RbInput *in);
  * ranking insert. The grade is the modern palette at present time.
  * Neither flag is cleared by a stage reset. */
 void vm_set_training(RbVm *vm, int on);
+/* Rank-adjusted C9 copied by enemy shot spawns only; 0 turns it off. */
+void vm_set_shot_c9(RbVm *vm, uint8_t v);
+unsigned vm_shot_c9_hits(const RbVm *vm);
 int  vm_training(const RbVm *vm);
 void vm_set_grade(RbVm *vm, int modern);
 void vm_set_global_u8(RbVm *vm, uint8_t field, uint8_t value);
@@ -96,6 +99,9 @@ void vm_text_write(RbVm *vm, int col, int row, const char *s, int width,
 /* Selected rows blink attribute 0x41. Put a row back to the resting
  * label and value colors when the cursor leaves it. */
 void vm_text_settle_row(RbVm *vm, int row);
+/* Raw text VRAM cell (code word) and attribute byte. */
+uint16_t vm_text_cell(const RbVm *vm, int col, int row);
+uint8_t vm_text_attr(const RbVm *vm, int col, int row);
 /* 1 when two JIS characters sit next to each other in the text layer. */
 int  vm_text_has_jis(const RbVm *vm, uint16_t a, uint16_t b);
 void vm_frame(RbVm *vm);

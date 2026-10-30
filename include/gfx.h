@@ -45,6 +45,8 @@ void gfx_palette_rgb(const RbGfx *gfx, uint8_t rgb[16][3]);
 /* 0 = original 4-bit lookup (level * 17). 1 = the measured modern
  * grade, applied to the same 4-bit sample so a fade still tracks. */
 void gfx_set_grade(int modern);
+/* Host intro card before the Compile logo; level 0..16 is the fade. */
+void gfx_intro_card(uint32_t *rgba, int w, int h, int level);
 /* Loader 0x6C0B. The analog DAC reads the palette; it does not
  * store the sampled level back into the fade words. */
 void gfx_dac_flush(RbGfx *gfx);
@@ -73,6 +75,8 @@ int  gfx_active(const RbGfx *gfx);
 /* Host CONFIG menu: darken the graphics inside x0..x1, y0..y1 (pixels,
  * end exclusive) before the text layer is painted, so the menu text
  * does not sit on the title logo. on = 0 turns it off. */
+/* Speed readout in the stage HUD: 0 off, 1..3 chevrons. */
+void gfx_set_hud_speed(int level);
 void gfx_set_panel(int on, int x0, int y0, int x1, int y1);
 /* blank_sides forces the 80 px columns black. The stage playfield does
  * that; the logo, title, and menus are drawn across the full 640. */
