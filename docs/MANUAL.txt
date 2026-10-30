@@ -231,6 +231,10 @@ GAMEPLAY
                    old data drops off the left as new data comes in.
                    It is cleared at the start of each stage (the rank
                    itself is not).
+                   With RANK OFF (or in Training) the graph box shows
+                   RANK SYSTEM / OFFLINE instead, with a slow CRT-style
+                   scanline rising through it every 15 seconds, and the
+                   rank number reads "/ 159  OFF".
                    Rank carries over from stage to stage; it starts
                    again only with a new game. The small "x1.05" next
                    to it is the current rank rise multiplier.
@@ -251,9 +255,11 @@ GAMEPLAY
                    bar. After a lost life part of the
                    stage plays again; the count never
                    goes past the total.
-                   MEDALS counts the medals taken this stage out of
-                   the hidden spots the stage has (8, 10, 7, 9 and 8
-                   in stages 1 to 5).
+                   MEDALS counts the hidden medals taken this stage
+                   out of the 10 that every stage hides (stages 1 to
+                   5). The count is the game's own medal counter: it
+                   goes up only when you pick up a revealed medal and
+                   starts again at 0 each stage.
                    1CC shows YES once you have reached the ending on
                    one credit (no continue, no Training, no stage
                    select, no invincibility or debug keys); this is
@@ -364,7 +370,9 @@ starting rank. Stepping up only changes what rank
 changes (enemy bullet speed and the rank limits): scoring, bonuses and
 everything else keep following the DIFFICULTY you chose, and the saved
 setting does not change. Not in Training. With RANK OFF the game plays
-exactly like the original.
+exactly like the original: no step-up, no bullet speed-up and no
++1000 bonus, and the side panel shows RANK SYSTEM / OFFLINE in the
+rank graph.
 
 The original debug cheat is still in the code. During the game, pause
 with Escape and type N E K O C O. Then:
