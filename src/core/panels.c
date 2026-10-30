@@ -644,6 +644,92 @@ static void up_arrow(uint32_t *o, int cx, int cy, Rgb c)
     }
 }
 
+/* ---- rank OFF card -------------------------------------------------- */
+
+/* Ink extent of a string: first and last lit column relative to x. */
+static void ink_span(int f, const char *s, int sp, int *l, int *r)
+{
+    int x = 0;
+    int lo = 1 << 30;
+    int hi = -(1 << 30);
+
+    for (; *s; s++) {
+        const PfGlyph *g = glyph(f, (unsigned char)*s);
+
+        if (*s != ' ' && g->w > 0) {
+            if (x + g->ox < lo) lo = x + g->ox;
+            if (x + g->ox + g->w > hi) hi = x + g->ox + g->w;
+        }
+        x += g->adv + (s[1] ? sp : 0);
+    }
+    *l = lo;
+    *r = hi;
+}
+
+/* Text with per-gap extra spacing: `extra` dots spread evenly over the
+ * gaps between letters so the line lands on an exact ink width. */
+static void text_spread(uint32_t *o, int x, int y, int f, const char *s, int extra, Rgb c)
+{
+    int n = (int)strlen(s) - 1;
+    int i;
+    char ch[2] = {0, 0};
+
+    for (i = 0; s[i]; i++) {
+        ch[0] = s[i];
+        text(o, x, y, f, ch, c);
+        x += glyph(f, (unsigned char)s[i])->adv;
+        if (n > 0 && s[i + 1]) {
+            x += extra * (i + 1) / n - extra * i / n;
+        }
+    }
+}
+
+static void draw_rank_offline(uint32_t *o, int gx, int gy, int gw, int gh, uint32_t fr)
+{
+    /* 15 s cycle at the 56.4 Hz logic rate; the band rises for ~3 s. */
+    enum { CYCLE = 846, SWEEP = 169, BAND = 28 };
+    const char *a = "RANK SYSTEM";
+    const char *b = "OFFLINE";
+    const int fa = F26;
+    int al, ar, bl, br, fb, extra, wa, gap, ha, hb, top, x0;
+    Rgb c = scale(C_DIM, 85, 100);
+    int ph = (int)(fr % CYCLE);
+    int k;
+
+    ink_span(fa, a, 0, &al, &ar);
+    wa = ar - al;
+    /* Largest font whose plain OFFLINE fits, then letter spacing. */
+    for (fb = F60; fb > F16; fb--) {
+        ink_span(fb, b, 0, &bl, &br);
+        if (br - bl <= wa) break;
+    }
+    ink_span(fb, b, 0, &bl, &br);
+    extra = wa - (br - bl);
+    ha = cap(fa);
+    hb = cap(fb);
+    gap = 14;
+    /* Optical centre: block sits a hair above the geometric middle. */
+    top = gy + (gh - (ha + gap + hb)) / 2 - 4;
+    x0 = gx + (gw - wa) / 2;
+    text(o, x0 - al, at_cap(fa, top), fa, a, c);
+    text_spread(o, x0 - bl, at_cap(fb, top + ha + gap), fb, b, extra, c);
+    /* CRT sweep: a soft bright band rising bottom to top. */
+    if (ph < SWEEP) {
+        int cy = gy + gh + BAND - (gh + 2 * BAND) * ph / SWEEP;
+
+        for (k = -BAND; k <= BAND; k++) {
+            int y = cy + k;
+            int al2 = 64 * (BAND - (k < 0 ? -k : k)) / BAND;
+
+            if (y <= gy || y >= gy + gh - 1 || al2 <= 0) continue;
+            rect(o, gx + 1, y, gw - 2, 1, C_EDGE, al2);
+        }
+        if (cy > gy && cy < gy + gh - 1) {
+            rect(o, gx + 1, cy, gw - 2, 1, C_W, 48);
+        }
+    }
+}
+
 static void draw_rank(uint32_t *o, int X, const RbPanelData *d)
 {
     /* Axis labels sit inside the side margins: values right of X+MX,
@@ -667,7 +753,9 @@ static void draw_rank(uint32_t *o, int X, const RbPanelData *d)
     for (v = 0; v <= 160; v += 40) {
         int y = gy + gh - v * gh / 160;
 
-        rect(o, gx, y, gw, 1, scale(C_EDGE, 1, 2), 255);
+        if (d->rank_on) {
+            rect(o, gx, y, gw, 1, scale(C_EDGE, 1, 2), 255);
+        }
         snprintf(buf, sizeof buf, "%d", v);
         text_r(o, gx - 8, y - 10, F20, buf, C_DIM);
     }
@@ -680,7 +768,7 @@ static void draw_rank(uint32_t *o, int X, const RbPanelData *d)
     }
     frame(o, gx - 1, gy - 1, gw + 2, gh + 2, 1, C_EDGE);
     /* Area under the rank line, filled in translucent red. */
-    for (i = s0 + 1; i < d->rank_n; i++) {
+    for (i = s0 + 1; d->rank_on && i < d->rank_n; i++) {
         int x0 = gx + (i - 1 - s0) * (gw - 1) / total;
         int x1 = gx + (i - s0) * (gw - 1) / total;
         int y0 = gy + gh - 1 - d->rank_hist[i - 1] * (gh - 1) / 160;
@@ -693,7 +781,7 @@ static void draw_rank(uint32_t *o, int X, const RbPanelData *d)
             rect(o, x, y, 1, gy + gh - y, C_R, 80);
         }
     }
-    for (i = 0; i < d->death_n; i++) {
+    for (i = 0; d->rank_on && i < d->death_n; i++) {
         int x;
 
         if (d->deaths[i] < s0) {
@@ -704,7 +792,7 @@ static void draw_rank(uint32_t *o, int X, const RbPanelData *d)
         rect(o, x, gy, 2, gh, scale(C_R, 2, 3), 255);
         skull(o, x + 1, gy - 13, C_W);
     }
-    for (i = 0; i < d->up_n; i++) {
+    for (i = 0; d->rank_on && i < d->up_n; i++) {
         int x;
 
         if (d->ups[i] < s0) {
@@ -715,7 +803,7 @@ static void draw_rank(uint32_t *o, int X, const RbPanelData *d)
         rect(o, x, gy, 2, gh, scale(C_G, 2, 3), 255);
         up_arrow(o, x + 1, gy - 13, C_G);
     }
-    for (i = s0 + 1; i < d->rank_n; i++) {
+    for (i = s0 + 1; d->rank_on && i < d->rank_n; i++) {
         int x0 = gx + (i - 1 - s0) * (gw - 1) / total;
         int x1 = gx + (i - s0) * (gw - 1) / total;
         int y0 = gy + gh - 1 - d->rank_hist[i - 1] * (gh - 1) / 160;
@@ -723,7 +811,9 @@ static void draw_rank(uint32_t *o, int X, const RbPanelData *d)
 
         line(o, x0, y0, x1, y1, C_R, 3);
     }
-    {
+    if (!d->rank_on) {
+        draw_rank_offline(o, gx, gy, gw, gh, d->frame);
+    } else {
         int x = gx + (d->rank_n > 0 ? d->rank_n - 1 - s0 : 0) * (gw - 1) / total;
         int y = gy + gh - 1 - d->rank_now * (gh - 1) / 160;
         int a;

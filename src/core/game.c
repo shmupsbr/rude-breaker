@@ -1842,7 +1842,6 @@ static uint32_t g_pt_base;       /* g_pt_frames when this stage's graph began */
 static char     g_pt_weapon;
 static uint8_t  g_pt_wseg;
 static int      g_pt_stage;
-static int      g_pt_found0;
 static uint16_t g_pt_buttons;
 static uint32_t g_pt_foe0;       /* enemy counts at stage start */
 static uint32_t g_pt_hit0;
@@ -1886,7 +1885,6 @@ static void pt_update(const RbGame *g, int died, uint16_t flags)
         g_pt_death_n = 0;
         g_pt_up_n = 0;
         g_pt_base = g_pt_frames;
-        g_pt_found0 = vm_global_u8(g_vm, 0xD1);
         vm_foe_counts(g_vm, &g_pt_foe0, &g_pt_hit0);
         /* The fifth stage runs with stage number 0. */
         vm_set_foe_stage(g_vm, g->stage == 0 ? 5 : (int)g->stage);
@@ -2146,8 +2144,11 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
     /* Hidden spots counted from the stage's own spawn data; D1 counts
      * the medals taken this stage. */
     d.medal_spots = vm_medal_spots(g_vm, g->stage);
-    d.medals = vm_global_u8(g_vm, 0xD1) - g_pt_found0;
-    if (d.medals < 0) d.medals = 0;
+    /* [bp+0xD1] is the original per-stage medal counter: cleared by
+     * the stage init (chunk 2 at 0x79BC) and after the clear tally
+     * (0x3E55), and raised only by the medal pickup (0x4EA4,
+     * `2B D1 06 01`, after the 0x4DE4 spot is revealed). */
+    d.medals = vm_global_u8(g_vm, 0xD1);
     d.difficulty = g_live && g_rank_on && !g_training ? g_eff : live_diff();
     d.level_pct = g_live && g_rank_on && !g_training ? (int)g_vh_pct : 0;
     if (getenv("RUDEBR_DBG_LVPCT")) {

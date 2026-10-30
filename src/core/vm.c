@@ -3899,8 +3899,41 @@ static void foe_scan(RbVm *vm)
     }
 }
 
-/* Hidden spots a stage places: its chunk's spawn ops (0x15) that start
- * the hidden-spot script 0x4DE4. */
+/* Hidden medals a stage places. Every stage chunk has one table of
+ * map-cell triggers, `26 7C 00 <cell16> <target16>` ("word [bp+0x7C]
+ * == cell -> jump"), each jumping into a run of spawn ops for the
+ * hidden-spot script 0x4DE4 (`15 E4 4D <type16>` + `22 <mask16>
+ * <sub-ops> FF`). A run can hold several spawns before its `05` jump
+ * back, and two cells can share one run (stage 1 cells 0xBC and 0xB4
+ * both jump to 0x7B1A), so the medals placed are the spawns reached
+ * per trigger, not the spawn ops in the bytes. Each stage places 10;
+ * the stage-end tally compares the pickup counter [bp+0xD1] with 10
+ * (chunk 2 at 0x3CD0: `25 D1 06 0A`). */
+static int medal_run(const uint8_t *c, uint32_t n, uint32_t p)
+{
+    int spots = 0;
+
+    while (p + 4 < n) {
+        uint8_t op = c[p];
+
+        if (op >= 0x15 && op <= 0x17) {
+            if (c[p + 1] == 0xE4 && c[p + 2] == 0x4D) {
+                spots++;
+            }
+            p += 5;
+        } else if (op == 0x22) {
+            p += 3;
+            while (p < n && c[p] != 0xFF) {
+                p += 1u + sub_skip(c[p]);
+            }
+            p++;
+        } else {
+            break;
+        }
+    }
+    return spots;
+}
+
 int vm_medal_spots(const RbVm *vm, int stage)
 {
     const uint8_t *c;
@@ -3916,9 +3949,13 @@ int vm_medal_spots(const RbVm *vm, int stage)
     if (!c) {
         return -1;
     }
-    for (k = 0; k + 2 < n; k++) {
-        if (c[k] == 0x15 && c[k + 1] == 0xE4 && c[k + 2] == 0x4D) {
-            spots++;
+    for (k = 0; k + 6 < n; k++) {
+        if (c[k] == 0x26 && c[k + 1] == 0x7C && c[k + 2] == 0x00) {
+            uint32_t t = (uint32_t)c[k + 5] | ((uint32_t)c[k + 6] << 8);
+
+            if (t + 2 < n && c[t] == 0x15 && c[t + 1] == 0xE4 && c[t + 2] == 0x4D) {
+                spots += medal_run(c, n, t);
+            }
         }
     }
     return spots;
