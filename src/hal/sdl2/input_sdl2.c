@@ -47,7 +47,7 @@ static int g_cap_pad;
 static const char *act_name(int action)
 {
     static const char *names[RB_ACT_COUNT] = {
-        "up", "down", "left", "right", "fire", "mode", "shift", "pause"
+        "up", "down", "left", "right", "fire", "mode", "shift", "pause", "speed"
     };
 
     if (action < 0 || action >= RB_ACT_COUNT) {
@@ -257,6 +257,9 @@ static void default_pad(RbInput *out)
         if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_X)) {
             out->pad_buttons |= RB_BTN_C;
         }
+        if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_Y)) {
+            out->pad_buttons |= RB_BTN_SPEED;
+        }
         if (SDL_GameControllerGetButton(g_pad, SDL_CONTROLLER_BUTTON_START)) {
             out->pad_buttons |= RB_BTN_START;
         }
@@ -309,6 +312,9 @@ static void default_pad(RbInput *out)
     if (pad_button(2)) {
         out->pad_buttons |= RB_BTN_C;
     }
+    if (pad_button(3)) {
+        out->pad_buttons |= RB_BTN_SPEED;
+    }
     if (pad_button(7) || pad_button(9)) {
         out->pad_buttons |= RB_BTN_START;
     }
@@ -340,6 +346,9 @@ static int key_default(const Uint8 *keys, int action)
         return keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT];
     case RB_ACT_PAUSE:
         return keys[SDL_SCANCODE_ESCAPE];
+    case RB_ACT_SPEED:
+        return keys[SDL_SCANCODE_C] || keys[SDL_SCANCODE_LCTRL] ||
+               keys[SDL_SCANCODE_RCTRL];
     default:
         return 0;
     }
@@ -356,6 +365,7 @@ static uint16_t act_bit(int action)
     case RB_ACT_MODE:  return RB_BTN_B;
     case RB_ACT_SHIFT: return RB_BTN_C;
     case RB_ACT_PAUSE: return RB_BTN_START;
+    case RB_ACT_SPEED: return RB_BTN_SPEED;
     default:           return 0;
     }
 }
@@ -437,6 +447,7 @@ const char *sys_bind_label(int action)
         case RB_ACT_MODE:  return "X";
         case RB_ACT_SHIFT: return "SHIFT";
         case RB_ACT_PAUSE: return "ESC";
+        case RB_ACT_SPEED: return "C";
         default:           break;
         }
     }
