@@ -71,7 +71,7 @@ The binary is `build/rudebreaker`. `make linux` looks for `libSDL2-2.0.so.0` nex
 Do **not** distribute the game files. You may only use them if you own the game legally: the original *Disc Station Vol. 10* disc, or a purchase or subscription through Project EGG. If you do not own the game, you may play it for no more than **24 hours, for testing purposes only**, and must then delete the game files.
 
 ### Legal
-This is a non-commercial fan project with no affiliation to Compile or D4 Enterprise. Third-party licenses: SDL2 (zlib) and ymfm (BSD-3-Clause).
+This is a non-commercial fan project with no affiliation to Compile or D4 Enterprise. Third-party licenses: SDL2 (zlib) and ymfm (BSD-3-Clause). Side-panel font: Robotica by Courtney Novits (free font).
 
 ---
 
@@ -142,4 +142,4 @@ O binário fica em `build/rudebreaker`. O `make linux` procura a `libSDL2-2.0.so
 **Não** distribua os arquivos do jogo. Você só pode usá-los se tiver o jogo legalmente: o disco original da *Disc Station Vol. 10*, ou uma compra ou assinatura pela Project EGG. Se você não tem o jogo, pode jogá-lo por no máximo **24 horas, só pra fins de teste**, e depois deve apagar os arquivos do jogo.
 
 ### Aviso legal
-Projeto de fã, sem fins comerciais e sem vínculo com a Compile ou a D4 Enterprise. Licenças de terceiros: SDL2 (zlib) e ymfm (BSD-3-Clause).
+Projeto de fã, sem fins comerciais e sem vínculo com a Compile ou a D4 Enterprise. Licenças de terceiros: SDL2 (zlib) e ymfm (BSD-3-Clause). Fonte dos painéis: Robotica, de Courtney Novits (fonte gratuita).

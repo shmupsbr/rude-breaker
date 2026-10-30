@@ -13,6 +13,7 @@ CXXFLAGS := -std=c++14 -O2 -w -isystem third_party/ymfm -Iinclude -Isrc/hal/sdl2
 LDFLAGS  :=
 
 CORE_SRCS := \
+	src/core/panels.c \
 	src/core/main.c \
 	src/core/exepath.c \
 	src/core/game.c \
