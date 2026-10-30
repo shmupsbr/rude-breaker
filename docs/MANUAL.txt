@@ -1,7 +1,7 @@
 RUDE BREAKER 30th AE - PC PORT - USER MANUAL
 ============================================
 
-Build pr9p tester build - 2026-10-29
+Build pr9y tester build - 2026-10-30
 
 
 1. WHAT THIS IS
@@ -133,8 +133,21 @@ aspect.
 -------------------------------
 
 The logo, title, ranking display and intro are the original screens.
-The title screen shows the 30th AE mark under the logo and the
-credit lines (c) COMPILE 1996 and (c) 2026 SHMUPSBR.
+Before them, a silent card plays: particles fly in and form the Rude
+Breaker logo, it holds, then "30TH ANNIVERSARY EDITION" (in white,
+spread across the width of the logo, with one soft glow once it has
+landed) and the credit line slide up from below; after about 2.5
+seconds in all the
+card fades out and the original Compile logo
+and its music start. Any key or gamepad button skips the card and
+goes straight to the Compile logo. With SIDE
+PANELS on, the top score line of the playfield is inset a few pixels
+on each side so it is not clipped by the panel frames.
+The title screen shows "30TH ANNIVERSARY EDITION" in white, centred
+under the logo, with a soft glow around the letters every 5 seconds
+(the same glow plays under the logo in the left side panel), PUSH
+TRIGGER changing smoothly between yellow and green every 10 seconds,
+and the credit lines (c) COMPILE 1996 and (c) 2026 SHMUPSBR.
 Press Fire at the title to start, or open CONFIG from the title menu.
 
 CONFIG has these pages:
@@ -165,12 +178,86 @@ GAMEPLAY
                    with how you play (see section 6). OFF: bullet
                    speed stays fixed, as in the original.
 
+  BULLET COLOR     PINK (default), LILAC, BLUE, GREEN or ORIGINAL.
+                   Every enemy bullet that cannot be shot down is
+                   recoloured, boss lasers included
+                   at full length, Cave style,
+                   whatever its original
+                   colour (red, orange or gold); its dark rim, body
+                   and bright core keep their shading. The game marks
+                   these in the object type, not by colour: enemy
+                   bullets have the bullet bit and no "can be shot"
+                   bits. Bullets you can shoot, enemies, items and
+                   your own shot keep their colours, and so do the
+                   harmless fireballs left when you shoot a bullet
+                   down. ORIGINAL leaves
+                   every bullet as in the game.
+
   PALETTE          MODERN (default): Filipe's color rebalance of the
                    game. ORIGINAL: the PC-98 colors.
 
   TRAINING         ON: practice mode (see section 5). OFF: normal game.
 
   FRAME PACING     SMOOTH or EXACT (see section 7).
+
+  SIDE PANELS      ON (default): in a 16:9 window or full screen, the
+                   playfield sits in the middle with info panels on
+                   both sides: rank graph, loadout, extends, i-frames,
+                   speed, score, hit ratio, medals, level, time, 1CC
+                   and an arcade stick that shows your input. The logo
+                   and side art are taken from your own title screen.
+                   OFF, or a 4:3 / 16:10 window: the classic look.
+                   LOADOUT shows two levels, one block per level, level
+                   1 included (it fills the first block). SHOT is the
+                   main shot: 4 levels, so 4 blocks; levels 2, 3 and 4
+                   (MAX) come at 2, 10 and 18 power-up items and their
+                   blocks fill item by item. Losing a life takes it
+                   down one level. Each V / M / L sub-weapon has 3
+                   levels, so 3 blocks; one more capsule of the weapon
+                   you already have adds a level; at MAX
+                   a capsule gives 1000 points. A capsule of another
+                   colour changes the weapon and keeps its level. A
+                   hit while you carry a sub-weapon takes it instead
+                   of a life: the box then shows NO SUB and an empty
+                   capsule slot. EXTENDS shows your ship and the lives
+                   in stock.
+                   I-FRAMES is your invulnerability time as a pie: a
+                   full disc when given, a wedge opening clockwise
+                   from 12 o'clock as it runs out, and only a faint
+                   circle outline when empty. Yellow: power-up
+                   item or capsule. Violet: after a hit or a respawn.
+                   In the rank graph a skull marks each lost life.
+                   The graph shows the last 60 seconds and scrolls:
+                   old data drops off the left as new data comes in.
+                   It is cleared at the start of each stage (the rank
+                   itself is not).
+                   Rank carries over from stage to stage; it starts
+                   again only with a new game. The small "x1.05" next
+                   to it is the current rank rise multiplier.
+                   In this layout the playfield is shown at the 4:3
+                   shape of a PC-98 monitor (pixels 1.2 times taller
+                   than wide); the classic look uses square pixels.
+                   HIT COUNT shows the stage's
+                   enemies you destroyed / the
+                   stage's fixed number of enemies
+                   (369, 315, 128, 205 and 46 in
+                   stages 1 to 5: the enemies each
+                   stage itself places; endless
+                   streams, shot spawners and extras
+                   that depend on rank or timing are
+                   left out, as are bullets, items
+                   and hidden spots). HIT RATIO is
+                   the same as a percentage, with a
+                   bar. After a lost life part of the
+                   stage plays again; the count never
+                   goes past the total.
+                   MEDALS counts the medals taken this stage out of
+                   the hidden spots the stage has (8, 10, 7, 9 and 8
+                   in stages 1 to 5).
+                   1CC shows YES once you have reached the ending on
+                   one credit (no continue, no Training, no stage
+                   select, no invincibility or debug keys); this is
+                   saved in the settings file.
 
   BACK
 
@@ -179,7 +266,8 @@ CONTROLS
   JOYSTICK         Shows whether a gamepad is in use, and its name.
                    Change it with left/right.
   DEFINE KEYS      Remap UP, DOWN, LEFT, RIGHT, FIRE, MODE, SHIFT,
-                   PAUSE and SPEED. Select an action, then press the new key or
+                   PAUSE and SPEED. Select an action,
+                   then press the new key or
                    pad button. RESTORE DEFAULTS puts back the keys
                    listed in section 3.
   BACK
@@ -229,15 +317,54 @@ Difficulty and all gameplay rules work as in the original.
 
 RANK (GAMEPLAY option, ON by default) is an addition of this port,
 modeled on the rank system of Zanac. A hidden rank value goes up
-while you stay alive and when you score points, and is cut in half
-each time you lose a life. A higher rank speeds up enemy bullets,
+while you stay alive and when you score points, and is reset when you
+lose a life (see below). It rises at one third of the rate used by
+earlier versions of this port, times a multiplier that grows through
+the game:
++1% for each main-shot level gained, +5% for each sub-weapon level
+gained (a capsule that only gives 1000 points or changes the colour
+does not count), and +5% for each extra life earned by score. The
+multiplier starts at x1.00 with each new game and does not change
+the reset on a lost life or the limits set by DIFFICULTY.
+Losing the sub-weapon (a hit that leaves you with only the main shot)
+takes one third off the current rank. The amount taken is kept, and
+picking up a sub-weapon again gives it back (never above the limit
+for your DIFFICULTY). A new game clears it. A higher rank speeds up
+enemy bullets,
 the same way a higher DIFFICULTY does; nothing else changes, and the
 bonuses still follow the DIFFICULTY you chose. DIFFICULTY sets the
 starting point and the floor: rank never makes bullets slower than
 the difficulty you chose. On VERY EASY and EASY rank can only go half
-way up; on HARD and VERY HARD it starts half way up. Rank starts
-from zero with each new game. With RANK OFF the game plays exactly
-like the original.
+way up; on HARD and VERY HARD it starts half way up. Rank starts again
+with each new game.
+
+When rank reaches the top for the difficulty in play, the game steps
+up one difficulty level and rank starts again at that level's starting
+point, until it reaches the ceiling for the DIFFICULTY you chose:
+
+  VERY EASY  -> up to NORMAL (through EASY)
+  EASY       -> up to HARD (through NORMAL)
+  NORMAL     -> up to HARD
+  HARD       -> up to VERY HARD
+  VERY HARD  -> stays VERY HARD
+
+At the ceiling rank stays at the top. On each step-up the LEVEL box in
+the side panel flashes for 2 seconds and the RANK graph gets a green
+line with an up arrow at that moment (deaths show a skull). Each
+step-up also pays the game's own 1000-point bonus, with its 1,000
+popup above your ship.
+
+If you chose NORMAL or VERY HARD, once you are at the ceiling with rank
+at the top, enemy bullets get 1% faster for every 20 seconds of play,
+up to +25%. The LEVEL box shows it (for example V.HARD +3% or HARD +3%). Taking
+a hit (losing the sub-weapon) or losing a life puts it back to +0%.
+
+Losing a life takes you back to the DIFFICULTY you chose, with its
+starting rank. Stepping up only changes what rank
+changes (enemy bullet speed and the rank limits): scoring, bonuses and
+everything else keep following the DIFFICULTY you chose, and the saved
+setting does not change. Not in Training. With RANK OFF the game plays
+exactly like the original.
 
 The original debug cheat is still in the code. During the game, pause
 with Escape and type N E K O C O. Then:
@@ -275,7 +402,8 @@ If vsync isn't available, a timer paces the game at 30.67.
 
 F8 shows a small overlay with the mode, the measured refresh rate and
 timing stats. The same information is written to pace.txt next to the
-exe when the game starts and when you quit. It is useful if you report a smoothness problem.
+exe when the game starts and when you quit. It is useful if you report
+a smoothness problem.
 
 
 8. ORIGINAL OPTIONS REMOVED ON PURPOSE
@@ -318,7 +446,7 @@ When something looks, sounds or feels wrong, please send:
   5. The PACING setting (SMOOTH or EXACT) and the file pace.txt from
      the game folder (it is rewritten each time you quit, so copy it
      right after the problem).
-  6. The build name: Rude Breaker 30th AE pr9p.
+  6. The build name: Rude Breaker 30th AE pr9y.
 
 Send it to Filipe Gracioli / shmupsbr.
 
@@ -333,3 +461,6 @@ Send it to Filipe Gracioli / shmupsbr.
   SDL2         Simple DirectMedia Layer, zlib license.
   PC port      Filipe Gracioli / shmupsbr.
   30th AE      (c) 2026 ShmupsBR.
+
+Panel font: Robotica by Courtney Novits (free font, dafont.com),
+included as assets/fonts/Robotica.ttf.
