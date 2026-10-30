@@ -250,11 +250,22 @@ const char *sys_pace_mode_name(void);
 void sys_clear(uint8_t r, uint8_t g, uint8_t b);
 /* Host RGBA8888 framebuffer, RB_NATIVE_W by RB_NATIVE_H, or NULL. */
 uint32_t *sys_frame_pixels(void);
+
+/* Wide layout (side panels): a 1920x1080 frame presented instead of the
+ * 640x400 one while sys_set_wide(1) is in effect. */
+#define RB_WIDE_W 1920
+#define RB_WIDE_H 1080
+int       sys_window_wide(void);
+uint32_t *sys_wide_pixels(void);
+void      sys_set_wide(int on);
 void sys_draw_sprite(const RbSprite *spr);
 void sys_draw_rect(const RbRect *rect, uint32_t rgba);
 void sys_draw_text(int16_t x, int16_t y, const char *utf8, uint32_t rgba);
 
 void sys_read_input(RbInput *out);
+/* 1 if any key or pad/joystick button went down since the last call
+ * (bound or not). Clears the latch. Used to skip the intro card. */
+int sys_any_press(void);
 
 /* One slot per action. DEFAULT keeps the built-in key and pad map.
  * KEY is an SDL scancode. BUTTON is a controller or joystick button.
@@ -309,6 +320,8 @@ int  sys_audio_bands(float *out, int n);
 
 /* Freeze the output clock. Play and stop clear it. */
 void sys_audio_pause(int on);
+/* While on, play/stop/fade calls are dropped (silent hidden VM runs). */
+void sys_audio_suppress(int on);
 
 /* Milliseconds since sys_init (debug / Phase 1 only; core must not rely). */
 uint32_t sys_ticks_ms(void);

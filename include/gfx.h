@@ -45,8 +45,24 @@ void gfx_palette_rgb(const RbGfx *gfx, uint8_t rgb[16][3]);
 /* 0 = original 4-bit lookup (level * 17). 1 = the measured modern
  * grade, applied to the same 4-bit sample so a fade still tracks. */
 void gfx_set_grade(int modern);
-/* Host intro card before the Compile logo; level 0..16 is the fade. */
-void gfx_intro_card(uint32_t *rgba, int w, int h, int level);
+/* Enemy bullet colour preset: 0 ORIGINAL, 1 PINK, 2 LILAC, 3 HOT PINK. */
+void gfx_set_hud_inset(int on);
+void gfx_set_bullet_color(int preset);
+/* One 16x16 sprite of a bound sheet as RGBA (0 = transparent), in the
+ * palette and grade on screen now. Returns 0 when the slot is empty. */
+int gfx_sprite_rgba(const RbGfx *gfx, uint8_t slot, int index, uint32_t out[256]);
+/* 1 when the last present showed the settled title screen. */
+int gfx_title_frame(void);
+/* Host intro card before the Compile logo, t frames from its start
+ * (t < 0: black). Particles gather into the logo, it holds, the two
+ * credit lines slide up from below, it holds, then fades. */
+#define CARD_FORM   40
+#define CARD_HOLD1  18
+#define CARD_SLIDE  16
+#define CARD_HOLD2  46
+#define CARD_OUT    10
+#define CARD_TOTAL  (CARD_FORM + CARD_HOLD1 + 2 * CARD_SLIDE + CARD_HOLD2 + CARD_OUT)
+void gfx_intro_card(uint32_t *rgba, int w, int h, int t, const uint32_t *title);
 /* Loader 0x6C0B. The analog DAC reads the palette; it does not
  * store the sampled level back into the fade words. */
 void gfx_dac_flush(RbGfx *gfx);
@@ -77,6 +93,11 @@ int  gfx_active(const RbGfx *gfx);
  * does not sit on the title logo. on = 0 turns it off. */
 /* Speed readout in the stage HUD: 0 off, 1..3 chevrons. */
 void gfx_set_hud_speed(int level);
+/* Host frame counter for the title effects (glow, PUSH TRIGGER). */
+void gfx_set_clock(uint32_t frame);
+/* 0..256: the 30TH ANNIVERSARY EDITION glow, once every 5 s. */
+void gfx_halo(uint32_t *rgba, int w, int h, int x0, int y0, int x1, int y1, int amt);
+int gfx_glow_level(uint32_t frame);
 void gfx_set_panel(int on, int x0, int y0, int x1, int y1);
 /* blank_sides forces the 80 px columns black. The stage playfield does
  * that; the logo, title, and menus are drawn across the full 640. */

@@ -11,6 +11,7 @@
 
 #include "hal.h"
 #include "assets.h"
+#include "gfx.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -54,6 +55,8 @@ typedef struct RbVmSprite {
     uint32_t rgba;
 } RbVmSprite;
 
+const RbGfx *vm_gfx(const RbVm *vm);
+
 int  vm_create(RbVm **out, const RbAssets *assets);
 void vm_destroy(RbVm *vm);
 
@@ -84,6 +87,8 @@ void vm_set_input(RbVm *vm, const RbInput *in);
 void vm_set_training(RbVm *vm, int on);
 /* Rank-adjusted C9 copied by enemy shot spawns only; 0 turns it off. */
 void vm_set_shot_c9(RbVm *vm, uint8_t v);
+void vm_set_shot_pct(RbVm *vm, unsigned pct);
+int vm_bonus_1000(RbVm *vm, int dy);
 unsigned vm_shot_c9_hits(const RbVm *vm);
 int  vm_training(const RbVm *vm);
 void vm_set_grade(RbVm *vm, int modern);
@@ -135,6 +140,17 @@ void vm_present(const RbVm *vm, uint32_t *rgba, int w, int h);
 
 /* Host checks: aim step, mover, delay, and a decompressed chunk. */
 int  vm_self_test(RbVm *vm);
+
+/* Shootable enemies seen and destroyed since the VM started. */
+void vm_foe_dump(int stage);
+/* HIT COUNT: the fixed enemy count of stage 1..5, the stage whose
+ * fixed origins are counted, and the fixed enemies destroyed. */
+int vm_fixed_total(int stage);
+void vm_set_foe_stage(RbVm *vm, int stage);
+uint32_t vm_fixed_hits(const RbVm *vm);
+void vm_foe_counts(const RbVm *vm, uint32_t *seen, uint32_t *hit);
+/* Hidden spots placed by stage 1..5 (from the stage chunk), or -1. */
+int vm_medal_spots(const RbVm *vm, int stage);
 
 #ifdef __cplusplus
 }
