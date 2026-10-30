@@ -1,3 +1,4 @@
+#include <stdlib.h>
 /**
  * SDL2 mixer. The samples come from FPLAY.COM driving a YM2203 (OPN) emulation.
  */
@@ -210,9 +211,23 @@ int sys_audio_bind_mem(const uint8_t *com, size_t com_n,
     return rc;
 }
 
+static int g_suppress;
+
+void sys_audio_suppress(int on)
+{
+    g_suppress = on ? 1 : 0;
+    fprintf(stderr, "audio_sdl2: suppress %d\n", g_suppress);
+}
+
 int sys_play_sound(uint16_t id, uint8_t vol)
 {
     (void)vol;
+    if (g_suppress) {
+        return 0;
+    }
+    if (getenv("RUDEBR_AUDIOLOG")) {
+        fprintf(stderr, "audio_sdl2: play sound %u\n", (unsigned)id);
+    }
     if (!g_opened) {
         open_device();
     }
@@ -229,6 +244,10 @@ int sys_play_sound(uint16_t id, uint8_t vol)
 
 int sys_play_music(uint16_t track_id)
 {
+    if (g_suppress) {
+        fprintf(stderr, "audio_sdl2: music %u suppressed\n", (unsigned)track_id);
+        return 0;
+    }
     if (!g_opened) {
         open_device();
     }
@@ -246,6 +265,9 @@ int sys_play_music(uint16_t track_id)
 
 void sys_stop_music(void)
 {
+    if (g_suppress) {
+        return;
+    }
     audio_resume();
     if (g_dev) {
         SDL_LockAudioDevice(g_dev);
@@ -286,6 +308,9 @@ void sys_audio_pause(int on)
 
 void sys_fade_music(uint8_t speed)
 {
+    if (g_suppress) {
+        return;
+    }
     if (g_dev) {
         SDL_LockAudioDevice(g_dev);
     }

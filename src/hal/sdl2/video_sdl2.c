@@ -22,6 +22,10 @@
 SDL_Window   *g_rb_window  = NULL;
 SDL_Renderer *g_rb_renderer = NULL;
 SDL_Texture  *g_rb_texture  = NULL;
+/* 1920x1080 frame for the wide layout with side panels. */
+static SDL_Texture *g_wide_texture;
+static uint32_t    *g_wide_pixels;
+static int          g_wide_on;
 uint32_t     *g_rb_pixels   = NULL; /* RGBA8888, native resolution */
 
 static uint32_t g_start_ticks;
@@ -127,6 +131,12 @@ void sys_shutdown(void)
 {
     free(g_rb_pixels);
     g_rb_pixels = NULL;
+    free(g_wide_pixels);
+    g_wide_pixels = NULL;
+    if (g_wide_texture) {
+        SDL_DestroyTexture(g_wide_texture);
+        g_wide_texture = NULL;
+    }
     if (g_rb_texture) {
         SDL_DestroyTexture(g_rb_texture);
         g_rb_texture = NULL;
@@ -145,6 +155,48 @@ void sys_shutdown(void)
 uint32_t *sys_frame_pixels(void)
 {
     return g_rb_pixels;
+}
+
+int sys_window_wide(void)
+{
+    int w = 0;
+    int h = 0;
+
+    if (!g_rb_renderer || SDL_GetRendererOutputSize(g_rb_renderer, &w, &h) != 0 || h <= 0) {
+        return 0;
+    }
+    /* Wider than about 17:10: 16:9 gets panels, 16:10 and 4:3 do not. */
+    return w * 10 > h * 17;
+}
+
+uint32_t *sys_wide_pixels(void)
+{
+    if (!g_wide_pixels) {
+        g_wide_pixels = (uint32_t *)calloc((size_t)RB_WIDE_W * (size_t)RB_WIDE_H,
+                                           sizeof(uint32_t));
+    }
+    return g_wide_pixels;
+}
+
+void sys_set_wide(int on)
+{
+    on = on && g_rb_renderer && sys_wide_pixels();
+    if (on && !g_wide_texture) {
+        g_wide_texture = SDL_CreateTexture(g_rb_renderer, SDL_PIXELFORMAT_RGBA8888,
+                                           SDL_TEXTUREACCESS_STREAMING, RB_WIDE_W,
+                                           RB_WIDE_H);
+        if (!g_wide_texture) {
+            on = 0;
+        }
+    }
+    if (on != g_wide_on && g_rb_renderer) {
+        if (on) {
+            SDL_RenderSetLogicalSize(g_rb_renderer, RB_WIDE_W, RB_WIDE_H);
+        } else {
+            SDL_RenderSetLogicalSize(g_rb_renderer, RB_NATIVE_W, RB_NATIVE_H);
+        }
+    }
+    g_wide_on = on;
 }
 
 void sys_clear(uint8_t r, uint8_t g, uint8_t b)
@@ -948,11 +1000,17 @@ void sys_present(void)
     if (!g_rb_texture || !g_rb_renderer || !g_rb_pixels) {
         return;
     }
-    SDL_UpdateTexture(g_rb_texture, NULL, g_rb_pixels,
-                      RB_NATIVE_W * (int)sizeof(uint32_t));
     SDL_SetRenderDrawColor(g_rb_renderer, 0, 0, 0, 255);
     SDL_RenderClear(g_rb_renderer);
-    SDL_RenderCopy(g_rb_renderer, g_rb_texture, NULL, NULL);
+    if (g_wide_on && g_wide_texture) {
+        SDL_UpdateTexture(g_wide_texture, NULL, g_wide_pixels,
+                          RB_WIDE_W * (int)sizeof(uint32_t));
+        SDL_RenderCopy(g_rb_renderer, g_wide_texture, NULL, NULL);
+    } else {
+        SDL_UpdateTexture(g_rb_texture, NULL, g_rb_pixels,
+                          RB_NATIVE_W * (int)sizeof(uint32_t));
+        SDL_RenderCopy(g_rb_renderer, g_rb_texture, NULL, NULL);
+    }
     SDL_RenderPresent(g_rb_renderer);
     pace_note_present();
 }

@@ -730,6 +730,71 @@ static uint16_t held_from_env(void)
     return bits;
 }
 
+
+/* RUDEBR_INPUT names a smoke-test script: lines of "FROM TO TOKENS"
+ * (poll counts, tokens as in RUDEBR_HOLD). Unset means no effect. */
+#define SCRIPT_MAX 512
+static uint16_t script_from_env(void)
+{
+    static int ready, n;
+    static unsigned long from[SCRIPT_MAX], to[SCRIPT_MAX], tick;
+    static uint16_t bits[SCRIPT_MAX];
+    uint16_t out = 0;
+    int i;
+
+    if (!ready) {
+        const char *path = getenv("RUDEBR_INPUT");
+        FILE *fp = path && path[0] ? fopen(path, "r") : NULL;
+        char line[256];
+
+        ready = 1;
+        while (fp && n < SCRIPT_MAX && fgets(line, sizeof(line), fp)) {
+            char *p = line, *e;
+            unsigned long a = strtoul(p, &e, 10), b;
+
+            if (e == p) {
+                continue;
+            }
+            p = e;
+            b = strtoul(p, &e, 10);
+            if (e == p) {
+                continue;
+            }
+            p = e;
+            bits[n] = 0;
+            while (*p) {
+                char *st;
+
+                while (*p == ' ' || *p == '\t' || *p == ',') {
+                    p++;
+                }
+                st = p;
+                while (*p && *p != ' ' && *p != '\t' && *p != ',' &&
+                       *p != '\n' && *p != '\r') {
+                    p++;
+                }
+                if (p == st) {
+                    break;
+                }
+                bits[n] = (uint16_t)(bits[n] | hold_token(st, (size_t)(p - st)));
+            }
+            from[n] = a;
+            to[n] = b;
+            n++;
+        }
+        if (fp) {
+            fclose(fp);
+        }
+    }
+    for (i = 0; i < n; i++) {
+        if (tick >= from[i] && tick < to[i]) {
+            out = (uint16_t)(out | bits[i]);
+        }
+    }
+    tick++;
+    return out;
+}
+
 static void note_capture(const SDL_Event *ev)
 {
     if (!g_cap || g_cap_result != 0) {
@@ -765,6 +830,16 @@ static void note_capture(const SDL_Event *ev)
     }
 }
 
+static int g_any_press;
+
+int sys_any_press(void)
+{
+    int r = g_any_press;
+
+    g_any_press = 0;
+    return r;
+}
+
 void sys_read_input(RbInput *out)
 {
     SDL_Event ev;
@@ -784,6 +859,11 @@ void sys_read_input(RbInput *out)
             ev.type == SDL_CONTROLLERDEVICEREMOVED) {
             close_dev();
             bind_device();
+        }
+        if ((ev.type == SDL_KEYDOWN && !ev.key.repeat) ||
+            ev.type == SDL_CONTROLLERBUTTONDOWN ||
+            ev.type == SDL_JOYBUTTONDOWN) {
+            g_any_press = 1;
         }
         note_capture(&ev);
     }
@@ -842,7 +922,7 @@ void sys_read_input(RbInput *out)
     if (keys[SDL_SCANCODE_F10]) {
         out->buttons |= RB_BTN_QUIT;
     }
-    out->buttons = (uint16_t)(out->buttons | held_from_env());
+    out->buttons = (uint16_t)(out->buttons | held_from_env() | script_from_env());
     if (out->buttons & RB_BTN_UP) {
         out->axis_y = -1;
     }
