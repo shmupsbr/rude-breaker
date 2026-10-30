@@ -7,6 +7,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 #define MAP_COLS 30
 #define MAP_ROWS 25
@@ -14,6 +15,50 @@
 /* A replaced 16-line row at intro speed 15 sits up to 29 lines before
  * the GDC start address. Those lines are the bottom of the picture. */
 #define SCROLL_TAIL 32
+
+static int g_title_frame;
+/* Enemy bullet colour: 0 original, then PINK, LILAC, HOT PINK. Row 0
+ * replaces index 11 (the bright red), row 1 index 8 (the dark red). */
+static int g_bullet;
+static int g_bulletlog = -1;
+static unsigned g_bl_frames;
+static struct { uint16_t type, seg, pat; int tint; unsigned n; } g_bl[64];
+static int g_bl_n;
+
+static void bulletlog_note(uint16_t type, uint16_t seg, uint16_t pat, int tint)
+{
+    int i;
+
+    for (i = 0; i < g_bl_n; i++) {
+        if (g_bl[i].type == type && g_bl[i].seg == seg && g_bl[i].pat == pat) {
+            g_bl[i].n++;
+            return;
+        }
+    }
+    if (g_bl_n < 64) {
+        g_bl[g_bl_n].type = type;
+        g_bl[g_bl_n].seg = seg;
+        g_bl[g_bl_n].pat = pat;
+        g_bl[g_bl_n].tint = tint;
+        g_bl[g_bl_n].n = 1;
+        g_bl_n++;
+    }
+}
+
+static void bulletlog_frame(void)
+{
+    int i;
+
+    if (++g_bl_frames % 600u != 0 || !g_bl_n) {
+        return;
+    }
+    for (i = 0; i < g_bl_n; i++) {
+        fprintf(stderr, "bullet f=%u type=%04X seg=%u pat=%u %s n=%u\n", g_bl_frames,
+                g_bl[i].type, g_bl[i].seg, g_bl[i].pat,
+                g_bl[i].tint ? "solid->tint" : "shootable", g_bl[i].n);
+    }
+    g_bl_n = 0;
+}
 
 struct RbGfx {
     uint8_t *pix;
@@ -35,6 +80,12 @@ struct RbGfx {
     uint8_t glyph[512][32];
     uint8_t glyph_on[512];
     int active;
+    uint8_t tint[RB_GFX_W * RB_GFX_H]; /* 1: enemy bullet pixel in a shot colour */
+    int tint_cur;          /* sprite being stamped: 1 enemy bullet, 2 player shot */
+    int tint_gold;         /* orange/gold pixels in the bullet being drawn */
+    int tint_red;          /* red pixels (8, 9, 11) in it */
+    int tint_n;            /* pixels marked for the bullet being drawn */
+    uint32_t tint_at[1024];
 };
 
 RbGfx *gfx_create(void)
@@ -115,6 +166,18 @@ static void put_idx(RbGfx *gfx, int x, int y, uint8_t idx)
     }
     at = pix_at(x, y);
     gfx->pix[at] = idx;
+    gfx->tint[at] = 0;
+    if (gfx->tint_cur == 1) {
+        /* Every pixel of a bullet that cannot be shot is recoloured,
+         * however large (boss lasers run the full screen height); the
+         * shade is picked from its own brightness when shown. */
+        gfx->tint[at] = 4;
+        if (gfx->tint_n < 1024) {
+            gfx->tint_at[gfx->tint_n] = (uint32_t)at;
+        }
+        gfx->tint_n++;
+        gfx->tint_red++;
+    }
     if (gfx->paint_bg) {
         gfx->bg[at] = idx;
     }
@@ -618,7 +681,14 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
      * this frame's sprites. Scroll lives in the GVRAM address, so a sprite
      * that holds still on screen still moves through the buffer. */
     memcpy(gfx->pix, gfx->bg, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
+    memset(gfx->tint, 0, sizeof gfx->tint);
     gfx->paint_bg = 0;
+    if (g_bulletlog < 0) {
+        g_bulletlog = getenv("RUDEBR_BULLETLOG") ? atoi(getenv("RUDEBR_BULLETLOG")) : 0;
+    }
+    if (g_bulletlog) {
+        bulletlog_frame();
+    }
     for (i = 0; i < ent_n; i++) {
         const uint8_t *slot = ent + (size_t)i * (size_t)stride;
         uint16_t type = (uint16_t)slot[0] | ((uint16_t)slot[1] << 8);
@@ -661,6 +731,12 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
         if (cof[i] >= 40u) {
             continue;
         }
+        /* Enemy bullets (0x0080) that cannot be shot (no 0x0020 or
+         * 0x0040 bit, which the player's shots test). */
+        gfx->tint_cur = g_bullet && (type & 0x0080u) && !(type & 0x0060u) ? 1 : 0;
+        gfx->tint_gold = 0;
+        gfx->tint_red = 0;
+        gfx->tint_n = 0;
         sheet = gfx->bank[seg];
         script = chunk[cof[i]];
         slen = clen[cof[i]];
@@ -691,7 +767,17 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
                                    scroll76, scroll_speed, blank_sides);
             }
         }
+        if (g_bulletlog && getenv("RUDEBR_ENTDUMP") &&
+            g_bl_frames >= (unsigned)atoi(getenv("RUDEBR_ENTDUMP"))) {
+            fprintf(stderr, "ent f=%u i=%d type=%04X seg=%u pat=%u x=%d y=%d w=%d h=%d tint=%d\n", g_bl_frames, i,
+                    type, seg, pat, x, y, wcells, hcells, gfx->tint_cur);
+        }
+        if (g_bulletlog && (g_bulletlog > 1 || (type & 0x0180u))) {
+            bulletlog_note(type, seg, pat, gfx->tint_cur);
+        }
+        gfx->tint_cur = 0;
     }
+    gfx->tint_cur = 0;
     gfx->paint_bg = 1;
 }
 
@@ -839,6 +925,20 @@ static const uint8_t GRADE_DST[GRADE_N][16][3] = {
 };
 
 static int g_modern;
+/* Per preset: main (idx 11), dark (8, 9), highlight (12 inside a red
+ * bullet). Cave-style pinks and lilacs; none of them is in the palette. */
+static const uint8_t k_bullet[5][3][3] = {
+    {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}},
+    {{255, 96, 208}, {176, 32, 136}, {255, 200, 236}},
+    {{216, 160, 255}, {128, 72, 200}, {240, 226, 255}},
+    {{80, 200, 255}, {24, 88, 220}, {220, 248, 255}},
+    {{120, 255, 200}, {0, 150, 120}, {230, 255, 244}},
+};
+
+void gfx_set_bullet_color(int preset)
+{
+    g_bullet = preset < 0 || preset > 4 ? 0 : preset;
+}
 
 void gfx_set_grade(int modern)
 {
@@ -1783,9 +1883,21 @@ static int hud_present(const RbGfx *gfx, const uint8_t *text)
            hud_cell(text, 52) == 0x3856u && gfx->glyph_on[0x21];
 }
 
+static int g_panel_on;
+
+/* With the side panels up, the row keeps half a character (4 dots)
+ * clear of each playfield edge so nothing meets the panel frames. */
+static int g_hud_inset;
+#define HUD_INSET (g_hud_inset ? 4 : 0)
+
+void gfx_set_hud_inset(int on)
+{
+    g_hud_inset = on;
+}
+
 static void hud_row(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, int w)
 {
-    int x = HUD_LEFT;
+    int x = HUD_LEFT + HUD_INSET;
     int left_end;
     int hi_x;
     int spd_w;
@@ -1806,8 +1918,18 @@ static void hud_row(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, int w
     left_end = hud_digits(gfx, text, rgba, w, x, 28);
 
     /* Right group: hiscore field flush with the playfield edge. */
-    hi_x = HUD_RIGHT - 8 * HUD_DIGIT + 1;
+    hi_x = HUD_RIGHT - HUD_INSET - 8 * HUD_DIGIT + 1;
     hud_digits(gfx, text, rgba, w, hi_x, 54);
+    if (g_hud_inset) {
+        /* Panel mode: HI sits against its first digit, not the empty
+         * slots, so the three groups are spaced evenly. */
+        int lead = 0;
+
+        while (lead < 7 && hud_glyph(gfx, text, 54 + lead * 2) < 0) {
+            lead++;
+        }
+        hi_x += lead * HUD_DIGIT;
+    }
     hi_x -= 5 + hud_label_width(gfx, text, 50, 52);
     hud_label(gfx, text, rgba, w, hi_x, 50, 52);
 
@@ -1847,7 +1969,6 @@ static void hud_row(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, int w
 }
 
 
-static int g_panel_on;
 
 /* Gaiji alphabet: digits at 0x21, letters at 0x30. -1 for a space. */
 static int brand_id(char c)
@@ -1973,9 +2094,128 @@ static void credit_text(uint32_t *rgba, int w, int x, int top,
     }
 }
 
+
+/* ---- title effects ------------------------------------------------ */
+
+static uint32_t g_clock; /* host frames, for the title effects */
+
+void gfx_set_clock(uint32_t frame)
+{
+    g_clock = frame;
+}
+
+/* Halo strength 0..256 for a pulse that starts at phase 0 and lasts
+ * GLOW_LEN frames: a quick rise and a slower fall. */
+#define GLOW_PERIOD 300 /* 5 s */
+#define GLOW_LEN    30
+
+static int glow_at(int phase)
+{
+    if (phase < 0 || phase >= GLOW_LEN) return 0;
+    if (phase < 8) return (phase + 1) * 256 / 8;
+    return (GLOW_LEN - phase) * 256 / (GLOW_LEN - 8);
+}
+
+int gfx_glow_level(uint32_t frame)
+{
+    return glow_at((int)(frame % GLOW_PERIOD) - (GLOW_PERIOD - GLOW_LEN));
+}
+
+/* A soft halo around the bright (near-white) letters inside the box
+ * [x0, x1] x [y0, y1], amt 0..256. Pixels within 2 dots of a letter
+ * are tinted towards pale lilac, fading with distance. */
+static int g_halo_r = 2;
+static void halo_rgba(uint32_t *rgba, int w, int h, int x0, int y0, int x1, int y1, int amt);
+
+/* The same halo on the 3x side panels: a 3x wider reach. */
+void gfx_halo(uint32_t *rgba, int w, int h, int x0, int y0, int x1, int y1, int amt)
+{
+    g_halo_r = 6;
+    halo_rgba(rgba, w, h, x0, y0, x1, y1, amt);
+    g_halo_r = 2;
+}
+
+static void halo_rgba(uint32_t *rgba, int w, int h, int x0, int y0, int x1, int y1, int amt)
+{
+    enum { MW = 640, MH = 64 };
+    const int R = g_halo_r;
+    static uint8_t mask[MH][MW];
+    int x;
+    int y;
+
+    if (amt <= 0) return;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 >= w) x1 = w - 1;
+    if (y1 >= h) y1 = h - 1;
+    if (x1 - x0 + 1 > MW || y1 - y0 + 1 > MH || x1 < x0 || y1 < y0) return;
+    for (y = y0; y <= y1; y++) {
+        for (x = x0; x <= x1; x++) {
+            uint32_t p = rgba[(size_t)y * (size_t)w + (size_t)x];
+            mask[y - y0][x - x0] = (p >> 24) >= 200u && ((p >> 16) & 0xFFu) >= 200u &&
+                                   ((p >> 8) & 0xFFu) >= 200u;
+        }
+    }
+    for (y = y0; y <= y1; y++) {
+        for (x = x0; x <= x1; x++) {
+            int best = 9999;
+            int a;
+            int b;
+            uint32_t *p;
+            int r, g, bl, k;
+
+            if (mask[y - y0][x - x0]) continue;
+            for (b = -R; b <= R; b++) {
+                for (a = -R; a <= R; a++) {
+                    int xx = x + a, yy = y + b;
+                    int d;
+
+                    if (xx < x0 || xx > x1 || yy < y0 || yy > y1) continue;
+                    if (!mask[yy - y0][xx - x0]) continue;
+                    d = a * a + b * b;
+                    if (d < best) best = d;
+                }
+            }
+            if (best > R * R) continue;
+            /* Fades with the square of the distance; at most ~40%. */
+            k = amt * ((R + 1) * (R + 1) - best) / ((R + 1) * (R + 1)) * 2 / 5;
+            p = &rgba[(size_t)y * (size_t)w + (size_t)x];
+            r = (int)(*p >> 24);
+            g = (int)((*p >> 16) & 0xFFu);
+            bl = (int)((*p >> 8) & 0xFFu);
+            r += (200 - r) * k / 256;
+            g += (190 - g) * k / 256;
+            bl += (255 - bl) * k / 256;
+            *p = ((uint32_t)r << 24) | ((uint32_t)g << 16) | ((uint32_t)bl << 8) | 0xFFu;
+        }
+    }
+}
+
+/* PUSH TRIGGER: yellow and green from the panel palette, crossfading
+ * every 10 s (a 1 s fade at each change). */
+static uint32_t push_rgb(uint32_t frame)
+{
+    enum { HALF = 600, FADE = 60 };
+    static const int yl[3] = {250, 230, 60};
+    static const int gr[3] = {80, 240, 80};
+    int ph = (int)(frame % (2 * HALF));
+    int m; /* 0 = yellow, 256 = green */
+    int c[3];
+    int i;
+
+    if (ph < HALF - FADE) m = 0;
+    else if (ph < HALF) m = (ph - (HALF - FADE)) * 256 / FADE;
+    else if (ph < 2 * HALF - FADE) m = 256;
+    else m = 256 - (ph - (2 * HALF - FADE)) * 256 / FADE;
+    /* Smoothstep. */
+    m = m * m * (768 - 2 * m) / 65536;
+    for (i = 0; i < 3; i++) c[i] = yl[i] + (gr[i] - yl[i]) * m / 256;
+    return ((uint32_t)c[0] << 24) | ((uint32_t)c[1] << 16) | ((uint32_t)c[2] << 8) | 0xFFu;
+}
+
 /* Title layout, on an 8-dot baseline grid centred on x 320:
  *   logo ink ends at y 222 (right end x 594)
- *   30TH AE    credit font, 6 dots under the logo, level baseline
+ *   30TH ANNIVERSARY EDITION  white, credit size, tracked to the logo ink
  *   PUSH TRIGGER  baseline 264 (moved up 6 dots from the game's row)
  *   (c) COMPILE 1996   baseline 288
  *   (c) 2026 SHMUPSBR  baseline 304
@@ -1987,6 +2227,10 @@ static void credit_text(uint32_t *rgba, int w, int x, int top,
 #define TITLE_TAG_TOP   228
 #define RANK_CREDIT_TOP 386 /* ranking screen: free text row 24 */
 #define TITLE_TAG_RIGHT 586 /* 8 dots clear of the frame at x 595 */
+#define TITLE_LOGO_L    47  /* the logo's ink, left and right */
+#define TITLE_LOGO_R    592
+static void card_line(uint32_t *rgba, int w, int cx, int top, int scale,
+                      const char *s, uint32_t rgb);
 
 /* The art's credit line found dy rows away from its settled place.
  * The title rises into view, so the art can sit anywhere on the page;
@@ -2071,7 +2315,7 @@ static void title_brand(const RbGfx *gfx, uint32_t *rgba, int w, int ranking)
     int width;
     const char *line1 = "@ COMPILE 1996";
     const char *line2 = "@ 2026 SHMUPSBR";
-    const char *tag = "30TH AE";
+    const char *tag = "30TH ANNIVERSARY EDITION";
 
     if (g_panel_on || w < RB_GFX_W) {
         return;
@@ -2101,6 +2345,9 @@ static void title_brand(const RbGfx *gfx, uint32_t *rgba, int w, int ranking)
     if (!found) {
         return;
     }
+    if (dy == 0) {
+        g_title_frame = 1;
+    }
     for (i = 0; i < sizeof BRAND_OFF / sizeof BRAND_OFF[0]; i++) {
         y = BRAND_OFF[i][1] + dy;
         if (y >= 0 && y < RB_GFX_H) {
@@ -2125,7 +2372,16 @@ static void title_brand(const RbGfx *gfx, uint32_t *rgba, int w, int ranking)
                 uint32_t *p = &rgba[(size_t)y * (size_t)w + (size_t)x];
 
                 if (*p != blank) {
-                    rgba[(size_t)(y + TITLE_PUSH_DY) * (size_t)w + (size_t)x] = *p;
+                    /* Recoloured, keeping the glyph's own shading. */
+                    uint32_t q = *p;
+                    uint32_t c = push_rgb(g_clock);
+                    int lum = (int)(((q >> 24) + ((q >> 16) & 0xFFu) + ((q >> 8) & 0xFFu)) / 3u);
+                    uint32_t r = (c >> 24) * (uint32_t)lum / 255u;
+                    uint32_t gg = ((c >> 16) & 0xFFu) * (uint32_t)lum / 255u;
+                    uint32_t b = ((c >> 8) & 0xFFu) * (uint32_t)lum / 255u;
+
+                    rgba[(size_t)(y + TITLE_PUSH_DY) * (size_t)w + (size_t)x] =
+                        (r << 24) | (gg << 16) | (b << 8) | 0xFFu;
                     *p = blank;
                 }
             }
@@ -2157,8 +2413,27 @@ static void title_brand(const RbGfx *gfx, uint32_t *rgba, int w, int ranking)
     credit_text(rgba, w, 320 - width / 2, TITLE_CREDIT1 + dy, line1, ink);
     width = credit_width(line2);
     credit_text(rgba, w, 320 - width / 2, TITLE_CREDIT2 + dy, line2, ink);
-    width = credit_width(tag);
-    credit_text(rgba, w, TITLE_TAG_RIGHT - width + 1, TITLE_TAG_TOP + dy, tag, ink);
+    /* Written in full, in white, across the logo's ink (x 47-592),
+     * as on the panel logo and the intro card. */
+    {
+        /* It follows the palette fade: the white is scaled by how far
+         * the art's own credit ink is from its settled brightness, and
+         * the glow only runs while the title is fully up. */
+        static unsigned full;
+        unsigned m = ink >> 24;
+        unsigned v;
+
+        if (((ink >> 16) & 0xFFu) > m) m = (ink >> 16) & 0xFFu;
+        if (((ink >> 8) & 0xFFu) > m) m = (ink >> 8) & 0xFFu;
+        if (m > full) full = m;
+        v = full ? 255u * m / full : 255u;
+        card_line(rgba, w, (TITLE_LOGO_L + TITLE_LOGO_R + 1) / 2, TITLE_TAG_TOP + 2 + dy, 1, tag,
+                  (v << 24) | (v << 16) | (v << 8) | 0xFFu);
+        if (v >= 255u) {
+            halo_rgba(rgba, w, RB_GFX_H, TITLE_LOGO_L, TITLE_TAG_TOP + 2 + dy - 4, TITLE_LOGO_R,
+                      TITLE_TAG_TOP + 2 + dy + 12 + 3, gfx_glow_level(g_clock));
+        }
+    }
 }
 
 /* Gaiji letters on a text row, as ASCII (left halves only; anything
@@ -2246,11 +2521,32 @@ static void ending_credit(const RbGfx *gfx, const uint8_t *text,
     }
 }
 
-/* Credit font text at an integer scale, centered on cx. */
-static void card_line(uint32_t *rgba, int w, int cx, int top, int scale,
-                      const char *s, uint32_t rgb)
+/* Width of s in credit-font dots at the given letter and word gaps. */
+static int card_width_g(const char *s, int gap, int space)
 {
-    int x = cx - credit_width(s) * scale / 2;
+    int x = 0;
+    int first = 1;
+
+    for (; *s; s++) {
+        const BrandGlyph *g = brand_glyph(*s);
+
+        if (!g) {
+            x += space;
+            first = 1;
+            continue;
+        }
+        x += (first ? 0 : gap) + g->w;
+        first = 0;
+    }
+    return x;
+}
+
+/* Credit font text at an integer scale, centered on cx, with the given
+ * letter and word gaps (in unscaled dots). */
+static void card_line_g(uint32_t *rgba, int w, int cx, int top, int scale,
+                        int gap, int space, const char *s, uint32_t rgb)
+{
+    int x = cx - card_width_g(s, gap, space) * scale / 2;
     int first = 1;
 
     for (; *s; s++) {
@@ -2259,11 +2555,102 @@ static void card_line(uint32_t *rgba, int w, int cx, int top, int scale,
         int c;
 
         if (!g) {
-            x += 7 * scale;
+            x += space * scale;
             first = 1;
             continue;
         }
-        x += (first ? 0 : 2) * scale;
+        x += (first ? 0 : gap) * scale;
+        first = 0;
+        for (r = 0; r < 12 * scale; r++) {
+            int py = top + r;
+
+            if (py < 0 || py >= RB_GFX_H) {
+                continue;
+            }
+            for (c = 0; c < g->w * scale; c++) {
+                int px = x + c;
+
+                if (px >= 0 && px < w && (g->rows[r / scale] & (1u << (c / scale)))) {
+                    rgba[(size_t)py * (size_t)w + (size_t)px] = rgb;
+                }
+            }
+        }
+        x += g->w * scale;
+    }
+}
+
+/* Credit font text at an integer scale, centered on cx. */
+static void card_line(uint32_t *rgba, int w, int cx, int top, int scale,
+                      const char *s, uint32_t rgb)
+{
+    card_line_g(rgba, w, cx, top, scale, 2, 7, s, rgb);
+}
+
+/* A card line set to span [l, r] exactly: the largest whole scale
+ * that fits, then the spare dots shared evenly between the letters,
+ * as the panel logo's subtitle is. */
+static int span_width(const char *s, int scale, int gap, int space)
+{
+    int x = 0;
+    int first = 1;
+
+    for (; *s; s++) {
+        const BrandGlyph *g = brand_glyph(*s);
+
+        if (!g) {
+            x += space * scale;
+            first = 1;
+            continue;
+        }
+        x += ((first ? 0 : gap) + g->w) * scale;
+        first = 0;
+    }
+    return x;
+}
+
+static void card_line_span(uint32_t *rgba, int w, int l, int rr, int top,
+                           const char *s, uint32_t rgb, int maxscale)
+{
+    /* Double size when it fits (tightening letter and word gaps to one
+     * and four dots if needed), else single size; the spare dots are
+     * then shared evenly between the letters. */
+    int n = (int)strlen(s);
+    int avail = rr - l + 1;
+    int scale = 2;
+    int gap = 2;
+    int space = 7;
+    int spare;
+    int x = l;
+    int first = 1;
+    int k;
+
+    if (maxscale < 2) {
+        scale = 1;
+    } else if (span_width(s, 2, 2, 7) > avail) {
+        gap = 1;
+        space = 4;
+        if (span_width(s, 2, 1, 4) > avail) {
+            scale = 1;
+            gap = 2;
+            space = 7;
+        }
+    }
+    spare = avail - span_width(s, scale, gap, space);
+    if (spare < 0) spare = 0;
+    for (k = 0; k < n; k++) {
+        const BrandGlyph *g = brand_glyph(s[k]);
+        int r;
+        int c;
+
+        if (k > 0 && n > 1) {
+            x += spare * k / (n - 1) - spare * (k - 1) / (n - 1);
+        }
+        if (!g) {
+            x += space * scale;
+            first = 1;
+            continue;
+        }
+        x += (first ? 0 : gap) * scale;
         first = 0;
         for (r = 0; r < 12 * scale; r++) {
             int py = top + r;
@@ -2289,12 +2676,50 @@ static uint32_t card_rgb(int r, int g, int b, int level)
            ((uint32_t)(g * level / 16) << 16) | ((uint32_t)(b * level / 16) << 8);
 }
 
-/* 30th AE card shown before the Compile logo, centered where the logo
- * explodes (y 186). level 0..16 fades it; colors are the logo red and
- * the logo screen's pale blue under the Modern grade. */
-void gfx_intro_card(uint32_t *rgba, int w, int h, int level)
+static uint32_t hash32(uint32_t x)
 {
+    x ^= x >> 16; x *= 0x7feb352du; x ^= x >> 15; x *= 0x846ca68bu; x ^= x >> 16;
+    return x;
+}
+
+static void card_px(uint32_t *rgba, int w, int h, int x, int y, int r, int g, int b)
+{
+    if (x >= 0 && y >= 0 && x < w && y < h) {
+        rgba[y * w + x] = 0xFFu | ((uint32_t)(r > 255 ? 255 : r) << 24) |
+                          ((uint32_t)(g > 255 ? 255 : g) << 16) |
+                          ((uint32_t)(b > 255 ? 255 : b) << 8);
+    }
+}
+
+/* 30th AE card shown before the Compile logo, silent. The real title
+ * logo (from SGM1.DAT, 640x400 title frame; NULL falls back to a text
+ * line) is centred at y 186. It forms out of 2x2 particles that fly in
+ * from all sides, hot white cooling to the logo's own colours as they
+ * land; a soft flash marks the moment it is whole. It holds, then
+ * "30TH ANNIVERSARY EDITION" and the credit line slide up from below,
+ * one after the other, and the card fades out. */
+static int ease_out(int num, int den)
+{
+    /* 0..256, quadratic ease-out. */
+    int u;
+
+    if (num <= 0) return 0;
+    if (num >= den) return 256;
+    u = 256 - num * 256 / den;
+    return 256 - u * u / 256;
+}
+
+void gfx_intro_card(uint32_t *rgba, int w, int h, int t, const uint32_t *title)
+{
+    const int sx0 = 45, sy0 = 118, sw = 553, sh = 106;
+    const int dw = 420, dh = sh * 420 / sw;
+    const int lx = 320 - dw / 2, ly = 186 - dh / 2;
+    const int t_sub1 = CARD_FORM + CARD_HOLD1;
+    const int t_sub2 = t_sub1 + CARD_SLIDE;
+    const int t_out = t_sub2 + CARD_SLIDE + CARD_HOLD2;
+    int level = 16;
     int i;
+    int j;
 
     if (!rgba || w < RB_GFX_W || h < RB_GFX_H) {
         return;
@@ -2302,18 +2727,136 @@ void gfx_intro_card(uint32_t *rgba, int w, int h, int level)
     for (i = 0; i < w * h; i++) {
         rgba[i] = 0x000000FFu;
     }
-    if (level <= 0) {
+    if (t < 0) {
         return;
     }
-    if (level > 16) {
-        level = 16;
+    if (t >= t_out) {
+        level = 16 - (t - t_out) * 16 / CARD_OUT;
+        if (level <= 0) {
+            return;
+        }
     }
-    card_line(rgba, w, 320, 186 - 46, 2, "RUDE BREAKER",
-              card_rgb(231, 92, 88, level));
-    card_line(rgba, w, 320, 186 - 2, 1, "30TH ANNIVERSARY EDITION",
-              card_rgb(204, 204, 255, level));
-    card_line(rgba, w, 320, 186 + 22, 1, "BY SHMUPSBR 2026",
-              card_rgb(204, 204, 255, level));
+    if (!title) {
+        card_line(rgba, w, 320, 186 - 46, 2, "RUDE BREAKER",
+                  card_rgb(231, 92, 88, t < CARD_FORM ? t * 16 / CARD_FORM : level));
+    } else if (t >= CARD_FORM) {
+        int flash = t < CARD_FORM + 8 ? (CARD_FORM + 8 - t) * 14 : 0;
+
+        for (j = 0; j < dh; j++) {
+            for (i = 0; i < dw; i++) {
+                uint32_t p = title[(sy0 + j * sh / dh) * 640 + sx0 + i * sw / dw];
+                int r = (int)(p >> 24), g = (int)((p >> 16) & 255), b = (int)((p >> 8) & 255);
+
+                if (r + g + b > 60) {
+                    card_px(rgba, w, h, lx + i, ly + j, (r + flash) * level / 16,
+                            (g + flash) * level / 16, (b + flash) * level / 16);
+                }
+            }
+        }
+    } else {
+        for (j = 0; j < dh; j += 2) {
+            for (i = 0; i < dw; i += 2) {
+                uint32_t p = title[(sy0 + j * sh / dh) * 640 + sx0 + i * sw / dw];
+                int r = (int)(p >> 24), g = (int)((p >> 16) & 255), b = (int)((p >> 8) & 255);
+                uint32_t hsh;
+                int start, dur, e, x, y, sxp, syp, heat, ang;
+
+                if (r + g + b <= 60) {
+                    continue;
+                }
+                hsh = hash32((uint32_t)(j * 1024 + i));
+                /* Each particle leaves at its own time and lands by
+                 * CARD_FORM - 2; the far ones start first. */
+                start = (int)(hsh % 14u);
+                dur = CARD_FORM - 2 - start;
+                if (t < start) {
+                    continue;
+                }
+                e = ease_out(t - start, dur);
+                /* Start point: out along the ray from the centre, pushed
+                 * past the screen edge, with a little sideways scatter. */
+                ang = (int)((hsh >> 8) % 61u) - 30;
+                sxp = 320 + ((lx + i) - 320) * (5 + (int)((hsh >> 16) % 4u)) + ang * 6;
+                syp = 186 + ((ly + j) - 186) * (7 + (int)((hsh >> 20) % 5u)) - ang * 3;
+                x = sxp + ((lx + i) - sxp) * e / 256;
+                y = syp + ((ly + j) - syp) * e / 256;
+                /* Hot while flying, the logo's colour on landing. */
+                heat = 256 - e;
+                r = r + (255 - r) * heat / 256;
+                g = g + (230 - g) * heat / 256;
+                b = b + (180 - b) * heat / 256;
+                if (e < 64) {
+                    r = r * (e + 64) / 128;
+                    g = g * (e + 64) / 128;
+                    b = b * (e + 64) / 128;
+                }
+                card_px(rgba, w, h, x, y, r, g, b);
+                card_px(rgba, w, h, x + 1, y, r, g, b);
+                card_px(rgba, w, h, x, y + 1, r, g, b);
+                card_px(rgba, w, h, x + 1, y + 1, r, g, b);
+            }
+        }
+    }
+    /* Credit lines slide up from below the screen, one after the other:
+     * 30TH ANNIVERSARY EDITION in white across the logo's exact width
+     * (as on the panel logo), then the credit line under it. */
+    {
+        int k;
+        int il = lx;
+        int ir = lx + dw - 1;
+
+        if (title) {
+            int found = 0;
+
+            for (i = 0; i < dw && !found; i++) {
+                for (j = 0; j < dh; j++) {
+                    uint32_t p = title[(sy0 + j * sh / dh) * 640 + sx0 + i * sw / dw];
+
+                    if ((int)(p >> 24) + (int)((p >> 16) & 255) + (int)((p >> 8) & 255) > 60) {
+                        il = lx + i;
+                        found = 1;
+                        break;
+                    }
+                }
+            }
+            found = 0;
+            for (i = dw - 1; i >= 0 && !found; i--) {
+                for (j = 0; j < dh; j++) {
+                    uint32_t p = title[(sy0 + j * sh / dh) * 640 + sx0 + i * sw / dw];
+
+                    if ((int)(p >> 24) + (int)((p >> 16) & 255) + (int)((p >> 8) & 255) > 60) {
+                        ir = lx + i;
+                        found = 1;
+                        break;
+                    }
+                }
+            }
+        }
+        for (k = 0; k < 2; k++) {
+            int t0 = k ? t_sub2 : t_sub1;
+            int ty = ly + dh + (k ? 56 : 12);
+            int e;
+            int y;
+            int lv;
+
+            if (t < t0) {
+                continue;
+            }
+            e = ease_out(t - t0, CARD_SLIDE);
+            y = ty + (h + 20 - ty) * (256 - e) / 256;
+            lv = level * (64 + e * 3 / 4) / 256;
+            if (lv > 16) lv = 16;
+            if (k) {
+                card_line(rgba, w, 320, y, 1, "BY SHMUPSBR 2026", card_rgb(204, 204, 255, lv));
+            } else {
+                card_line_span(rgba, w, il, ir, y, "30TH ANNIVERSARY EDITION",
+                               card_rgb(255, 255, 255, lv), 2);
+                /* One glow once the credit line has landed. */
+                halo_rgba(rgba, w, h, il - 4, y - 4, ir + 4, y + 27,
+                          glow_at(t - (t_sub2 + CARD_SLIDE + 8)) * lv / 16);
+            }
+        }
+    }
 }
 
 static void overlay_text(const RbGfx *gfx, const uint8_t *text, uint32_t *rgba, int w)
@@ -2429,6 +2972,50 @@ static void dim_panel(uint32_t *rgba, int w)
     }
 }
 
+int gfx_title_frame(void)
+{
+    return g_title_frame;
+}
+
+int gfx_sprite_rgba(const RbGfx *gfx, uint8_t slot, int index, uint32_t out[256])
+{
+    const uint8_t *src;
+    int scene;
+    int y;
+    int x;
+
+    if (!gfx || !gfx->bank[slot] || index < 0 ||
+        (uint32_t)(index + 1) * 128u > gfx->blen[slot]) {
+        return 0;
+    }
+    src = gfx->bank[slot] + (size_t)index * 128u;
+    scene = g_modern ? grade_scene(gfx) : -1;
+    for (y = 0; y < 16; y++) {
+        for (x = 0; x < 16; x++) {
+            int byte = y * 2 + (x >> 3);
+            int bit = 7 - (x & 7);
+            int idx = 8;
+            int lv[3];
+            int rgb[3];
+            int ch;
+
+            if (!((src[byte] >> bit) & 1)) {
+                out[y * 16 + x] = 0;
+                continue;
+            }
+            idx |= ((src[32 + byte] >> bit) & 1) | (((src[64 + byte] >> bit) & 1) << 1) |
+                   (((src[96 + byte] >> bit) & 1) << 2);
+            for (ch = 0; ch < 3; ch++) {
+                lv[ch] = dac_level(gfx->pal[idx][ch]);
+            }
+            expand_index(scene, idx, lv[0], lv[1], lv[2], &rgb[0], &rgb[1], &rgb[2]);
+            out[y * 16 + x] = ((uint32_t)rgb[0] << 24) | ((uint32_t)rgb[1] << 16) |
+                              ((uint32_t)rgb[2] << 8) | 0xFFu;
+        }
+    }
+    return 1;
+}
+
 void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
                  const uint8_t *text, uint32_t *rgba, int w, int h,
                  int blank_sides)
@@ -2518,6 +3105,16 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
                  * The grade, when on, replaces level*17 after the DAC sample. */
                 expand_index(scene, (int)idx, lv[0], lv[1], lv[2],
                              &rgb[0], &rgb[1], &rgb[2]);
+                if (g_bullet && gfx->tint[at] && gfx->pix[at] == idx) {
+                    /* Luma of the original colour picks dark, main or
+                     * highlight, so cores stay bright and rims dark. */
+                    int lum = (rgb[0] * 3 + rgb[1] * 6 + rgb[2]) / 10;
+                    const uint8_t *c = k_bullet[g_bullet][lum < 110 ? 1 : lum < 215 ? 0 : 2];
+
+                    rgb[0] = c[0];
+                    rgb[1] = c[1];
+                    rgb[2] = c[2];
+                }
                 px |= (uint32_t)rgb[0] << 24;
                 px |= (uint32_t)rgb[1] << 16;
                 px |= (uint32_t)rgb[2] << 8;
@@ -2539,6 +3136,7 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
     overlay_text(gfx, text, rgba, w);
     /* The ranking table is text drawn over the same title art; it keeps
      * the original look, so the 30th AE credits are left off there. */
+    g_title_frame = 0;
     if (!text_besides_push(text)) {
         title_brand(gfx, rgba, w, 0);
     }

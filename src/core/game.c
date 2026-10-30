@@ -12,6 +12,7 @@
 #include "exepath.h"
 #include "vm.h"
 #include "gfx.h"
+#include "panels.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -34,10 +35,18 @@ static int          g_data_missing;
 static int          g_modern = 1;
 static int          g_training;
 static int          g_rank_on = 1;
+/* Side panels for 16:9 windows (host option, saved). */
+static int          g_panels_on = 1;
+static int          g_bullet_c;     /* 0 ORIGINAL, 1 PINK, 2 LILAC, 3 BLUE, 4 GREEN */
+static const char *const k_bullet_name[5] = {"ORIGINAL", "PINK", "LILAC", "BLUE", "GREEN"};
+static int          g_cfg_9r;      /* settings file has the pr9r defaults */
+/* 1CC on record (saved) and whether this run still counts. */
+static int          g_onecc;
+static int          g_run_ok;
+static int          g_last_clear;
 /* 30th AE intro card before the Compile logo: about 3 s at the
  * game's 30.67 Hz logic rate, 12-frame fades in and out. */
-#define CARD_FRAMES 92
-#define CARD_FADE   12
+#define CARD_FRAMES CARD_TOTAL
 static int          g_card;
 static int          g_card_hold;
 /* Old settings files predate the pr9p defaults (modern palette, ship
@@ -98,6 +107,10 @@ static void load_cfg(const RbGame *g)
     g_modern = 1;
     g_training = 0;
     g_rank_on = 1;
+    g_panels_on = 1;
+    g_bullet_c = 1;
+    g_cfg_9r = 0;
+    g_onecc = 0;
     g_cfg_v9p = 0;
     sys_bind_restore();
     cfg_path(g, path, sizeof path);
@@ -119,6 +132,31 @@ static void load_cfg(const RbGame *g)
             g_rank_on = 1;
         } else if (strncmp(line, "rank=off", 8) == 0) {
             g_rank_on = 0;
+        } else if (strncmp(line, "panels=on", 9) == 0) {
+            g_panels_on = 1;
+        } else if (strncmp(line, "panels=off", 10) == 0) {
+            g_panels_on = 0;
+        } else if (strncmp(line, "bullets=", 8) == 0) {
+            int k;
+
+            for (k = 0; k < 5; k++) {
+                const char *n = k_bullet_name[k];
+                size_t m = strlen(n);
+                char want[16];
+                size_t q;
+
+                for (q = 0; q < m && q < sizeof want - 1; q++) {
+                    want[q] = n[q] == ' ' ? '-' : (char)(n[q] - 'A' + 'a');
+                }
+                want[q] = 0;
+                if (strncmp(line + 8, want, q) == 0 && (line[8 + q] == '\n' || line[8 + q] == '\r' || !line[8 + q])) {
+                    g_bullet_c = k;
+                }
+            }
+        } else if (strncmp(line, "onecc=yes", 9) == 0) {
+            g_onecc = 1;
+        } else if (strncmp(line, "defaults9r=1", 12) == 0) {
+            g_cfg_9r = 1;
         } else if (strncmp(line, "defaults=9q", 11) == 0) {
             g_cfg_v9p = 1;
         } else if (strncmp(line, "defaults=9p", 11) == 0) {
@@ -154,11 +192,26 @@ static int      g_live_prev_lives;
 #define RANK_MAX  (0x9Fu << 8)
 #define RANK_HALF (0x50u << 8)
 static uint32_t g_rank;
+/* Rank rises at 1/3 of the base rate times the multiplier
+ * 1 + 0.01*shot levels + 0.05*sub levels + 0.05*extends gained this
+ * game. g_rank_acc keeps the remainder in 1/300 steps so nothing is
+ * lost to rounding. */
+static uint32_t g_rank_acc;
+static int g_rk_shot, g_rk_sub, g_rk_ext;
+static int g_rk_d9 = -1, g_rk_d6, g_rk_d5, g_rk_lives;
+/* Rank taken away when the sub-weapon was lost; given back on regain. */
+static uint32_t g_rk_subcut;
+static int rank_mul_pct(void)
+{
+    return 100 + 1 * g_rk_shot + 5 * g_rk_sub + 5 * g_rk_ext;
+}
 
 static uint16_t flag_word(void);
 static void set_flag_word(uint16_t f);
 static int speed_index(void);
 static void set_speed(int i);
+
+static void title_prewarm(void);
 
 static void live_park(void)
 {
@@ -323,10 +376,14 @@ static void save_cfg(const RbGame *g)
     if (!fp) {
         return;
     }
-    fprintf(fp, "palette=%s\ntraining=%s\nrank=%s\ndefaults=9q\n",
+    fprintf(fp, "bullets=%s\ndefaults9r=1\n", g_bullet_c == 1 ? "pink" : g_bullet_c == 2 ? "lilac"
+                                 : g_bullet_c == 3 ? "blue" : g_bullet_c == 4 ? "green" : "original");
+    fprintf(fp, "palette=%s\ntraining=%s\nrank=%s\npanels=%s\nonecc=%s\ndefaults=9q\n",
             g_modern ? "modern" : "original",
             g_training ? "on" : "off",
-            g_rank_on ? "on" : "off");
+            g_rank_on ? "on" : "off",
+            g_panels_on ? "on" : "off",
+            g_onecc ? "yes" : "no");
     sys_bind_write(fp);
     fclose(fp);
 }
@@ -549,7 +606,7 @@ static void joy_auto(void)
 static int page_count(void)
 {
     switch (g_page) {
-    case PAGE_GAME:  return 9;
+    case PAGE_GAME:  return 11;
     case PAGE_CTRL:  return 3;
     case PAGE_KEYS:  return 11;
     case PAGE_SOUND: return 7;
@@ -606,6 +663,15 @@ static void change_value(RbGame *g, int dir)
         } else if (g_cursor == 7) {
             /* Host only, saved to the settings file. */
             g_rank_on = !g_rank_on;
+            changed = 1;
+        } else if (g_cursor == 8) {
+            /* Host only, saved to the settings file. */
+            g_panels_on = !g_panels_on;
+            changed = 1;
+        } else if (g_cursor == 9) {
+            /* Host only: recolours enemy bullets, saved to the settings file. */
+            g_bullet_c = (g_bullet_c + (dir < 0 ? 4 : 1)) % 5;
+            gfx_set_bullet_color(g_bullet_c);
             changed = 1;
         }
     } else if (g_page == PAGE_CTRL && g_cursor == 0) {
@@ -673,7 +739,7 @@ static void activate_row(RbGame *g)
         menu_ok();
         return;
     }
-    if (g_page == PAGE_GAME && g_cursor == 8) {
+    if (g_page == PAGE_GAME && g_cursor == 10) {
         enter_page(PAGE_ROOT);
         menu_ok();
         return;
@@ -1140,7 +1206,11 @@ static void host_menu_paint(void)
                    sys_pace_pref_exact());
         paint_line(7, menu_row(4, 7), "RANK", g_rank_on ? "ON" : "OFF",
                    g_rank_on);
-        paint_line(8, menu_row(4, 8), "BACK", NULL, 0);
+        paint_line(8, menu_row(4, 8), "SIDE PANELS", g_panels_on ? "ON" : "OFF",
+                   g_panels_on);
+        paint_line(9, menu_row(4, 9), "BULLET COLOR", k_bullet_name[g_bullet_c],
+                   g_bullet_c != 0);
+        paint_line(10, menu_row(4, 10), "BACK", NULL, 0);
     } else if (g_page == PAGE_CTRL) {
         paint_line(0, menu_row(4, 0), "JOYSTICK", joy_value(), joy_flag());
         paint_line(1, menu_row(4, 1), "DEFINE KEYS", NULL, 0);
@@ -1437,6 +1507,13 @@ void game_init(RbGame *g, const RbDisk *disk)
         g->hiscore = info.hiscore;
     }
     load_cfg(g);
+    if (!g_cfg_9r) {
+        /* pr9r update: BULLET COLOR defaults to PINK, once. */
+        g_bullet_c = 1;
+        g_cfg_9r = 1;
+        save_cfg(g);
+    }
+    gfx_set_bullet_color(g_bullet_c);
     if (g_cfg_v9p != 1) {
         /* One-time move to the pr9p defaults: modern palette and ship
          * select OFF (weapons change in play through the capsules). */
@@ -1453,6 +1530,8 @@ void game_init(RbGame *g, const RbDisk *disk)
     }
     apply_host_options();
     if (!getenv("RUDEBR_STAGE") && !env_on("RUDEBR_NOCARD")) {
+        /* The card shows the real logo, so decode it first. */
+        title_prewarm();
         g_card = CARD_FRAMES;
     }
     g->state = RB_STATE_TITLE;
@@ -1695,15 +1774,395 @@ static int live_diff(void)
     return 2;
 }
 
+/* Rank -> difficulty progression (normal games only). The level in
+ * effect, g_eff, starts on the chosen one; rank reaching that level's
+ * cap moves it up one level with rank back at the new level's start,
+ * and a death drops it back to the chosen level. It is emulated: only
+ * the shot-speed copy and the rank cap/start follow g_eff, while C9
+ * (bonus tables, the 14D0 script compare, the saved setting) keeps the
+ * chosen difficulty. */
+static int g_eff = 2;
+/* VERY HARD chosen: at the rank cap, enemy bullets gain 1% per 20 s
+ * (613 logic frames), up to VH_PCT_MAX. A hit or a death clears it. */
+#define VH_PCT_MAX 25u
+/* 20 s at the 92/3 Hz logic rate: frames * 3 >= 20 * 92. */
+#define VH_PCT_FRAMES3 1840u
+static unsigned g_vh_pct, g_vh_t;
+
+static int eff_ceiling(void)
+{
+    static const int k_ceil[5] = { 2, 3, 3, 4, 4 };
+    return k_ceil[live_diff()];
+}
+
+static void vh_reset(const char *why, unsigned frame)
+{
+    if (g_vh_pct && env_on("RUDEBR_RANKLOG")) {
+        fprintf(stderr, "rank vh-reset f=%u %s +%u%% -> 0\n", frame, why, g_vh_pct);
+    }
+    g_vh_pct = 0;
+    g_vh_t = 0;
+}
+
+static uint32_t rank_start(int i)
+{
+    return i >= 3 ? RANK_HALF : 0u;
+}
+
+static uint32_t rank_cap(int i)
+{
+    return i <= 1 ? RANK_HALF : RANK_MAX;
+}
+
 static void live_reset_match(void)
 {
+    g_eff = live_diff();
     g_live_speed = g_live_menu_speed;
     g_live_dir = g_live_menu_speed >= 2 ? -1 : 1;
-    g_rank = live_diff() >= 3 ? RANK_HALF : 0u;
+    g_rank = rank_start(g_eff);
+    g_vh_pct = g_vh_t = 0;
+    g_rank_acc = 0;
+    g_rk_shot = g_rk_sub = g_rk_ext = 0;
+    g_rk_d9 = -1;
+    g_rk_subcut = 0;
+}
+
+/* ---- side panel data ---------------------------------------------- */
+
+#define PT_SECS 7200
+static uint8_t  g_pt_rank[PT_SECS];
+static int      g_pt_rank_n;
+static uint16_t g_pt_death[256];
+static int      g_pt_death_n;
+static uint16_t g_pt_up[256];
+static int      g_pt_up_n;
+static int      g_lv_flash;
+static uint32_t g_pt_frames;     /* match frames, pause excluded */
+static uint32_t g_pt_base;       /* g_pt_frames when this stage's graph began */
+static char     g_pt_weapon;
+static uint8_t  g_pt_wseg;
+static int      g_pt_stage;
+static int      g_pt_found0;
+static uint16_t g_pt_buttons;
+static uint32_t g_pt_foe0;       /* enemy counts at stage start */
+static uint32_t g_pt_hit0;
+static uint32_t g_pt_fix0;
+
+static void pt_reset(void)
+{
+    g_pt_rank_n = 0;
+    g_pt_death_n = 0;
+    g_pt_up_n = 0;
+    g_lv_flash = 0;
+    g_pt_frames = 0;
+    g_pt_base = 0;
+    g_pt_weapon = 'V';
+    g_pt_wseg = 0x1C;
+    g_pt_stage = 0;
+}
+
+/* Called each live frame. Time runs at the logic rate of 92/3 Hz. */
+static void pt_update(const RbGame *g, int died, uint16_t flags)
+{
+    g_pt_buttons = g->input.buttons;
+    if (flags & 0x0400u) {
+        g_pt_buttons = (uint16_t)(g_pt_buttons | g->input.pad_buttons);
+    }
+    if (g_pt_stage != (int)g->stage) {
+        if (getenv("RUDEBR_FOELOG")) {
+            uint32_t seen;
+            uint32_t hit;
+
+            vm_foe_counts(g_vm, &seen, &hit);
+            fprintf(stderr, "foes: stage %d end at frame %u seen %u hit %u fixed %u / %d\n",
+                    g_pt_stage, (unsigned)g->frame, (unsigned)(seen - g_pt_foe0),
+                    (unsigned)(hit - g_pt_hit0), (unsigned)(vm_fixed_hits(g_vm) - g_pt_fix0),
+                    vm_fixed_total(g_pt_stage == 0 ? 5 : g_pt_stage));
+            vm_foe_dump(g_pt_stage);
+        }
+        g_pt_stage = g->stage;
+        /* A new stage starts a fresh RANK graph (rank itself carries on). */
+        g_pt_rank_n = 0;
+        g_pt_death_n = 0;
+        g_pt_up_n = 0;
+        g_pt_base = g_pt_frames;
+        g_pt_found0 = vm_global_u8(g_vm, 0xD1);
+        vm_foe_counts(g_vm, &g_pt_foe0, &g_pt_hit0);
+        /* The fifth stage runs with stage number 0. */
+        vm_set_foe_stage(g_vm, g->stage == 0 ? 5 : (int)g->stage);
+        g_pt_fix0 = vm_fixed_hits(g_vm);
+    }
+    if (flags & 0x8000u) {
+        return;
+    }
+    g_pt_frames++;
+    {
+        int sec = (int)((g_pt_frames - g_pt_base) * 3u / 92u);
+
+        while (g_pt_rank_n <= sec && g_pt_rank_n < PT_SECS) {
+            g_pt_rank[g_pt_rank_n++] = (uint8_t)(g_rank >> 8);
+        }
+        if (died && g_pt_death_n < 256) {
+            g_pt_death[g_pt_death_n++] = (uint16_t)sec;
+        }
+    }
+}
+
+static int panels_active(const RbGame *g)
+{
+    return g_vm && g_panels_on && g_live && g->state == RB_STATE_PLAY &&
+           !menu_visible() && vm_gfx_active(g_vm) &&
+           (sys_window_wide() || getenv("RUDEBR_PANELSHOT"));
+}
+
+/* The panel logo and side art come from the game's own title screen.
+ * When the title has not been shown (stage select, Training, a quick
+ * restart), a second, silent VM runs the boot chunk from SGM1.DAT up to
+ * the settled title and that frame is taken instead. Nothing it does
+ * reaches the live game: sound and input go through game.c only. */
+static void title_prewarm(void)
+{
+    static int tried;
+    static uint32_t buf[RB_NATIVE_W * RB_NATIVE_H];
+    RbVm *vm = NULL;
+    RbInput in;
+    int held = 0;
+    int f;
+
+    if (tried || panels_have_title()) {
+        return;
+    }
+    tried = 1;
+    if (vm_create(&vm, &g_assets) != 0 || !vm) {
+        return;
+    }
+    vm_reset_boot(vm);
+    vm_set_grade(vm, g_modern);
+    memset(&in, 0, sizeof in);
+    sys_audio_suppress(1);
+    for (f = 0; f < 4000; f++) {
+        vm_set_input(vm, &in);
+        vm_frame(vm);
+        if (!vm_frame_shown(vm)) {
+            continue;
+        }
+        vm_present(vm, buf, RB_NATIVE_W, RB_NATIVE_H);
+        held = gfx_title_frame() ? held + 1 : 0;
+        if (held == 45) {
+            panels_capture_title(buf);
+            break;
+        }
+    }
+    if (!panels_have_title()) {
+        fprintf(stderr, "panels: title art not found in SGM1.DAT\n");
+    }
+    vm_destroy(vm);
+    sys_audio_suppress(0);
+}
+
+static void panels_draw(const RbGame *g, uint32_t *frame)
+{
+    static uint32_t cap[32 * 32];
+    uint32_t tile[256];
+    RbPanelData d;
+    RbVmInfo info;
+    int base;
+    int t;
+    int have = 1;
+    uint32_t *wide = sys_wide_pixels();
+
+    if (!wide) {
+        sys_set_wide(0);
+        return;
+    }
+    title_prewarm();
+    vm_info(g_vm, &info);
+    memset(&d, 0, sizeof d);
+    d.training = g_training;
+    d.rank_on = g_rank_on && !g_training;
+    d.rank_now = (int)(g_rank >> 8);
+    d.rank_mul = rank_mul_pct();
+    d.rank_hist = g_pt_rank;
+    d.rank_n = g_pt_rank_n;
+    d.deaths = g_pt_death;
+    d.death_n = g_pt_death_n;
+    d.ups = g_pt_up;
+    d.up_n = g_pt_up_n;
+    d.level_flash = g_lv_flash;
+    /* Global D8 is the weapon the ship has: 0 VULCAN, 1 MISSILE,
+     * 2 LASER (set by the capsule pickup). */
+    {
+        int w = vm_global_u8(g_vm, 0xD8);
+
+        g_pt_weapon = w == 1 ? 'M' : w == 2 ? 'L' : w == 0 ? 'V' : 0;
+    }
+    d.weapon = g_pt_weapon;
+    /* D5: the ship carries a sub-weapon. A hit while it does takes the
+     * sub-weapon (D5 and D6 to 0) instead of a life. */
+    d.sub_on = vm_global_u8(g_vm, 0xD5) != 0;
+    /* Two separate levels (capsule and power-up natives in the stage
+     * chunks): D6 is the V/M/L sub-weapon level 0..2, raised by a
+     * capsule of the weapon already held and cleared on death; D9 is
+     * the main shot level 0..3, set from the power-up count DE and
+     * lowered by one on death. The level is shared by V/M/L: a capsule
+     * of another colour switches the weapon and keeps D6. */
+    {
+        int lv = vm_global_u8(g_vm, 0xD6);
+        int sh = vm_global_u8(g_vm, 0xD9);
+
+        d.weapon_lv = (lv > 2 ? 2 : lv) + 1;
+        d.shot_lv = (sh > 3 ? 3 : sh) + 1;
+        d.shot_items = vm_global_u8(g_vm, 0xDE);
+    }
+    d.frame = g->frame;
+    base = g_pt_weapon == 'L' ? 126 : g_pt_weapon == 'M' ? 124 : 122;
+    for (t = 0; t < 4 && have; t++) {
+        int idx = base + (t & 1) + (t >> 1) * 16;
+        int x;
+        int y;
+
+        have = gfx_sprite_rgba(vm_gfx(g_vm), g_pt_wseg, idx, tile);
+        for (y = 0; have && y < 16; y++) {
+            for (x = 0; x < 16; x++) {
+                cap[((t >> 1) * 16 + y) * 32 + (t & 1) * 16 + x] = tile[y * 16 + x];
+            }
+        }
+    }
+    d.capsule = have && d.sub_on ? cap : NULL;
+    {
+        /* Medal: the hidden-spot item (script 0x4DE4), 2x2 cells
+         * from 188 on the shared item sheet. */
+        static uint32_t medal[32 * 32];
+        uint32_t cell[256];
+        int k;
+        int ok = 1;
+
+        for (k = 0; k < 4 && ok; k++) {
+            int r;
+
+            ok = gfx_sprite_rgba(vm_gfx(g_vm), 0x1C, 188 + (k & 1) + (k >> 1) * 16, cell);
+            for (r = 0; ok && r < 16; r++) {
+                memcpy(medal + ((k >> 1) * 16 + r) * 32 + (k & 1) * 16, cell + r * 16,
+                       16 * sizeof cell[0]);
+            }
+        }
+        if (ok) {
+            d.medal = medal;
+        }
+    }
+    {
+        /* Player ship: seg 0x1A cells 16/17, 32/33, 48/49 (the still
+         * frame, 2x3 cells) in the current palette, drawn static. */
+        static uint32_t ship[32 * 48];
+        static int ship_ok;
+        uint32_t cell[256];
+        int k;
+
+        static uint32_t tmp[32 * 48];
+        int lit = 0;
+
+        /* Re-decoded every frame into tmp; kept only when the palette
+         * is fully up (no fade), so the icon never goes dark. */
+        for (k = 0; k < 6; k++) {
+            int r;
+
+            if (!gfx_sprite_rgba(vm_gfx(g_vm), 0x1A, 16 + (k & 1) + (k >> 1) * 16, cell)) {
+                break;
+            }
+            for (r = 0; r < 16; r++) {
+                memcpy(tmp + ((k >> 1) * 16 + r) * 32 + (k & 1) * 16, cell + r * 16,
+                       16 * sizeof cell[0]);
+            }
+            if (k == 5) {
+                int q;
+                int best = 0;
+
+                for (q = 0; q < 32 * 48; q++) {
+                    int v = (int)(tmp[q] >> 24) + (int)((tmp[q] >> 16) & 255) +
+                            (int)((tmp[q] >> 8) & 255);
+
+                    if (v > best) best = v;
+                }
+                lit = best > 600;
+            }
+        }
+        if (lit) {
+            memcpy(ship, tmp, sizeof ship);
+            ship_ok = 1;
+        }
+        d.ship = ship_ok ? ship : NULL;
+    }
+    d.lives = vm_global_u8(g_vm, 0xD2);
+    /* Invulnerability: DF counts down once a logic frame. A power-up
+     * item adds 16 (to 128 at most), a respawn sets 96, and the
+     * capsule pickup sets its own value; the ring's full mark is the
+     * value at the latest rise. */
+    {
+        static int prev_df;
+        static int prev_lives = -1;
+        static int prev_sub = -1;
+        static int top;
+        static int respawn;
+        int df = vm_global_u8(g_vm, 0xDF);
+
+        if (df > prev_df) {
+            top = df;
+            /* A hit that only costs the sub-weapon gives 64 too. */
+            respawn = (prev_lives >= 0 && d.lives != prev_lives) ||
+                      (prev_sub == 1 && !d.sub_on);
+        }
+        if (df == 0) {
+            top = 0;
+        }
+        prev_df = df;
+        prev_lives = d.lives;
+        prev_sub = d.sub_on;
+        d.iframe = df;
+        d.iframe_max = top;
+        d.iframe_respawn = respawn;
+    }
+    d.onecc = g_onecc;
+    d.speed = g_live_speed;
+    d.score = info.score;
+    d.hiscore = info.hiscore > info.score ? info.hiscore : info.score;
+    d.stage = g->stage;
+    /* Hit ratio: shootable enemies destroyed out of those that have
+     * appeared so far this stage (see foe_scan in vm.c). */
+    {
+        uint32_t seen;
+        uint32_t hit;
+
+        vm_foe_counts(g_vm, &seen, &hit);
+        d.foes = (int)(seen - g_pt_foe0);
+        d.foes_hit = (int)(hit - g_pt_hit0);
+        /* HIT COUNT / RATIO: the stage's fixed enemies destroyed out of
+         * its fixed total (a death replays a stretch, so cap it). */
+        d.foes_total = vm_fixed_total(g->stage == 0 ? 5 : (int)g->stage);
+        if (d.foes_total > 0) {
+            d.foes_hit = (int)(vm_fixed_hits(g_vm) - g_pt_fix0);
+            if (d.foes_hit > d.foes_total) d.foes_hit = d.foes_total;
+        }
+    }
+    /* Hidden spots counted from the stage's own spawn data; D1 counts
+     * the medals taken this stage. */
+    d.medal_spots = vm_medal_spots(g_vm, g->stage);
+    d.medals = vm_global_u8(g_vm, 0xD1) - g_pt_found0;
+    if (d.medals < 0) d.medals = 0;
+    d.difficulty = g_live && g_rank_on && !g_training ? g_eff : live_diff();
+    d.level_pct = g_live && g_rank_on && !g_training ? (int)g_vh_pct : 0;
+    if (getenv("RUDEBR_DBG_LVPCT")) {
+        /* Test hook: panel layout of the LEVEL extra. */
+        d.level_pct = atoi(getenv("RUDEBR_DBG_LVPCT"));
+    }
+    d.time_cs = g_pt_frames * 300u / 92u;
+    d.buttons = g_pt_buttons;
+    panels_render(wide, frame, &d);
+    sys_set_wide(1);
 }
 
 static void live_update(RbGame *g)
 {
+
     RbVmInfo info;
     uint16_t flags;
     uint16_t btn;
@@ -1722,10 +2181,18 @@ static void live_update(RbGame *g)
     lives = vm_global_u8(g_vm, 0xD2);
     if (on && !g_live) {
         g_live_menu_speed = speed_index();
+        if (getenv("RUDEBR_DBG_DIFF")) {
+            /* Test hook: play as if this difficulty (0..4) was chosen. */
+            int n = atoi(getenv("RUDEBR_DBG_DIFF"));
+            vm_set_global_u8(g_vm, 0xC9, k_c9[n < 0 ? 0 : n > 4 ? 4 : n]);
+        }
         g_live_c9 = vm_global_u8(g_vm, 0xC9);
         g_live_c9_now = g_live_c9;
         if (info.score == 0u) {
             live_reset_match();
+            pt_reset();
+            /* A run from the start, without Training or stage select. */
+            g_run_ok = !g_training && !getenv("RUDEBR_STAGE") && g->stage <= 1;
         }
         g_live = 1;
         g_live_prev_score = info.score;
@@ -1736,6 +2203,23 @@ static void live_update(RbGame *g)
         vm_set_global_u8(g_vm, 0xC9, g_live_c9);
         vm_set_shot_c9(g_vm, 0);
         g_live = 0;
+    }
+    {
+        /* The flag is still up from stage 4 for a few frames after the
+         * stage number turns 5, so wait for it to drop first. */
+        static int armed;
+        int cc = vm_global_u8(g_vm, 0xCC);
+
+        if (g->stage < 5) {
+            armed = 0;
+        } else if (cc == 0) {
+            armed = 1;
+        }
+        g_last_clear = armed && cc != 0;
+    }
+    if (g_run_ok && !g_onecc && g_last_clear && !env_on("RUDEBR_ENDING")) {
+        g_onecc = 1;
+        save_cfg(g);
     }
     if (!g_live) {
         gfx_set_hud_speed(0);
@@ -1763,33 +2247,156 @@ static void live_update(RbGame *g)
     g_live_prev_btn = btn;
     set_speed(g_live_speed);
 
+    if (g_training || (flags & 0x0800u) || (flags & 0x0100u) ||
+        lives > g_live_prev_lives + 1) {
+        /* Training, invincibility, the debug keys, or a continue (the
+         * stock comes back in one go; an extend adds one) end the 1CC
+         * attempt. */
+        g_run_ok = 0;
+    }
+    /* Stage scripts set 0xCC when a stage is cleared; after stage 5,
+     * the last one, the game goes to the ending. */
+    pt_update(g, (flags & 0x8000u) == 0u && lives < g_live_prev_lives, flags);
     if ((flags & 0x8000u) == 0u) {
-        uint32_t cap = live_diff() <= 1 ? RANK_HALF : RANK_MAX;
+        const int prog = g_rank_on && !g_training;
+        uint32_t cap = rank_cap(prog ? g_eff : live_diff());
 
-        if (lives < g_live_prev_lives) {
+        {
+            int d9 = vm_global_u8(g_vm, 0xD9);
+            int d6 = vm_global_u8(g_vm, 0xD6);
+            int d5 = vm_global_u8(g_vm, 0xD5);
+
+            if (g_rk_d9 >= 0) {
+                /* Each level actually gained counts; a capsule that
+                 * only scores or swaps colour does not. */
+                if (d9 > g_rk_d9) {
+                    g_rk_shot += d9 - g_rk_d9;
+                }
+                if (d5 && !g_rk_d5) {
+                    g_rk_sub += 1;
+                } else if (d5 && d6 > g_rk_d6) {
+                    g_rk_sub += d6 - g_rk_d6;
+                }
+                if (lives == g_rk_lives + 1 && info.score > 0u) {
+                    g_rk_ext += 1;
+                }
+                if (!d5 && g_rk_d5) {
+                    /* Sub-weapon lost: rank drops by a third. */
+                    uint32_t cut = g_rank / 3u;
+
+                    g_rank -= cut;
+                    g_rk_subcut += cut;
+                    vh_reset("hit", (unsigned)g->frame);
+                    if (env_on("RUDEBR_RANKLOG")) {
+                        fprintf(stderr, "rank sub-lost f=%u cut=%u.%02u now=%u.%02u\n",
+                                (unsigned)g->frame, (unsigned)(cut >> 8),
+                                (unsigned)((cut & 0xFFu) * 100u / 256u),
+                                (unsigned)(g_rank >> 8),
+                                (unsigned)((g_rank & 0xFFu) * 100u / 256u));
+                    }
+                } else if (d5 && !g_rk_d5 && g_rk_subcut) {
+                    /* Regained: the same amount comes back (capped below). */
+                    g_rank += g_rk_subcut;
+                    if (g_rank > cap) {
+                        g_rank = cap;
+                    }
+                    if (env_on("RUDEBR_RANKLOG")) {
+                        fprintf(stderr, "rank sub-back f=%u add=%u.%02u now=%u.%02u\n",
+                                (unsigned)g->frame, (unsigned)(g_rk_subcut >> 8),
+                                (unsigned)((g_rk_subcut & 0xFFu) * 100u / 256u),
+                                (unsigned)(g_rank >> 8),
+                                (unsigned)((g_rank & 0xFFu) * 100u / 256u));
+                    }
+                    g_rk_subcut = 0;
+                }
+            }
+            g_rk_d9 = d9;
+            g_rk_d6 = d6;
+            g_rk_d5 = d5;
+            g_rk_lives = lives;
+        }
+        if (lives < g_live_prev_lives && prog) {
+            /* A death: back to the chosen level and its starting rank. */
+            if (env_on("RUDEBR_RANKLOG")) {
+                fprintf(stderr, "rank reset f=%u level %d -> %d rank %u -> %u\n",
+                        (unsigned)g->frame, g_eff, live_diff(), (unsigned)(g_rank >> 8),
+                        (unsigned)(rank_start(live_diff()) >> 8));
+            }
+            g_eff = live_diff();
+            g_rank = rank_start(g_eff);
+            g_rank_acc = 0;
+            g_rk_subcut = 0;
+            cap = rank_cap(g_eff);
+            vh_reset("death", (unsigned)g->frame);
+        } else if (lives < g_live_prev_lives) {
             g_rank >>= 1;
         } else {
-            g_rank += RANK_PER_FRAME;
+            uint32_t rise = RANK_PER_FRAME;
+
             if (info.score != g_live_prev_score) {
-                g_rank += RANK_PER_SCORE;
+                rise += RANK_PER_SCORE;
             }
+            if (getenv("RUDEBR_DBG_RANKX")) {
+                /* Test hook: a faster rank climb, to force step-ups. */
+                rise *= (uint32_t)atoi(getenv("RUDEBR_DBG_RANKX"));
+            }
+            g_rank_acc += rise * (uint32_t)rank_mul_pct();
+            g_rank += g_rank_acc / 300u;
+            g_rank_acc %= 300u;
         }
         if (g_rank > cap) {
             g_rank = cap;
         }
+        if (prog && g_rank >= cap && g_eff < eff_ceiling()) {
+            if (env_on("RUDEBR_RANKLOG")) {
+                fprintf(stderr, "rank step-up f=%u level %d -> %d rank %u -> %u\n",
+                        (unsigned)g->frame, g_eff, g_eff + 1, (unsigned)(g_rank >> 8),
+                        (unsigned)(rank_start(g_eff + 1) >> 8));
+            }
+            g_eff++;
+            g_rank = rank_start(g_eff);
+            g_lv_flash = 61;
+            /* The game's own 1000 bonus popup, above the ship. */
+            {
+                int rc = vm_bonus_1000(g_vm, -24);
+
+                if (env_on("RUDEBR_RANKLOG")) {
+                    fprintf(stderr, "rank step-bonus f=%u 1000 %s\n", (unsigned)g->frame,
+                            rc == 0 ? "ok" : "skipped");
+                }
+            }
+            if (g_pt_up_n < 256) {
+                g_pt_up[g_pt_up_n++] = (uint16_t)((g_pt_frames - g_pt_base) * 3u / 92u);
+            }
+            g_rank_acc = 0;
+            g_rk_subcut = 0;
+        }
+        if (prog && (live_diff() == 2 || live_diff() == 4) && g_eff == eff_ceiling() && g_rank >= cap) {
+            if (g_vh_pct < VH_PCT_MAX && ++g_vh_t * 3u >= VH_PCT_FRAMES3) {
+                g_vh_t = 0;
+                g_vh_pct++;
+                if (env_on("RUDEBR_RANKLOG")) {
+                    fprintf(stderr, "rank vh-up f=%u +%u%%\n", (unsigned)g->frame, g_vh_pct);
+                }
+            }
+        } else if (!prog || g_eff != eff_ceiling()) {
+            g_vh_pct = g_vh_t = 0;
+        }
+        if (g_lv_flash > 0) {
+            g_lv_flash--;
+        }
         g_live_prev_score = info.score;
         g_live_prev_lives = lives;
     }
+    vm_set_shot_pct(g_vm, g_vh_pct);
     g_live_c9_now = g_live_c9;
     if (g_rank_on && !g_training) {
         unsigned add = (unsigned)((g_rank >> 8) * RANK_SPAN + 0x4Fu) / 0x9Fu;
-        unsigned c9 = g_live_c9 + add;
+        unsigned base = k_c9[g_eff] > g_live_c9 ? k_c9[g_eff] : g_live_c9;
+        unsigned c9 = base + add;
 
         if (c9 > k_c9[4]) {
             c9 = k_c9[4];
-        }
-        if (c9 < g_live_c9) {
-            c9 = g_live_c9;
         }
         g_live_c9_now = (uint8_t)c9;
     }
@@ -1797,9 +2404,17 @@ static void live_update(RbGame *g)
     vm_set_global_u8(g_vm, 0xC9, g_live_c9);
     vm_set_shot_c9(g_vm, g_live_c9_now != g_live_c9 ? g_live_c9_now : 0u);
     gfx_set_hud_speed(g_live_speed + 1);
+    if (getenv("RUDEBR_DBG_DE") && g->frame == 900u) {
+        /* Test hook: preset the power-up item count once. */
+        vm_set_global_u8(g_vm, 0xDE, (uint8_t)atoi(getenv("RUDEBR_DBG_DE")));
+    }
     if (env_on("RUDEBR_RANKLOG") && (g->frame % 60u) == 0u) {
-        fprintf(stderr, "rank f=%u r=%u.%02u shot_c9=%u c9=%u hits=%u spd=%d lives=%d\n",
-                (unsigned)g->frame, (unsigned)(g_rank >> 8),
+        fprintf(stderr, "wpn f=%u d5=%u d6=%u d9=%u de=%u w=%c\n", (unsigned)g->frame,
+                (unsigned)vm_global_u8(g_vm, 0xD5), (unsigned)vm_global_u8(g_vm, 0xD6),
+                (unsigned)vm_global_u8(g_vm, 0xD9), (unsigned)vm_global_u8(g_vm, 0xDE),
+                g_pt_weapon ? g_pt_weapon : '-');
+        fprintf(stderr, "rank mul=%d lvl=%d f=%u r=%u.%02u shot_c9=%u c9=%u hits=%u spd=%d lives=%d\n",
+                rank_mul_pct(), g_eff, (unsigned)g->frame, (unsigned)(g_rank >> 8),
                 (unsigned)((g_rank & 0xFFu) * 100u / 256u),
                 (unsigned)g_live_c9_now, (unsigned)vm_global_u8(g_vm, 0xC9),
                 vm_shot_c9_hits(g_vm),
@@ -1820,6 +2435,7 @@ void game_update(RbGame *g)
                                       script_buttons_env("RUDEBR_PADSCRIPT",
                                                          g->frame));
     user_buttons = g->input.buttons;
+    gfx_set_clock(g->frame);
     host_menu_input(g, &swallowed);
     apply_host_options();
 
@@ -1830,10 +2446,25 @@ void game_update(RbGame *g)
 
     case RB_STATE_TITLE:
         if (g_vm && g_card > 0) {
-            /* 30th AE card; trigger or Start skips it. The VM waits
-             * until the button is let go, so the same press does not
-             * also skip the Compile logo. */
-            if (btn_pressed(g, RB_BTN_START) || btn_pressed(g, RB_BTN_A)) {
+            if (g_card == CARD_FRAMES && getenv("RUDEBR_AUDIOLOG")) {
+                fprintf(stderr, "card: start at frame %u\n", (unsigned)g->frame);
+            }
+            /* Anniversary card; any key or button skips it straight to
+             * the Compile logo. The VM waits until the button is let go,
+             * so the same press does not also skip the Compile logo.
+             * RUDEBR_SKIPCARD=N fakes an unbound key press at frame N. */
+            const char *sk = getenv("RUDEBR_SKIPCARD");
+            int any = sys_any_press();
+
+            if (sk && (unsigned)atoi(sk) == (unsigned)g->frame) {
+                any = 1;
+            }
+            if (any || btn_pressed(g, 0x0FFFu) ||
+                ((g->input.pad_buttons & ~g->input_prev.pad_buttons) & 0x0FFFu)) {
+                if (getenv("RUDEBR_AUDIOLOG")) {
+                    fprintf(stderr, "card: skipped at frame %u\n",
+                            (unsigned)g->frame);
+                }
                 g_card = 0;
                 g_card_hold = 1;
             } else {
@@ -1841,11 +2472,18 @@ void game_update(RbGame *g)
             }
             g_show_frame = 1;
         } else if (g_vm && g_card_hold) {
-            if (!(g->input.buttons & (RB_BTN_START | RB_BTN_A))) {
+            if (!((g->input.buttons | g->input.pad_buttons) & 0x0FFFu)) {
                 g_card_hold = 0;
             }
             g_show_frame = 1;
         } else if (g_vm) {
+            static int card_logged;
+
+            if (!card_logged && getenv("RUDEBR_AUDIOLOG")) {
+                card_logged = 1;
+                fprintf(stderr, "card: done at frame %u, Compile logo starts\n",
+                        (unsigned)g->frame);
+            }
             step_script(g);
         } else if (btn_pressed(g, RB_BTN_START) || btn_pressed(g, RB_BTN_A)) {
             g->score = 0;
@@ -1972,21 +2610,22 @@ void game_render(const RbGame *g)
             uint32_t *frame = sys_frame_pixels();
 
             if (frame && (g_card > 0 || g_card_hold)) {
-                int done = CARD_FRAMES - g_card;
-                int level = 16;
-
-                if (g_card_hold) {
-                    level = 0;
-                } else if (done < CARD_FADE) {
-                    level = done * 16 / CARD_FADE;
-                } else if (g_card < CARD_FADE) {
-                    level = g_card * 16 / CARD_FADE;
-                }
-                gfx_intro_card(frame, RB_NATIVE_W, RB_NATIVE_H, level);
+                gfx_intro_card(frame, RB_NATIVE_W, RB_NATIVE_H,
+                               g_card_hold ? -1 : CARD_FRAMES - g_card, panels_title_pixels());
                 break;
             }
             if (frame) {
                 vm_present(g_vm, frame, RB_NATIVE_W, RB_NATIVE_H);
+                {
+                    /* Logo and side art for the panels: the title once it
+                     * has settled and faded in. */
+                    static int held;
+
+                    held = gfx_title_frame() && !menu_visible() ? held + 1 : 0;
+                    if (held == 45) {
+                        panels_capture_title(frame);
+                    }
+                }
                 if (sound_page_visible()) {
                     vu_update();
                     vu_draw(frame);
@@ -2058,8 +2697,33 @@ void game_render(const RbGame *g)
     default:
         break;
     }
-    if (g_training && g->state == RB_STATE_PLAY) {
-        sys_draw_text(8, 8, "TRAINING", 0x40FF40FFu);
+    gfx_set_hud_inset(panels_active(g));
+    if (panels_active(g)) {
+        panels_draw(g, sys_frame_pixels());
+    } else {
+        sys_set_wide(0);
+        if (g_training && g->state == RB_STATE_PLAY) {
+            sys_draw_text(8, 8, "TRAINING", 0x40FF40FFu);
+        }
+    }
+    {
+        /* Headless check of the wide layout: RUDEBR_PANELSHOT=path dumps
+         * the 1920x1080 frame at RUDEBR_SHOT_FRAME. */
+        const char *ps = getenv("RUDEBR_PANELSHOT");
+        const char *at = getenv("RUDEBR_SHOT_FRAME");
+        static int psaved;
+
+        if (ps && ps[0] && !psaved && at && g->frame >= strtoul(at, NULL, 10) &&
+            panels_active(g)) {
+            FILE *fp = fopen(ps, "wb");
+
+            if (fp) {
+                fwrite(sys_wide_pixels(), 4, (size_t)RB_WIDE_W * RB_WIDE_H, fp);
+                fclose(fp);
+                fprintf(stderr, "panelshot %s\n", ps);
+                psaved = 1;
+            }
+        }
     }
     if (menu_visible() || getenv("RUDEBR_SHOT_FRAME")) {
         const char *shot = getenv("RUDEBR_SHOT");
@@ -2092,3 +2756,4 @@ void game_render(const RbGame *g)
         }
     }
 }
+

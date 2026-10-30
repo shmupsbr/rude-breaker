@@ -68,6 +68,12 @@ struct RbVm {
     int boot;
     int view_chunk;
     uint32_t spawns;
+    uint8_t foe[256];      /* 1 counted enemy, 2 counted and destroyed */
+    uint32_t foes;
+    uint32_t foes_hit;
+    uint32_t fixed_hit; /* of those, from the stage's fixed origins */
+    int foe_stage;
+    uint32_t score0;       /* score at the start of the entity scan */
     uint32_t step_faults;
     uint32_t op_miss;
     uint32_t nat_miss;
@@ -98,7 +104,12 @@ struct RbVm {
     /* Host rank: value enemy shots copy in place of byte C9 at spawn.
      * 0 = no rank, shots read C9 itself. */
     uint8_t shot_c9;
+    uint8_t shot_pct;      /* extra enemy bullet speed, percent */
+    uint16_t bp_type[256];
+    int16_t bp_x[256], bp_y[256];
+    int16_t bp_ax[256], bp_ay[256]; /* remainder, 1/100 px */
     unsigned shot_hits;
+    uint16_t nat_ip_dbg; /* entry of the running native routine (logs) */
     /* Training medal blink, counts 0x4E draws. Host only. */
     unsigned medal_blink;
     /* Set when native 0x9213 registers a score. Training never sets it. */
@@ -222,9 +233,77 @@ static uint16_t rd16(const RbVm *vm, int ent, uint16_t ip)
     return read_u16_le(p + ip);
 }
 
+
+/* RUDEBR_DIFFLOG: every distinct place that reads the difficulty bytes
+ * C9 / B2, logged once (research aid). */
+static void diff_note(const char *kind, unsigned origin, unsigned ip, unsigned field,
+                      unsigned a, unsigned b)
+{
+    static uint32_t seen[512];
+    static int n;
+    uint32_t key = ((uint32_t)ip << 12) ^ ((uint32_t)origin << 4) ^ (uint32_t)(kind[0] + kind[1]);
+    int i;
+
+    if (!getenv("RUDEBR_DIFFLOG")) {
+        return;
+    }
+    for (i = 0; i < n; i++) {
+        if (seen[i] == key) return;
+    }
+    if (n < 512) seen[n++] = key;
+    fprintf(stderr, "diffref %s origin=%04X ip=%04X g=%02X a=%02X b=%02X\n", kind, origin, ip,
+            field, a, b);
+}
+
+/* HIT COUNT's fixed stage totals. The enemies a stage script places
+ * itself come from the same spawn origins in the same numbers on every
+ * play; streams, shot spawners and rank-driven extras do not. These
+ * origins (one list per stage, 0-terminated) were measured over seven
+ * full five-stage runs with different rank, lives and starting stage,
+ * keeping only origins whose count never changed. */
+static const uint16_t k_fixed_org[5][40] = {
+    /* stage 1: 369 */
+    {0x06E1, 0x0C3C, 0x0CED, 0x0E22, 0x0EFF, 0x15A4, 0x187B, 0x1B2A, 0x1C1A, 0x1ED0, 0x2FA0, 0x31B2, 0x3376, 0x353A, 0x36E0, 0x9C1F, 0x9CF9, 0x9D75, 0xA16B, 0xA37A, 0xA4C4, 0xA60E, 0xA68E, 0},
+    /* stage 2: 315 */
+    {0x0C3C, 0x0CED, 0x0EFF, 0x1085, 0x14D0, 0x15A4, 0x1740, 0x187B, 0x1B2A, 0x2FA0, 0x31B2, 0x3376, 0x353A, 0x36E0, 0x4848, 0x8E9F, 0x8F48, 0x91FC, 0x94DD, 0x9CD8, 0x9DB0, 0x9E70, 0x9F30, 0xA02E, 0xA12C, 0xA27A, 0xA3C3, 0xA477, 0xA481, 0xA535, 0xA53F, 0},
+    /* stage 3: 128 */
+    {0x0EFF, 0x107C, 0x1085, 0x1235, 0x1356, 0x15A4, 0x187B, 0x1960, 0x2302, 0x2408, 0x2FA0, 0x31B2, 0x3376, 0x353A, 0x36E0, 0x8DA9, 0x8E92, 0x8F82, 0x9072, 0x916A, 0x933E, 0},
+    /* stage 4: 205 */
+    {0x07BA, 0x0E22, 0x0EFF, 0x107C, 0x1085, 0x1235, 0x1353, 0x1356, 0x14D0, 0x15A4, 0x1740, 0x187B, 0x1960, 0x1B2A, 0x1C1A, 0x1ED0, 0x2128, 0x2FA0, 0x31B2, 0x3376, 0x353A, 0x36E0, 0x9B5B, 0x9C9D, 0x9E4E, 0x9FFF, 0xA096, 0xA12D, 0xA29A, 0},
+    /* stage 5: 46 */
+    {0x15A4, 0x1B2A, 0x1ED0, 0x2FA0, 0x31B2, 0x3376, 0x353A, 0x36E0, 0x8490, 0x864D, 0x8722, 0x882A, 0x895E, 0x92BC, 0x95DC, 0x96F0, 0x9804, 0x9A22, 0}
+};
+static const int k_fixed_total[5] = {369, 315, 128, 205, 46};
+
+static int fixed_org(int stage, uint16_t org)
+{
+    int i;
+
+    if (stage < 1 || stage > 5) return 0;
+    for (i = 0; k_fixed_org[stage - 1][i]; i++) {
+        if (k_fixed_org[stage - 1][i] == org) return 1;
+    }
+    return 0;
+}
+
+int vm_fixed_total(int stage)
+{
+    return stage >= 1 && stage <= 5 ? k_fixed_total[stage - 1] : 0;
+}
+
 static void clear_slot(RbVm *vm, int i)
 {
+    /* Destroyed: either it went through the dying state (0x0400; its
+     * points were paid when it was hit) or it was removed in a frame
+     * that paid points. One that leaves the screen pays nothing. */
+    if (vm->foe[i] == 1 && ((eu16(vm, i, 0) & 0x0400u) ||
+        ((uint32_t)gu16(vm, 0x8E) | ((uint32_t)gu16(vm, 0x90) << 16)) != vm->score0)) {
+        vm->foe[i] = 2;
+        vm->foes_hit++;
+        if (fixed_org(vm->foe_stage, vm->origin[i])) vm->fixed_hit++;
+    }
     memset(slot_ptr(vm, i), 0, ENT_STR);
+    vm->foe[i] = 0;
     vm->mode[i] = MODE_FETCH;
     vm->origin[i] = 0;
     vm->script_entered[i] = 0;
@@ -890,6 +969,10 @@ static void one_subop(RbVm *vm, int script, int target, uint16_t *di)
         {
             uint8_t gv = vm->g[b];
 
+            if (b == 0xC9u || b == 0xB2u) {
+                diff_note("ld8", vm->origin[target], *di, b, a, alu);
+            }
+
             /* Shot spawn (08 33 00 C9): field 0x33 sets the bullet
              * speed from the difficulty byte. Rank feeds this copy
              * only; C9 itself keeps the chosen difficulty, so the
@@ -1230,6 +1313,9 @@ static int mem_read(RbVm *vm, int ent, int seg, uint16_t addr, int is_byte, uint
         *out = 0;
         return -1;
     }
+    if (rw == vm->g && (off == 0xC9u || off == 0xB2u || (!is_byte && (off == 0xC8u || off == 0xB1u)))) {
+        diff_note("x86", vm->origin[ent >= 0 && ent < ENT_N ? ent : 0], vm->nat_ip_dbg, off, is_byte, 0);
+    }
     if (is_byte) {
         *out = p[off];
         return 0;
@@ -1388,6 +1474,7 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
     if (!cs) {
         return;
     }
+    vm->nat_ip_dbg = ip0;
     /* Ranking qualify at 0x91AF. The caller treats E0 >= 10 as "this
      * run does not enter the table" and jumps back to the title, so
      * name entry never starts. 0x9213 writes the score into the rank
@@ -3230,6 +3317,13 @@ static void run_fetch(RbVm *vm, int ent)
             uint16_t lhs = vm->g[field];
             uint16_t rhs;
 
+            if (field == 0xC9u || field == 0xB2u ||
+                (op == 0x27 && (rd8(vm, ent, (uint16_t)(di + 2u)) == 0xC9u ||
+                                rd8(vm, ent, (uint16_t)(di + 2u)) == 0xB2u))) {
+                diff_note("cmp", vm->origin[ent], di, field, cop,
+                          rd8(vm, ent, (uint16_t)(di + 2u)));
+            }
+
             if (op == 0x27) {
                 rhs = vm->g[rd8(vm, ent, (uint16_t)(di + 2u))];
             } else {
@@ -3632,6 +3726,220 @@ static void run_fetch(RbVm *vm, int ent)
     vm->step_faults++;
 }
 
+/* Hit ratio. Player shots test mask 0x0060, so a slot whose type has
+ * 0x0020 or 0x0040 can be shot; 0x0080 marks enemy bullets and 0x0010
+ * items (they test the ship, mask 0x0001). A shot target raises 0x0400
+ * when it is destroyed; one that leaves the screen is cleared without
+ * it. */
+static int foe_excluded(const RbVm *vm, int i, uint16_t t)
+{
+    /* Items (0x0010), the hidden spots (script 0x4DE4) and shootable
+     * bullets (0x0100 while alive) are not enemies. */
+    return (t & 0x0010u) || vm->origin[i] == 0x4DE4u ||
+           ((t & 0x0100u) && !(t & 0x0400u));
+}
+
+static uint16_t g_foe_org[65536];
+
+void vm_foe_dump(int stage)
+{
+    int o;
+
+    for (o = 0; o < 65536; o++) {
+        if (g_foe_org[o]) fprintf(stderr, "foeorg %d %04X %u\n", stage, o, g_foe_org[o]);
+    }
+    memset(g_foe_org, 0, sizeof g_foe_org);
+}
+
+/* Extra enemy bullet speed: each enemy bullet (type 0x0080) moves an
+ * extra pct% of its own per-frame step. Teleports (step > 24 px) and
+ * reused slots are skipped. */
+static void bullet_pct(RbVm *vm)
+{
+    int i;
+
+    for (i = 0; i < ENT_N; i++) {
+        uint16_t t = eu16(vm, i, 0);
+        int16_t x = (int16_t)eu16(vm, i, 0x22), y = (int16_t)eu16(vm, i, 0x24);
+
+        if (!(t & 0x0080u)) {
+            vm->bp_type[i] = 0;
+            continue;
+        }
+        if (vm->shot_pct && vm->bp_type[i] == t) {
+            int dx = x - vm->bp_x[i], dy = y - vm->bp_y[i];
+
+            if (dx >= -24 && dx <= 24 && dy >= -24 && dy <= 24) {
+                int ex = dx * vm->shot_pct + vm->bp_ax[i];
+                int ey = dy * vm->shot_pct + vm->bp_ay[i];
+                x = (int16_t)(x + ex / 100);
+                y = (int16_t)(y + ey / 100);
+                vm->bp_ax[i] = (int16_t)(ex % 100);
+                vm->bp_ay[i] = (int16_t)(ey % 100);
+                su16(vm, i, 0x22, (uint16_t)x);
+                su16(vm, i, 0x24, (uint16_t)y);
+            }
+        } else {
+            vm->bp_ax[i] = vm->bp_ay[i] = 0;
+        }
+        vm->bp_type[i] = t;
+        vm->bp_x[i] = x;
+        vm->bp_y[i] = y;
+    }
+}
+
+/* Starts a stage-chunk script at ip as a new object above the ship. */
+static int spawn_at_ship(RbVm *vm, uint16_t ip, uint16_t typ, int dy)
+{
+    int i;
+    int c = -1;
+    int slot;
+
+    if (!vm) {
+        return -1;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        if (eu16(vm, i, 0) != 0 && vm->cof[i] >= 2u && vm->cof[i] <= 6u) {
+            c = vm->cof[i];
+            break;
+        }
+    }
+    if (c < 0 || !vm->chunk[c] || ip >= vm->clen[c]) {
+        return -1;
+    }
+    slot = alloc_back(vm);
+    if (slot < 0) {
+        return -1;
+    }
+    su16(vm, slot, 0, (uint16_t)(eu16(vm, slot, 0) | typ));
+    su16(vm, slot, 8, ip);
+    su16(vm, slot, 0x22, gu16(vm, 0x96));
+    su16(vm, slot, 0x24, (uint16_t)((int16_t)gu16(vm, 0x98) + dy));
+    vm->cof[slot] = (uint8_t)c;
+    vm->origin[slot] = ip;
+    vm->mode[slot] = MODE_FETCH;
+    return slot;
+}
+
+/* The game's own 1000-point bonus, as an item pickup pays it: the
+ * score popup 0x43E4 (type 0x9000) and the item tail 0x4DA8, which adds
+ * 1000 to the score and turns that popup into the "1000" sprite at
+ * globals 0x9A/0x9C. Both are the same bytes in every stage chunk;
+ * they are checked before use. Returns 0 when spawned. */
+int vm_bonus_1000(RbVm *vm, int dy)
+{
+    static const uint8_t k_tail[] = {0x2C, 0x8E, 0x06, 0xE8, 0x03, 0x2C, 0x90, 0x0A, 0x00, 0x00,
+                                     0x22, 0x00, 0x10};
+    static const uint8_t k_pop[] = {0x20, 0x02, 0x00, 0x14, 0x10, 0x00, 0x02, 0x28};
+    int i;
+    int c = -1;
+
+    if (!vm) {
+        return -1;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        if (eu16(vm, i, 0) != 0 && vm->cof[i] >= 2u && vm->cof[i] <= 6u) {
+            c = vm->cof[i];
+            break;
+        }
+    }
+    if (c < 0 || !vm->chunk[c] || vm->clen[c] < 0x4E00u ||
+        memcmp(vm->chunk[c] + 0x4DA8u, k_tail, sizeof k_tail) != 0 ||
+        memcmp(vm->chunk[c] + 0x43E4u, k_pop, sizeof k_pop) != 0) {
+        return -1;
+    }
+    sgu16(vm, 0x9A, gu16(vm, 0x96));
+    sgu16(vm, 0x9C, (uint16_t)((int16_t)gu16(vm, 0x98) + dy));
+    if (spawn_at_ship(vm, 0x43E4u, 0x9000u, dy) < 0) {
+        return -1;
+    }
+    /* Lower slot: the tail runs first, as it does right after the
+     * item's own spawn. */
+    return spawn_at_ship(vm, 0x4DA8u, 0x8000u, dy) < 0 ? -1 : 0;
+}
+
+void vm_set_shot_pct(RbVm *vm, unsigned pct)
+{
+    if (vm) {
+        vm->shot_pct = (uint8_t)(pct > 100u ? 100u : pct);
+    }
+}
+
+static void foe_scan(RbVm *vm)
+{
+    int i;
+
+    for (i = 0; i < ENT_N; i++) {
+        uint16_t t = eu16(vm, i, 0);
+
+        if (!t || vm->foe[i] == 3) {
+            continue;
+        }
+        if (foe_excluded(vm, i, t)) {
+            if (vm->foe[i]) {
+                vm->foes--;
+                if (vm->foe[i] == 2) {
+                    vm->foes_hit--;
+                    if (fixed_org(vm->foe_stage, vm->origin[i])) vm->fixed_hit--;
+                }
+            }
+            vm->foe[i] = 3;
+            continue;
+        }
+        if (!vm->foe[i] && (t & 0x0060u) && !(t & 0x0080u) && !(t & 0x0400u)) {
+            vm->foe[i] = 1;
+            vm->foes++;
+            g_foe_org[vm->origin[i]]++;
+        }
+        if (vm->foe[i] == 1 && (t & 0x0400u)) {
+            vm->foe[i] = 2;
+            vm->foes_hit++;
+            if (fixed_org(vm->foe_stage, vm->origin[i])) vm->fixed_hit++;
+        }
+    }
+}
+
+/* Hidden spots a stage places: its chunk's spawn ops (0x15) that start
+ * the hidden-spot script 0x4DE4. */
+int vm_medal_spots(const RbVm *vm, int stage)
+{
+    const uint8_t *c;
+    uint32_t n;
+    uint32_t k;
+    int spots = 0;
+
+    if (!vm || stage < 1 || stage > 5 || stage + 1 >= CHUNK_N) {
+        return -1;
+    }
+    c = vm->chunk[stage + 1];
+    n = vm->clen[stage + 1];
+    if (!c) {
+        return -1;
+    }
+    for (k = 0; k + 2 < n; k++) {
+        if (c[k] == 0x15 && c[k + 1] == 0xE4 && c[k + 2] == 0x4D) {
+            spots++;
+        }
+    }
+    return spots;
+}
+
+void vm_set_foe_stage(RbVm *vm, int stage)
+{
+    if (vm) vm->foe_stage = stage;
+}
+
+uint32_t vm_fixed_hits(const RbVm *vm)
+{
+    return vm ? vm->fixed_hit : 0;
+}
+
+void vm_foe_counts(const RbVm *vm, uint32_t *seen, uint32_t *hit)
+{
+    *seen = vm ? vm->foes : 0;
+    *hit = vm ? vm->foes_hit : 0;
+}
+
 static void run_entity(RbVm *vm, int ent)
 {
     if (eu16(vm, ent, 0) == 0) {
@@ -3774,6 +4082,7 @@ void vm_reset_boot(RbVm *vm)
     memset(vm->vars, 0, sizeof vm->vars);
     memset(vm->mode, 0, sizeof vm->mode);
     memset(vm->origin, 0, sizeof vm->origin);
+    memset(vm->foe, 0, sizeof vm->foe);
     memset(vm->script_entered, 0, sizeof vm->script_entered);
     vm->disp_al = 0;
     vm->spawns = 0;
@@ -3852,6 +4161,7 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
     memset(vm->vars, 0, sizeof vm->vars);
     memset(vm->mode, 0, sizeof vm->mode);
     memset(vm->origin, 0, sizeof vm->origin);
+    memset(vm->foe, 0, sizeof vm->foe);
     memset(vm->script_entered, 0, sizeof vm->script_entered);
     vm->disp_al = 0;
     vm->spawns = 0;
@@ -4675,9 +4985,12 @@ void vm_frame(RbVm *vm)
      * shift 0 and dropped the title overlays. run_entity sets 2 on
      * the first entry only. */
     debug_hud(vm);
+    vm->score0 = (uint32_t)gu16(vm, 0x8E) | ((uint32_t)gu16(vm, 0x90) << 16);
     for (i = 0; i < ENT_N; i++) {
         run_entity(vm, i);
     }
+    bullet_pct(vm);
+    foe_scan(vm);
     /* Frame loop 0x0978 / 0x09CE. 0x5EF5 is the timer wait. 0x0FB9
      * copies the scroll speed into [bp+0x84] on a present iteration.
      * Map-locked enemies add that word to Y. The GDC register writes
@@ -4849,6 +5162,11 @@ int vm_take_stage_gap(RbVm *vm)
     gap = vm->stage_gap;
     vm->stage_gap = 0;
     return gap;
+}
+
+const RbGfx *vm_gfx(const RbVm *vm)
+{
+    return vm ? vm->gfx : NULL;
 }
 
 int vm_gfx_active(const RbVm *vm)
