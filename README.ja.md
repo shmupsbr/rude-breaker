@@ -29,7 +29,7 @@
 ### プレイ用パッケージの作り方（Windows）
 1. ゲームを正規に入手してください。例：[プロジェクトEGG](https://www.amusement-center.com/)、またはお手持ちの *ディスクステーション Vol.10* のディスク。
 2. Rude Breaker のディスクから次のファイルを取り出します：`SGM1.DAT`、`SONG.DAT`、`FPLAY.COM`。
-3. このリポジトリの `releases/RudeBreaker30thAE-PC-pr9p.zip` をダウンロード（または `rudebreaker.exe` を自分でビルド）して展開し、ゲームファイルを加えて次のようなフォルダにします：
+3. このリポジトリの `releases/RudeBreaker-PC-pr9p.zip` をダウンロード（または `rudebreaker.exe` を自分でビルド）して展開し、ゲームファイルを加えて次のようなフォルダにします：
    ```
    Rude Breaker PC/
      rudebreaker.exe
@@ -43,7 +43,7 @@
 必要なのはこの3つのファイルだけです。BIOSや音源ROMなど、ほかのファイルは要りません。音楽はYM2203のエミュレーションで鳴らしており、ROMは不要です。
 
 ### Linux
-Linux x86_64版は `releases/RudeBreaker30thAE-Linux-pr9p.zip` にあります。`libSDL2-2.0.so.0` を同梱しており、glibc 2.17以降のほとんどのディストリビューションで動作します（X11またはWayland、PulseAudio・PipeWire・ALSA）。
+Linux x86_64版は `releases/RudeBreaker-Linux-pr9p.zip` にあります。`libSDL2-2.0.so.0` を同梱しており、glibc 2.17以降のほとんどのディストリビューションで動作します（X11またはWayland、PulseAudio・PipeWire・ALSA）。
 
 1. 展開して同じゲームファイルを加え、次のようなフォルダにします：
    ```

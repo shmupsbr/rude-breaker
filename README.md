@@ -29,7 +29,7 @@ You must supply these files from **your own legal copy** of the game.
 ### Building the play package
 1. Get the game legally, for example from [Project EGG](https://www.amusement-center.com/), or from your own *Disc Station Vol. 10* disc.
 2. Extract these files from the Rude Breaker disk: `SGM1.DAT`, `SONG.DAT` and `FPLAY.COM`.
-3. Download `releases/RudeBreaker30thAE-PC-pr9p.zip` from this repository (or build `rudebreaker.exe` yourself), unzip it, and add the game files so the folder looks like this:
+3. Download `releases/RudeBreaker-PC-pr9p.zip` from this repository (or build `rudebreaker.exe` yourself), unzip it, and add the game files so the folder looks like this:
    ```
    Rude Breaker PC/
      rudebreaker.exe
@@ -43,7 +43,7 @@ You must supply these files from **your own legal copy** of the game.
 These three files are all you need. No other file (BIOS, sound ROM or the like) is required: the music uses YM2203 emulation, which needs no ROM.
 
 ### Linux
-A Linux x86_64 build is in `releases/RudeBreaker30thAE-Linux-pr9p.zip`. It ships its own `libSDL2-2.0.so.0` and runs on most distributions with glibc 2.17 or newer (X11 or Wayland; PulseAudio, PipeWire or ALSA).
+A Linux x86_64 build is in `releases/RudeBreaker-Linux-pr9p.zip`. It ships its own `libSDL2-2.0.so.0` and runs on most distributions with glibc 2.17 or newer (X11 or Wayland; PulseAudio, PipeWire or ALSA).
 
 1. Unzip it and add the same game files, so the folder looks like this:
    ```
@@ -100,7 +100,7 @@ Você precisa tirar esses arquivos da **sua própria cópia legal** do jogo.
 ### Como montar o pacote pra jogar
 1. Consiga o jogo legalmente, por exemplo na [Project EGG](https://www.amusement-center.com/) ou no seu próprio disco da *Disc Station Vol. 10*.
 2. Extraia estes arquivos do disco do Rude Breaker: `SGM1.DAT`, `SONG.DAT` e `FPLAY.COM`.
-3. Baixe o `releases/RudeBreaker30thAE-PC-pr9p.zip` deste repositório (ou compile o `rudebreaker.exe`), descompacte e coloque os arquivos do jogo junto, deixando a pasta assim:
+3. Baixe o `releases/RudeBreaker-PC-pr9p.zip` deste repositório (ou compile o `rudebreaker.exe`), descompacte e coloque os arquivos do jogo junto, deixando a pasta assim:
    ```
    Rude Breaker PC/
      rudebreaker.exe
@@ -114,7 +114,7 @@ Você precisa tirar esses arquivos da **sua própria cópia legal** do jogo.
 Só esses três arquivos são necessários. Não precisa de nenhum outro (BIOS, ROM de som ou parecido): a música usa emulação do YM2203, que não precisa de ROM.
 
 ### Linux
-Tem uma versão pra Linux x86_64 em `releases/RudeBreaker30thAE-Linux-pr9p.zip`. Ela já vem com a própria `libSDL2-2.0.so.0` e roda na maioria das distribuições com glibc 2.17 ou mais nova (X11 ou Wayland; PulseAudio, PipeWire ou ALSA).
+Tem uma versão pra Linux x86_64 em `releases/RudeBreaker-Linux-pr9p.zip`. Ela já vem com a própria `libSDL2-2.0.so.0` e roda na maioria das distribuições com glibc 2.17 ou mais nova (X11 ou Wayland; PulseAudio, PipeWire ou ALSA).
 
 1. Descompacte e coloque os mesmos arquivos do jogo, deixando a pasta assim:
    ```
