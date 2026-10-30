@@ -1,4 +1,4 @@
-# Rude Breaker — PC port (engine only)
+# Rude Breaker 30th AE — PC port (engine only)
 
 🇬🇧 [English](README.md#english) · 🇧🇷 [Português](README.md#português) · 🇯🇵 [日本語](README.ja.md)
 
@@ -6,7 +6,17 @@
 
 ## English
 
-An unofficial PC (Windows and Linux) port of **Rude Breaker**, the vertical shooter by Compile released on *Disc Station Vol. 10* (PC-98, 1996). The original x86 game code runs inside an interpreter with a modern SDL2 host: vsync, gamepad support, remappable keys, a sound test with a VU meter, Training Mode, a saved hi-score table and more. The music is the original driver playing on an emulated YM2203, the PC-98 FM sound chip. See `docs/MANUAL.md`.
+**Rude Breaker 30th AE** (30th Anniversary Edition) celebrates 30 years since the game's release on April 5, 1996. It is an unofficial PC (Windows and Linux) port of **Rude Breaker**, the vertical shooter by Compile released on *Disc Station Vol. 10* (PC-98, 1996). The original x86 game code runs inside an interpreter with a modern SDL2 host: vsync, gamepad support, remappable keys, a sound test with a VU meter, Training Mode, a saved hi-score table, an in-game SPEED button with a speed readout, an optional Zanac-style RANK system and more. The music is the original driver playing on an emulated YM2203, the PC-98 FM sound chip. See `docs/MANUAL.md`.
+
+### New in 30th AE
+- **SPEED button** (C / Ctrl, pad Y): changes the ship's speed during the game, cycling LOW / MID / MAX / MID / LOW. Each game starts at MID by default, or at the MOVE SPEED chosen in the menu. The top bar shows it as `SPD LOW`, `SPD MID` or `SPD MAX`.
+- **RANK** (GAMEPLAY menu, ON by default): a Zanac-style rank. It rises while you survive and score, halves when you lose a life, and speeds up enemy bullets (never slower than the chosen difficulty). Bonuses still follow the chosen difficulty. On VERY EASY and EASY rank only goes half way up; on HARD and VERY HARD it starts half way up. OFF plays exactly like the original.
+- **MODERN palette** is now the default.
+- **Weapon change during the game** (SHIP SELECT OFF) is now the default: pick up V, L or M capsules to switch weapon.
+- **Escape** pauses only during a game.
+- The final boss's homing shot now points its trail in the direction it flies, as in the original.
+- A short 30th AE card ("Rude Breaker - 30th Anniversary Edition by ShmupsBR 2026") before the Compile logo; trigger or Start skips it.
+- New title screen with the 30th AE mark and the © 2026 ShmupsBR credit, and a 30th AE credit line in the ending. The ranking screen keeps its original look.
 
 ### Why the game files are not included
 This repository contains **only the engine** (the code written for this port). It does **not** include any of the original game's files, and never will:
@@ -19,7 +29,7 @@ You must supply these files from **your own legal copy** of the game.
 ### Building the play package
 1. Get the game legally, for example from [Project EGG](https://www.amusement-center.com/), or from your own *Disc Station Vol. 10* disc.
 2. Extract these files from the Rude Breaker disk: `SGM1.DAT`, `SONG.DAT` and `FPLAY.COM`.
-3. Download `releases/RudeBreaker-PC-pr9o.zip` from this repository (or build `rudebreaker.exe` yourself), unzip it, and add the game files so the folder looks like this:
+3. Download `releases/RudeBreaker30thAE-PC-pr9p.zip` from this repository (or build `rudebreaker.exe` yourself), unzip it, and add the game files so the folder looks like this:
    ```
    Rude Breaker PC/
      rudebreaker.exe
@@ -33,7 +43,7 @@ You must supply these files from **your own legal copy** of the game.
 These three files are all you need. No other file (BIOS, sound ROM or the like) is required: the music uses YM2203 emulation, which needs no ROM.
 
 ### Linux
-A Linux x86_64 build is in `releases/RudeBreaker-Linux-pr9o.zip`. It ships its own `libSDL2-2.0.so.0` and runs on most distributions with glibc 2.17 or newer (X11 or Wayland; PulseAudio, PipeWire or ALSA).
+A Linux x86_64 build is in `releases/RudeBreaker30thAE-Linux-pr9p.zip`. It ships its own `libSDL2-2.0.so.0` and runs on most distributions with glibc 2.17 or newer (X11 or Wayland; PulseAudio, PipeWire or ALSA).
 
 1. Unzip it and add the same game files, so the folder looks like this:
    ```
@@ -67,7 +77,17 @@ This is a non-commercial fan project with no affiliation to Compile or D4 Enterp
 
 ## Português
 
-Port não oficial pra PC (Windows e Linux) do **Rude Breaker**, o shooter vertical da Compile lançado na *Disc Station Vol. 10* (PC-98, 1996). O código x86 original roda dentro de um interpretador com uma camada SDL2 moderna: vsync, suporte a controle, teclas configuráveis, sound test com VU meter, Training Mode, tabela de recordes salva e mais. A música é o driver original tocando num YM2203 emulado, o chip de som FM do PC-98. Veja `docs/MANUAL.md`.
+**Rude Breaker 30th AE** (30th Anniversary Edition) comemora os 30 anos do lançamento do jogo, em 5 de abril de 1996. É um port não oficial pra PC (Windows e Linux) do **Rude Breaker**, o shooter vertical da Compile lançado na *Disc Station Vol. 10* (PC-98, 1996). O código x86 original roda dentro de um interpretador com uma camada SDL2 moderna: vsync, suporte a controle, teclas configuráveis, sound test com VU meter, Training Mode, tabela de recordes salva, botão SPEED pra mudar a velocidade da nave durante o jogo (com indicador SPD), sistema de RANK opcional no estilo do Zanac e mais. A música é o driver original tocando num YM2203 emulado, o chip de som FM do PC-98. Veja `docs/MANUAL.md`.
+
+### Novidades do 30th AE
+- **Botão SPEED** (C / Ctrl, Y no controle): muda a velocidade da nave durante o jogo, no ciclo LOW / MID / MAX / MID / LOW (lenta, normal, máxima). Cada partida começa em MID por padrão, ou na MOVE SPEED escolhida no menu. A barra de cima mostra como `SPD LOW`, `SPD MID` ou `SPD MAX`.
+- **RANK** (menu GAMEPLAY, ligado por padrão): rank no estilo do Zanac. Sobe enquanto você sobrevive e pontua, cai pela metade quando você perde uma vida e acelera os tiros inimigos (nunca mais lentos que na dificuldade escolhida). Os bônus continuam seguindo a dificuldade escolhida. No VERY EASY e no EASY o rank só sobe até a metade; no HARD e no VERY HARD ele já começa na metade. Desligado, o jogo fica igual ao original.
+- **Paleta MODERN** agora é o padrão.
+- **Troca de arma durante o jogo** (SHIP SELECT OFF) agora é o padrão: pegue as cápsulas V, L ou M pra trocar de arma.
+- O **Esc** só pausa durante a partida.
+- O tiro teleguiado do chefe final agora vira o traço na direção em que voa, como no original.
+- Um cartão curto do 30th AE ("Rude Breaker - 30th Anniversary Edition by ShmupsBR 2026") antes do logo da Compile; o tiro ou o Start pula.
+- Tela de título nova, com a marca 30th AE e o crédito © 2026 ShmupsBR, e uma linha de crédito do 30th AE no final. A tela de ranking continua com o visual original.
 
 ### Por que os arquivos do jogo não estão incluídos
 Este repositório contém **só o motor** (o código escrito pra este port). Ele **não** inclui nenhum arquivo do jogo original, e nunca vai incluir:
@@ -80,7 +100,7 @@ Você precisa tirar esses arquivos da **sua própria cópia legal** do jogo.
 ### Como montar o pacote pra jogar
 1. Consiga o jogo legalmente, por exemplo na [Project EGG](https://www.amusement-center.com/) ou no seu próprio disco da *Disc Station Vol. 10*.
 2. Extraia estes arquivos do disco do Rude Breaker: `SGM1.DAT`, `SONG.DAT` e `FPLAY.COM`.
-3. Baixe o `releases/RudeBreaker-PC-pr9o.zip` deste repositório (ou compile o `rudebreaker.exe`), descompacte e coloque os arquivos do jogo junto, deixando a pasta assim:
+3. Baixe o `releases/RudeBreaker30thAE-PC-pr9p.zip` deste repositório (ou compile o `rudebreaker.exe`), descompacte e coloque os arquivos do jogo junto, deixando a pasta assim:
    ```
    Rude Breaker PC/
      rudebreaker.exe
@@ -94,7 +114,7 @@ Você precisa tirar esses arquivos da **sua própria cópia legal** do jogo.
 Só esses três arquivos são necessários. Não precisa de nenhum outro (BIOS, ROM de som ou parecido): a música usa emulação do YM2203, que não precisa de ROM.
 
 ### Linux
-Tem uma versão pra Linux x86_64 em `releases/RudeBreaker-Linux-pr9o.zip`. Ela já vem com a própria `libSDL2-2.0.so.0` e roda na maioria das distribuições com glibc 2.17 ou mais nova (X11 ou Wayland; PulseAudio, PipeWire ou ALSA).
+Tem uma versão pra Linux x86_64 em `releases/RudeBreaker30thAE-Linux-pr9p.zip`. Ela já vem com a própria `libSDL2-2.0.so.0` e roda na maioria das distribuições com glibc 2.17 ou mais nova (X11 ou Wayland; PulseAudio, PipeWire ou ALSA).
 
 1. Descompacte e coloque os mesmos arquivos do jogo, deixando a pasta assim:
    ```
