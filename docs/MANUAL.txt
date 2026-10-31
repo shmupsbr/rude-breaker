@@ -1,7 +1,7 @@
 RUDE BREAKER 30th AE - PC PORT - USER MANUAL
 ============================================
 
-Build pr9zd - 2026-10-31
+Build pr9ze - 2026-10-31
 
 Also in: Portuguese (MANUAL.pt-BR.md / .txt), Japanese (MANUAL.ja.md / .txt).
 
@@ -149,6 +149,8 @@ Keyboard (defaults):
   Speed             C, Left Ctrl or Right Ctrl (see below)
   Pause / back      Escape
   Quit              F10
+  Fullscreen        F11 (on/off at any time; saved like the
+                    FULLSCREEN option)
   Timing overlay    F8 (shows the frame pacing info, see section 7)
 
 Gamepad:
@@ -210,6 +212,10 @@ under the logo, with a soft glow around the letters every 5 seconds
 TRIGGER changing smoothly between yellow and green every 10 seconds,
 and the credit lines (c) COMPILE 1996 and (c) SHMUPSBR 2026.
 Press Fire at the title to start, or open CONFIG from the title menu.
+In the title menu, RETURN goes back to the start of the game (Compile
+logo, demo and title, as in the original) and EXIT closes the game.
+The menu rows sit over the big (c) COMPILE 1996 line of the title art;
+that is how the original lays it out.
 
 CONFIG has these pages:
 
@@ -218,7 +224,7 @@ GAMEPLAY
   The options sit on consecutive lines, with no blank line between
   them, in this order: DIFFICULTY, SUICIDE BULLETS, SHIP SELECT, MOVE
   SPEED, PALETTE, TRAINING, FRAME PACING, RANK, SIDE PANELS, BULLET
-  COLOR, LOOP and BACK.
+  COLOR, HITBOX, LOOP, FULLSCREEN and BACK.
 
   DIFFICULTY       VERY EASY, EASY, NORMAL, HARD, VERY HARD. These are
                    the original game's own difficulty levels. NORMAL
@@ -336,11 +342,27 @@ GAMEPLAY
                    shows the loop: LOOP 2, LOOP 3 ... It is hidden in
                    loop 1 and with LOOP OFF.
 
+  HITBOX           OFF (default), PINK, LILAC, BLUE, GREEN, RED or
+                   WHITE. Draws a dot on the ship with the exact size
+                   of its real collision box (12 x 18 pixels), so you
+                   can see what can be hit. The dot never uses the
+                   same colour as the enemy bullets: that colour is
+                   skipped, and if you change BULLET COLOR to the
+                   hitbox colour, the hitbox moves on to the next one.
+                   RED is skipped with BULLET COLOR ORIGINAL (the
+                   original bullets are red). Saved in rudebreaker.cfg.
+
   LOOP             OFF (default): the game ends after stage 5 with the
                    ending, as in the original. ON: clearing stage 5
                    starts stage 1 again as loop 2, then loop 3 and so
                    on, keeping your score, lives and weapons. Each loop
                    is harder (see section 6). Saved in rudebreaker.cfg.
+
+  FULLSCREEN       OFF (default) or ON. Fills the whole monitor,
+                   keeping the game's proportions (SIDE PANELS fill the
+                   sides on wide screens) and hiding the mouse pointer.
+                   F11 switches it at any time. Saved in
+                   rudebreaker.cfg.
 
   BACK
 
@@ -566,7 +588,7 @@ When something looks, sounds or feels wrong, please send:
   5. The PACING setting (SMOOTH or EXACT) and the file pace.txt from
      the game folder (it is rewritten each time you quit, so copy it
      right after the problem).
-  6. The build name: Rude Breaker 30th AE pr9zd.
+  6. The build name: Rude Breaker 30th AE pr9ze.
 
 Send it to Filipe Gracioli / shmupsbr.
 

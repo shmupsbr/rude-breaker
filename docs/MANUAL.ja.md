@@ -1,7 +1,7 @@
 RUDE BREAKER 30th AE - PC版移植 - 取扱説明書
 =============================================
 
-ビルド pr9zd - 2026年10月31日
+ビルド pr9ze - 2026年10月31日
 
 ほかの言語：英語（MANUAL.md / .txt）、ポルトガル語（MANUAL.pt-BR.md / .txt）。
 
@@ -148,6 +148,8 @@ PC側では、ウィンドウ、サウンド出力、キーボードとゲーム
   スピード          C、左右のCtrl（下記参照）
   ポーズ / 戻る     Esc
   終了              F10
+  フルスクリーン    F11（いつでも切り替え可能。FULLSCREEN
+                    オプションと同じく保存されます）
   タイミング表示    F8（フレーム進行の情報を表示、7章）
 
 ゲームパッド：
@@ -205,6 +207,10 @@ Bボタン（パッド）で1ページ戻ります。
 クレジットが表示されます。
 タイトルでショットを押すとゲーム開始、タイトルメニューからCONFIGを
 開けます。
+タイトルメニューの RETURN はゲームの最初（コンパイルのロゴ、デモ、
+タイトル。オリジナルどおり）に戻り、EXIT はゲームを終了します。
+メニューの行はタイトル画像の大きな (c) COMPILE 1996 の行に重なり
+ますが、これはオリジナルどおりの配置です。
 
 CONFIGには次のページがあります：
 
@@ -212,7 +218,7 @@ GAMEPLAY
 
   項目は空行をはさまずに続けて並び、順番は DIFFICULTY、SUICIDE
   BULLETS、SHIP SELECT、MOVE SPEED、PALETTE、TRAINING、FRAME
-  PACING、RANK、SIDE PANELS、BULLET COLOR、LOOP、BACK です。
+  PACING、RANK、SIDE PANELS、BULLET COLOR、HITBOX、LOOP、FULLSCREEN、BACK です。
 
   DIFFICULTY       VERY EASY、EASY、NORMAL、HARD、VERY HARD。オリジナル
                    そのままの難易度です。NORMALがオリジナルの初期設定。
@@ -313,11 +319,26 @@ GAMEPLAY
                    表示されます：LOOP 2、LOOP 3 …。1周目と LOOP OFF
                    では表示されません。
 
+  HITBOX           OFF（初期設定）、PINK、LILAC、BLUE、GREEN、RED、
+                   WHITE。自機の上に、実際の当たり判定（12×18ピクセル）
+                   と同じ大きさの点を表示します。点の色は敵弾の色と
+                   同じにはなりません：その色は飛ばされ、BULLET COLOR
+                   を当たり判定の色に変えると、当たり判定は次の色に
+                   進みます。BULLET COLOR が ORIGINAL のとき RED は
+                   飛ばされます（オリジナルの弾は赤のため）。
+                   rudebreaker.cfg に保存されます。
+
   LOOP             OFF（初期設定）：オリジナルどおり、ステージ5の後に
                    エンディングで終わります。ON：ステージ5をクリアすると
                    2周目としてステージ1から再開し、その後も3周目と続き
                    ます。スコア、残機、武器はそのまま引き継がれます。
                    周回ごとに難しくなります（6章を参照）。
+                   rudebreaker.cfg に保存されます。
+
+  FULLSCREEN       OFF（初期設定）または ON。ゲームの縦横比を保った
+                   まま画面全体に表示し（横長の画面では SIDE PANELS
+                   が左右を埋めます）、マウスポインタを隠します。
+                   F11 でいつでも切り替えられます。
                    rudebreaker.cfg に保存されます。
 
   BACK
@@ -529,7 +550,7 @@ NAME ENTRY の項目は TRAINING に置き換えています。
   5. PACINGの設定（SMOOTHかEXACT）と、ゲームフォルダの pace.txt
      （終了するたびに書き直されるので、問題が起きた直後にコピー
      してください）。
-  6. ビルド名：Rude Breaker 30th AE pr9zd。
+  6. ビルド名：Rude Breaker 30th AE pr9ze。
 
 送り先：Filipe Gracioli / shmupsbr。
 

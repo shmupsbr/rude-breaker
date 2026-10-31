@@ -1,7 +1,7 @@
 RUDE BREAKER 30th AE - PORT PARA PC - MANUAL DO USUÁRIO
 =======================================================
 
-Build pr9zd - 31/10/2026
+Build pr9ze - 31/10/2026
 
 Também em: inglês (MANUAL.md / .txt), japonês (MANUAL.ja.md / .txt).
 
@@ -151,6 +151,8 @@ Teclado (padrão):
   Velocidade         C, Ctrl esquerdo ou direito (veja abaixo)
   Pausa / voltar     Esc
   Sair               F10
+  Tela cheia         F11 (liga/desliga a qualquer momento; salvo
+                     como a opção FULLSCREEN)
   Info de tempo      F8 (mostra o ritmo dos quadros, veja a seção 7)
 
 Controle:
@@ -213,6 +215,10 @@ cada 10 segundos, e as linhas de crédito (c) COMPILE 1996 e (c) SHMUPSBR
 2026.
 Aperte Tiro no título para começar, ou abra o CONFIG pelo menu do
 título.
+No menu do título, RETURN volta ao começo do jogo (logo da Compile,
+demo e título, como no original) e EXIT fecha o jogo. As linhas do
+menu ficam sobre a linha grande (c) COMPILE 1996 da arte do título;
+é assim no original.
 
 O CONFIG tem estas páginas:
 
@@ -221,7 +227,7 @@ GAMEPLAY
   As opções ficam em linhas seguidas, sem linha em branco entre elas,
   nesta ordem: DIFFICULTY, SUICIDE BULLETS, SHIP SELECT, MOVE SPEED,
   PALETTE, TRAINING, FRAME PACING, RANK, SIDE PANELS, BULLET COLOR,
-  LOOP e BACK.
+  HITBOX, LOOP, FULLSCREEN e BACK.
 
   DIFFICULTY       VERY EASY, EASY, NORMAL, HARD, VERY HARD. São os
                    próprios níveis de dificuldade do jogo original.
@@ -341,12 +347,29 @@ GAMEPLAY
                    RANK também mostra o loop: LOOP 2, LOOP 3 ... Fica
                    oculto no loop 1 e com LOOP OFF.
 
+  HITBOX           OFF (padrão), PINK, LILAC, BLUE, GREEN, RED ou
+                   WHITE. Desenha uma bolinha na nave com o tamanho
+                   exato da sua caixa de colisão real (12 x 18
+                   pixels), para você ver o que pode ser atingido. A
+                   bolinha nunca usa a mesma cor dos tiros inimigos:
+                   essa cor é pulada, e se você mudar o BULLET COLOR
+                   para a cor da hitbox, a hitbox passa para a
+                   próxima. RED é pulado com BULLET COLOR ORIGINAL (os
+                   tiros originais são vermelhos). Salvo no
+                   rudebreaker.cfg.
+
   LOOP             OFF (padrão): o jogo termina depois da fase 5 com o
                    final, como no original. ON: vencer a fase 5 começa
                    a fase 1 de novo como loop 2, depois loop 3 e assim
                    por diante, mantendo pontuação, vidas e armas. Cada
                    loop é mais difícil (veja a seção 6). Salvo no
                    rudebreaker.cfg.
+
+  FULLSCREEN       OFF (padrão) ou ON. Ocupa o monitor inteiro,
+                   mantendo a proporção do jogo (as SIDE PANELS
+                   preenchem as laterais em telas largas) e escondendo
+                   o ponteiro do mouse. F11 alterna a qualquer
+                   momento. Salvo no rudebreaker.cfg.
 
   BACK
 
@@ -578,7 +601,7 @@ Quando algo parecer, soar ou responder errado, por favor mande:
   5. A opção de PACING (SMOOTH ou EXACT) e o arquivo pace.txt da pasta
      do jogo (ele é reescrito toda vez que você sai, então copie logo
      depois do problema).
-  6. O nome da build: Rude Breaker 30th AE pr9zd.
+  6. O nome da build: Rude Breaker 30th AE pr9ze.
 
 Mande para Filipe Gracioli / shmupsbr.
 
