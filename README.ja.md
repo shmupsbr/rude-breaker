@@ -79,6 +79,9 @@ make linux
 ```
 バイナリは `build/rudebreaker` に作られます。`make linux` でビルドしたバイナリは、まず自分と同じフォルダの `libSDL2-2.0.so.0` を探し、なければシステムのライブラリを使います。C++ランタイムは静的リンクされます。
 
+### Raspberry Pi
+Raspberry Pi用のパッケージは、OSに合わせて2種類あります：64ビット版 Raspberry Pi OS には `RudeBreaker-RaspberryPi-*.zip`、32ビット版には `RudeBreaker-RaspberryPi32-*.zip`。`uname -m`（`aarch64` なら64ビット、`armv7l`/`armv6l` なら32ビット）または `getconf LONG_BIT` で確認できます。Linuxと同じようにゲームファイルを加え、そのフォルダで `chmod +x rudebreaker`、`./rudebreaker` を実行します。Wayland でウィンドウがうまく出ない場合は `SDL_VIDEODRIVER=x11 ./rudebreaker` を、Pi OS Lite ではコンソールから `SDL_VIDEODRIVER=kmsdrm SDL_AUDIODRIVER=alsa ./rudebreaker` を試してください。Pi 4 または Pi 5 を推奨します。「cannot execute binary file」と出たら、パッケージの選択が間違っています。詳しくは取扱説明書を参照してください。
+
 ### 配布に関する注意
 ゲームファイルは **配布しないでください**。ゲームファイルを使用できるのは、ゲームを正規に所有している方（*ディスクステーション Vol.10* のオリジナルディスク、またはプロジェクトEGGでの購入・会員登録）のみです。ゲームを所有していない場合は、**テスト目的に限り最長24時間** までプレイでき、その後はゲームファイルを削除しなければなりません。
 

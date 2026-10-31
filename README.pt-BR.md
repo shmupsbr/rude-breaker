@@ -79,6 +79,9 @@ make linux
 ```
 O binário fica em `build/rudebreaker`. O `make linux` procura a `libSDL2-2.0.so.0` primeiro na pasta do binário e, se não achar, usa a do sistema; o runtime de C++ é linkado estático.
 
+### Raspberry Pi
+Há dois pacotes para Raspberry Pi, escolhidos pelo sistema: `RudeBreaker-RaspberryPi-*.zip` para o Raspberry Pi OS de 64 bits e `RudeBreaker-RaspberryPi32-*.zip` para o de 32 bits. Para conferir, rode `uname -m` (`aarch64` = 64 bits, `armv7l`/`armv6l` = 32 bits) ou `getconf LONG_BIT`. Coloque os arquivos do jogo como no Linux e, dentro da pasta, rode `chmod +x rudebreaker` e `./rudebreaker`. Se a janela der problema no Wayland, tente `SDL_VIDEODRIVER=x11 ./rudebreaker`; no Pi OS Lite, use `SDL_VIDEODRIVER=kmsdrm SDL_AUDIODRIVER=alsa ./rudebreaker` no console. O recomendado é um Pi 4 ou Pi 5. "cannot execute binary file" quer dizer que você pegou o pacote errado. Os detalhes estão no manual.
+
 ### Aviso de distribuição
 **Não** distribua os arquivos do jogo. Você só pode usá-los se tiver o jogo legalmente: o disco original da *Disc Station Vol. 10*, ou uma compra ou assinatura pela Project EGG. Se você não tem o jogo, pode jogá-lo por no máximo **24 horas, só pra fins de teste**, e depois deve apagar os arquivos do jogo.
 
