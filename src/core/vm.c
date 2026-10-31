@@ -105,6 +105,11 @@ struct RbVm {
      * 0 = no rank, shots read C9 itself. */
     uint8_t shot_c9;
     uint8_t shot_pct;      /* extra enemy bullet speed, percent */
+    /* LOOP (host option): ending load after stage 5 becomes stage 1. */
+    int loop_on;
+    int loop_event;
+    uint8_t loop_c9;
+    uint8_t loop_b2;
     uint16_t bp_type[256];
     int16_t bp_x[256], bp_y[256];
     int16_t bp_ax[256], bp_ay[256]; /* remainder, 1/100 px */
@@ -2486,8 +2491,23 @@ static int mask_ok(uint16_t type, uint16_t mask)
 static void do_load(RbVm *vm, int ent, uint8_t record, uint8_t header)
 {
     uint16_t nip;
+    int looped = 0;
 
     vm->loads++;
+    /* LOOP: stage 5 (chunk 6) loads the ending, record 1 header 3. Load
+     * stage 1 (record 2 header 0) in its place, the same load the other
+     * stage-to-stage handoffs use. Score, lives and weapons live in
+     * globals the stage init does not clear, as on stages 2 to 5. The
+     * next loop's C9 / B2 go in before the stage init and any spawn. */
+    if (vm->loop_on && record == 1u && header == 3u && vm->view_chunk == 6) {
+        record = 2u;
+        header = 0u;
+        looped = 1;
+        vm->loop_event = 1;
+        vm->g[0xC9] = vm->loop_c9;
+        vm->g[0xB2] = vm->loop_b2;
+        vm->g[0xB3] = 0;
+    }
     vm->load_record = record;
     vm->load_header = header;
     if (ensure_chunk(vm, record) != 0 || vm->clen[record] < 2u) {
@@ -2506,6 +2526,9 @@ static void do_load(RbVm *vm, int ent, uint8_t record, uint8_t header)
      * Boss music changes the track and does not come through here. */
     if (record >= 3 && record <= 6 &&
         vm->view_chunk >= 2 && vm->view_chunk < (int)record) {
+        vm->stage_gap = 1;
+    }
+    if (looped) {
         vm->stage_gap = 1;
     }
     if (record >= 1 && record <= 6) {
@@ -5187,6 +5210,28 @@ int vm_quit_requested(const RbVm *vm)
 int vm_boot_requested(const RbVm *vm)
 {
     return vm && vm->boot;
+}
+
+void vm_set_loop(RbVm *vm, int on, unsigned c9, unsigned b2)
+{
+    if (!vm) {
+        return;
+    }
+    vm->loop_on = on != 0;
+    vm->loop_c9 = (uint8_t)c9;
+    vm->loop_b2 = (uint8_t)b2;
+}
+
+int vm_take_loop(RbVm *vm)
+{
+    int e;
+
+    if (!vm) {
+        return 0;
+    }
+    e = vm->loop_event;
+    vm->loop_event = 0;
+    return e;
 }
 
 int vm_take_stage_gap(RbVm *vm)

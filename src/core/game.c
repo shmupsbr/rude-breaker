@@ -44,6 +44,9 @@ static int          g_cfg_9r;      /* settings file has the pr9r defaults */
 static int          g_onecc;
 /* Lives lost this run (NO DEATH box); cleared only by a new game. */
 static int          g_run_deaths;
+static int          g_loop_on;      /* LOOP option: stage 1 again after stage 5 */
+static int          g_loop = 1;     /* current loop, 1 = first pass */
+static uint8_t      g_live_b2;      /* the difficulty's own B2 */
 static int          g_run_ok;
 static int          g_last_clear;
 /* 30th AE intro card before the Compile logo: about 3 s at the
@@ -113,6 +116,7 @@ static void load_cfg(const RbGame *g)
     g_bullet_c = 1;
     g_cfg_9r = 0;
     g_onecc = 0;
+    g_loop_on = 0;
     g_cfg_v9p = 0;
     sys_bind_restore();
     cfg_path(g, path, sizeof path);
@@ -155,6 +159,10 @@ static void load_cfg(const RbGame *g)
                     g_bullet_c = k;
                 }
             }
+        } else if (strncmp(line, "loop=on", 7) == 0) {
+            g_loop_on = 1;
+        } else if (strncmp(line, "loop=off", 8) == 0) {
+            g_loop_on = 0;
         } else if (strncmp(line, "onecc=yes", 9) == 0) {
             g_onecc = 1;
         } else if (strncmp(line, "defaults9r=1", 12) == 0) {
@@ -214,6 +222,9 @@ static int speed_index(void);
 static void set_speed(int i);
 
 static void title_prewarm(void);
+static uint8_t base_c9(void);
+static uint8_t base_b2(void);
+static int loop_mul(void);
 
 static void live_park(void)
 {
@@ -222,6 +233,9 @@ static void live_park(void)
     }
     set_speed(g_live_menu_speed);
     vm_set_global_u8(g_vm, 0xC9, g_live_c9);
+    if (g_loop > 1) {
+        vm_set_global_u8(g_vm, 0xB2, g_live_b2);
+    }
     g_live_parked = 1;
 }
 
@@ -231,7 +245,10 @@ static void live_unpark(void)
         return;
     }
     set_speed(g_live_speed);
-    vm_set_global_u8(g_vm, 0xC9, g_live_c9);
+    vm_set_global_u8(g_vm, 0xC9, base_c9());
+    if (g_loop > 1) {
+        vm_set_global_u8(g_vm, 0xB2, base_b2());
+    }
     g_live_parked = 0;
 }
 
@@ -386,6 +403,7 @@ static void save_cfg(const RbGame *g)
             g_rank_on ? "on" : "off",
             g_panels_on ? "on" : "off",
             g_onecc ? "yes" : "no");
+    fprintf(fp, "loop=%s\n", g_loop_on ? "on" : "off");
     sys_bind_write(fp);
     fclose(fp);
 }
@@ -608,7 +626,7 @@ static void joy_auto(void)
 static int page_count(void)
 {
     switch (g_page) {
-    case PAGE_GAME:  return 11;
+    case PAGE_GAME:  return 12;
     case PAGE_CTRL:  return 3;
     case PAGE_KEYS:  return 11;
     case PAGE_SOUND: return 7;
@@ -674,6 +692,10 @@ static void change_value(RbGame *g, int dir)
             /* Host only: recolours enemy bullets, saved to the settings file. */
             g_bullet_c = (g_bullet_c + (dir < 0 ? 4 : 1)) % 5;
             gfx_set_bullet_color(g_bullet_c);
+            changed = 1;
+        } else if (g_cursor == 10) {
+            /* Host only, saved to the settings file. */
+            g_loop_on = !g_loop_on;
             changed = 1;
         }
     } else if (g_page == PAGE_CTRL && g_cursor == 0) {
@@ -741,7 +763,7 @@ static void activate_row(RbGame *g)
         menu_ok();
         return;
     }
-    if (g_page == PAGE_GAME && g_cursor == 10) {
+    if (g_page == PAGE_GAME && g_cursor == 11) {
         enter_page(PAGE_ROOT);
         menu_ok();
         return;
@@ -1019,6 +1041,12 @@ static int menu_row(int first, int index)
     return first + index * 2;
 }
 
+/* GAMEPLAY has 12 rows, so they sit on consecutive lines. */
+static int game_row(int index)
+{
+    return 4 + index;
+}
+
 /* Sound Test spectrum, drawn in pixels after present. Like the
  * Distopika player's first layout: white bars, instant attack, about
  * 0.3 s release, plus a peak cap that holds and then falls. */
@@ -1191,28 +1219,29 @@ static void host_menu_paint(void)
             paint_line(i, menu_row(4, i), root_name[i], NULL, 0);
         }
     } else if (g_page == PAGE_GAME) {
-        paint_line(0, menu_row(4, 0), "DIFFICULTY", k_diff[diff_index()],
+        paint_line(0, game_row(0), "DIFFICULTY", k_diff[diff_index()],
                    diff_index() != 2);
-        paint_line(1, menu_row(4, 1), "SUICIDE BULLETS",
+        paint_line(1, game_row(1), "SUICIDE BULLETS",
                    suicide_on() ? "ON" : "OFF", suicide_on());
-        paint_line(2, menu_row(4, 2), "SHIP SELECT", ship_on() ? "ON" : "OFF",
+        paint_line(2, game_row(2), "SHIP SELECT", ship_on() ? "ON" : "OFF",
                    ship_on());
-        paint_line(3, menu_row(4, 3), "MOVE SPEED", speed_name(),
+        paint_line(3, game_row(3), "MOVE SPEED", speed_name(),
                    speed_index() != 1);
-        paint_line(4, menu_row(4, 4), "PALETTE",
+        paint_line(4, game_row(4), "PALETTE",
                    g_modern ? "MODERN" : "ORIGINAL", g_modern);
-        paint_line(5, menu_row(4, 5), "TRAINING", g_training ? "ON" : "OFF",
+        paint_line(5, game_row(5), "TRAINING", g_training ? "ON" : "OFF",
                    g_training);
-        paint_line(6, menu_row(4, 6), "FRAME PACING",
+        paint_line(6, game_row(6), "FRAME PACING",
                    sys_pace_pref_exact() ? "EXACT" : "SMOOTH",
                    sys_pace_pref_exact());
-        paint_line(7, menu_row(4, 7), "RANK", g_rank_on ? "ON" : "OFF",
+        paint_line(7, game_row(7), "RANK", g_rank_on ? "ON" : "OFF",
                    g_rank_on);
-        paint_line(8, menu_row(4, 8), "SIDE PANELS", g_panels_on ? "ON" : "OFF",
+        paint_line(8, game_row(8), "SIDE PANELS", g_panels_on ? "ON" : "OFF",
                    g_panels_on);
-        paint_line(9, menu_row(4, 9), "BULLET COLOR", k_bullet_name[g_bullet_c],
+        paint_line(9, game_row(9), "BULLET COLOR", k_bullet_name[g_bullet_c],
                    g_bullet_c != 0);
-        paint_line(10, menu_row(4, 10), "BACK", NULL, 0);
+        paint_line(10, game_row(10), "LOOP", g_loop_on ? "ON" : "OFF", g_loop_on);
+        paint_line(11, game_row(11), "BACK", NULL, 0);
     } else if (g_page == PAGE_CTRL) {
         paint_line(0, menu_row(4, 0), "JOYSTICK", joy_value(), joy_flag());
         paint_line(1, menu_row(4, 1), "DEFINE KEYS", NULL, 0);
@@ -1776,6 +1805,43 @@ static int live_diff(void)
     return 2;
 }
 
+/* LOOP: each loop after the first starts one difficulty higher than
+ * the one before (capped at VERY HARD). Not in Training. */
+static int base_diff(void)
+{
+    int b = live_diff();
+
+    if (g_loop > 1 && !g_training) {
+        b += g_loop - 1;
+        if (b > 4) {
+            b = 4;
+        }
+    }
+    return b;
+}
+
+/* C9 / B2 the game runs with: the chosen difficulty's, or the loop's. */
+static uint8_t base_c9(void)
+{
+    return g_loop > 1 && !g_training ? k_c9[base_diff()] : g_live_c9;
+}
+
+static uint8_t base_b2(void)
+{
+    return g_loop > 1 && !g_training ? k_b2[base_diff()] : g_live_b2;
+}
+
+/* Loop multiplier for every rank-driven amount: loop N is xN, capped. */
+#define LOOP_MUL_MAX 8
+#define LOOP_PCT_MAX 50u
+static int loop_mul(void)
+{
+    if (g_training || g_loop < 2) {
+        return 1;
+    }
+    return g_loop > LOOP_MUL_MAX ? LOOP_MUL_MAX : g_loop;
+}
+
 /* Rank -> difficulty progression (normal games only). The level in
  * effect, g_eff, starts on the chosen one; rank reaching that level's
  * cap moves it up one level with rank back at the new level's start,
@@ -1794,7 +1860,7 @@ static unsigned g_vh_pct, g_vh_t;
 static int eff_ceiling(void)
 {
     static const int k_ceil[5] = { 2, 3, 3, 4, 4 };
-    return k_ceil[live_diff()];
+    return k_ceil[base_diff()];
 }
 
 static void vh_reset(const char *why, unsigned frame)
@@ -1818,7 +1884,7 @@ static uint32_t rank_cap(int i)
 
 static void live_reset_match(void)
 {
-    g_eff = live_diff();
+    g_eff = base_diff();
     g_live_speed = g_live_menu_speed;
     g_live_dir = g_live_menu_speed >= 2 ? -1 : 1;
     g_rank = rank_start(g_eff);
@@ -2151,7 +2217,9 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
      * (0x3E55), and raised only by the medal pickup (0x4EA4,
      * `2B D1 06 01`, after the 0x4DE4 spot is revealed). */
     d.medals = vm_global_u8(g_vm, 0xD1);
-    d.difficulty = g_live && g_rank_on && !g_training ? g_eff : live_diff();
+    d.difficulty = g_live && g_rank_on && !g_training ? g_eff : base_diff();
+    d.loop = g_loop;
+    d.loop_on = g_loop_on;
     d.level_pct = g_live && g_rank_on && !g_training ? (int)g_vh_pct : 0;
     if (getenv("RUDEBR_DBG_LVPCT")) {
         /* Test hook: panel layout of the LEVEL extra. */
@@ -2182,15 +2250,48 @@ static void live_update(RbGame *g)
     on = live_match() && !menu_visible();
     vm_info(g_vm, &info);
     lives = vm_global_u8(g_vm, 0xD2);
+    if (vm_take_loop(g_vm)) {
+        /* Stage 5 cleared with LOOP on: stage 1 of the next loop. The
+         * VM already put the new C9 / B2 in before the stage init. */
+        if (g_loop < 99) {
+            g_loop++;
+        }
+        if (!g_training) {
+            g_eff = base_diff();
+            g_rank = rank_start(g_eff);
+            g_rank_acc = 0;
+            g_rk_subcut = 0;
+            vh_reset("loop", (unsigned)g->frame);
+            g_lv_flash = 61;
+        }
+        if (env_on("RUDEBR_RANKLOG")) {
+            fprintf(stderr, "loop %d f=%u base=%d c9=%u b2=%u mul=%d score=%u lives=%d d9=%u d5=%u d6=%u\n",
+                    g_loop, (unsigned)g->frame, base_diff(),
+                    (unsigned)vm_global_u8(g_vm, 0xC9), (unsigned)vm_global_u8(g_vm, 0xB2),
+                    loop_mul(), (unsigned)info.score, lives, (unsigned)vm_global_u8(g_vm, 0xD9),
+                    (unsigned)vm_global_u8(g_vm, 0xD5), (unsigned)vm_global_u8(g_vm, 0xD6));
+        }
+    }
     if (on && !g_live) {
         g_live_menu_speed = speed_index();
+        if (info.score == 0u) {
+            g_loop = 1;
+        }
         if (getenv("RUDEBR_DBG_DIFF")) {
             /* Test hook: play as if this difficulty (0..4) was chosen. */
             int n = atoi(getenv("RUDEBR_DBG_DIFF"));
             vm_set_global_u8(g_vm, 0xC9, k_c9[n < 0 ? 0 : n > 4 ? 4 : n]);
         }
-        g_live_c9 = vm_global_u8(g_vm, 0xC9);
-        g_live_c9_now = g_live_c9;
+        if (g_loop <= 1) {
+            /* In a later loop the globals hold the loop's values; the
+             * chosen ones were kept when the game started. */
+            g_live_c9 = vm_global_u8(g_vm, 0xC9);
+            g_live_b2 = vm_global_u8(g_vm, 0xB2);
+        } else {
+            vm_set_global_u8(g_vm, 0xC9, base_c9());
+            vm_set_global_u8(g_vm, 0xB2, base_b2());
+        }
+        g_live_c9_now = base_c9();
         if (info.score == 0u) {
             live_reset_match();
             pt_reset();
@@ -2205,8 +2306,22 @@ static void live_update(RbGame *g)
     } else if (!on && g_live) {
         set_speed(g_live_menu_speed);
         vm_set_global_u8(g_vm, 0xC9, g_live_c9);
+        if (g_loop > 1) {
+            vm_set_global_u8(g_vm, 0xB2, g_live_b2);
+        }
         vm_set_shot_c9(g_vm, 0);
         g_live = 0;
+    }
+    {
+        /* The next loop's difficulty, for the VM to set at the switch. */
+        int nb = live_diff() + (g_training ? 0 : g_loop);
+
+        if (nb > 4) {
+            nb = 4;
+        }
+        vm_set_loop(g_vm, g_loop_on,
+                    g_training ? g_live_c9 : k_c9[nb],
+                    g_training ? (g_live_b2 ? g_live_b2 : 2u) : k_b2[nb]);
     }
     {
         /* The flag is still up from stage 4 for a few frames after the
@@ -2266,7 +2381,7 @@ static void live_update(RbGame *g)
     pt_update(g, (flags & 0x8000u) == 0u && lives < g_live_prev_lives, flags);
     if ((flags & 0x8000u) == 0u) {
         const int prog = g_rank_on && !g_training;
-        uint32_t cap = rank_cap(prog ? g_eff : live_diff());
+        uint32_t cap = rank_cap(prog ? g_eff : base_diff());
 
         {
             int d9 = vm_global_u8(g_vm, 0xD9);
@@ -2326,10 +2441,10 @@ static void live_update(RbGame *g)
             /* A death: back to the chosen level and its starting rank. */
             if (env_on("RUDEBR_RANKLOG")) {
                 fprintf(stderr, "rank reset f=%u level %d -> %d rank %u -> %u\n",
-                        (unsigned)g->frame, g_eff, live_diff(), (unsigned)(g_rank >> 8),
-                        (unsigned)(rank_start(live_diff()) >> 8));
+                        (unsigned)g->frame, g_eff, base_diff(), (unsigned)(g_rank >> 8),
+                        (unsigned)(rank_start(base_diff()) >> 8));
             }
-            g_eff = live_diff();
+            g_eff = base_diff();
             g_rank = rank_start(g_eff);
             g_rank_acc = 0;
             g_rk_subcut = 0;
@@ -2347,6 +2462,7 @@ static void live_update(RbGame *g)
                 /* Test hook: a faster rank climb, to force step-ups. */
                 rise *= (uint32_t)atoi(getenv("RUDEBR_DBG_RANKX"));
             }
+            rise *= (uint32_t)loop_mul();
             g_rank_acc += rise * (uint32_t)rank_mul_pct();
             g_rank += g_rank_acc / 300u;
             g_rank_acc %= 300u;
@@ -2378,10 +2494,18 @@ static void live_update(RbGame *g)
             g_rank_acc = 0;
             g_rk_subcut = 0;
         }
-        if (prog && (live_diff() == 2 || live_diff() == 4) && g_eff == eff_ceiling() && g_rank >= cap) {
-            if (g_vh_pct < VH_PCT_MAX && ++g_vh_t * 3u >= VH_PCT_FRAMES3) {
+        if (prog && (base_diff() == 2 || base_diff() == 4) && g_eff == eff_ceiling() && g_rank >= cap) {
+            unsigned vmax = VH_PCT_MAX * (unsigned)loop_mul();
+
+            if (vmax > LOOP_PCT_MAX && loop_mul() > 1) {
+                vmax = LOOP_PCT_MAX;
+            }
+            if (g_vh_pct < vmax && ++g_vh_t * 3u >= VH_PCT_FRAMES3) {
                 g_vh_t = 0;
-                g_vh_pct++;
+                g_vh_pct += (unsigned)loop_mul();
+                if (g_vh_pct > vmax) {
+                    g_vh_pct = vmax;
+                }
                 if (env_on("RUDEBR_RANKLOG")) {
                     fprintf(stderr, "rank vh-up f=%u +%u%%\n", (unsigned)g->frame, g_vh_pct);
                 }
@@ -2396,10 +2520,11 @@ static void live_update(RbGame *g)
         g_live_prev_lives = lives;
     }
     vm_set_shot_pct(g_vm, g_vh_pct);
-    g_live_c9_now = g_live_c9;
+    g_live_c9_now = base_c9();
     if (g_rank_on && !g_training) {
-        unsigned add = (unsigned)((g_rank >> 8) * RANK_SPAN + 0x4Fu) / 0x9Fu;
-        unsigned base = k_c9[g_eff] > g_live_c9 ? k_c9[g_eff] : g_live_c9;
+        unsigned add = (unsigned)((g_rank >> 8) * RANK_SPAN + 0x4Fu) / 0x9Fu *
+                       (unsigned)loop_mul();
+        unsigned base = k_c9[g_eff] > base_c9() ? k_c9[g_eff] : base_c9();
         unsigned c9 = base + add;
 
         if (c9 > k_c9[4]) {
@@ -2407,9 +2532,10 @@ static void live_update(RbGame *g)
         }
         g_live_c9_now = (uint8_t)c9;
     }
-    /* C9 stays on the chosen difficulty; only shot spawns see rank. */
-    vm_set_global_u8(g_vm, 0xC9, g_live_c9);
-    vm_set_shot_c9(g_vm, g_live_c9_now != g_live_c9 ? g_live_c9_now : 0u);
+    /* C9 stays on the chosen difficulty (the loop's, from loop 2); only
+     * shot spawns see rank. */
+    vm_set_global_u8(g_vm, 0xC9, base_c9());
+    vm_set_shot_c9(g_vm, g_live_c9_now != base_c9() ? g_live_c9_now : 0u);
     gfx_set_hud_speed(g_live_speed + 1);
     if (getenv("RUDEBR_DBG_DE") && g->frame == 900u) {
         /* Test hook: preset the power-up item count once. */

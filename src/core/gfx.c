@@ -2218,7 +2218,7 @@ static uint32_t push_rgb(uint32_t frame)
  *   30TH ANNIVERSARY EDITION  white, credit size, tracked to the logo ink
  *   PUSH TRIGGER  baseline 264 (moved up 6 dots from the game's row)
  *   (c) COMPILE 1996   baseline 288
- *   (c) 2026 SHMUPSBR  baseline 304
+ *   (c) SHMUPSBR 2026  baseline 304
  * The art's own (c) COMPILE 1996 line is erased and redrawn in the
  * smaller credit font so both credit lines match. */
 #define TITLE_PUSH_DY   (-6)
@@ -2314,7 +2314,7 @@ static void title_brand(const RbGfx *gfx, uint32_t *rgba, int w, int ranking)
     int found = 0;
     int width;
     const char *line1 = "@ COMPILE 1996";
-    const char *line2 = "@ 2026 SHMUPSBR";
+    const char *line2 = "@ SHMUPSBR 2026";
     const char *tag = "30TH ANNIVERSARY EDITION";
 
     if (g_panel_on || w < RB_GFX_W) {
