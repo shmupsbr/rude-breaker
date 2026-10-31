@@ -52,6 +52,8 @@ PC側では、ウィンドウ、サウンド出力、キーボードとゲーム
   Windows：rudebreaker.exe を実行します。
   Linux：  そのフォルダでターミナルから chmod +x rudebreaker を実行し、
            続けて ./rudebreaker を実行します。
+  Raspberry Pi：Linuxと同じです。この章の最後の「Raspberry Pi」を
+           参照してください。
 
 移植版のファイル：
 
@@ -133,6 +135,55 @@ PC側では、ウィンドウ、サウンド出力、キーボードとゲーム
   rudebreaker.ini  フレーム進行の選択：pacing=smooth または pacing=exact。
   pace.txt         タイミングの簡単なレポート（7章）。削除しても
                    問題ありません。
+
+
+Raspberry Pi
+
+Raspberry Pi用のパッケージは2種類あります。ボードではなく、
+OSに合わせて選んでください：
+
+  RudeBreaker-RaspberryPi-*.zip    64ビット版 Raspberry Pi OS
+                                   （aarch64）。Pi 3、Pi 4、Pi 5、
+                                   Pi Zero 2 W。
+  RudeBreaker-RaspberryPi32-*.zip  32ビット版 Raspberry Pi OS（armhf）。
+
+どちらのOSかは、ターミナルで次を実行すると分かります：
+
+  uname -m           aarch64 なら64ビット、armv7l / armv6l なら32ビット
+  getconf LONG_BIT   64 または 32
+
+パッケージを展開し、SGM1.DAT、SONG.DAT、FPLAY.COM をプログラムと
+同じフォルダに置き（ファイル名は大文字まで同じに）、そのフォルダで：
+
+  chmod +x rudebreaker
+  ./rudebreaker
+
+パッケージには libSDL2-2.0.so.0 が同梱されているので、ほかに
+インストールするものはありません。
+
+デスクトップ環境：現在の Raspberry Pi OS のデスクトップは Wayland で
+動いており、ゲームも標準で Wayland を使います。ウィンドウが開かない、
+または表示がおかしい場合は X11 を指定してください：
+
+  SDL_VIDEODRIVER=x11 ./rudebreaker
+
+Raspberry Pi OS Lite（デスクトップなし）：SSHではなく、本体の
+テキストコンソールから次のように起動します：
+
+  SDL_VIDEODRIVER=kmsdrm SDL_AUDIODRIVER=alsa ./rudebreaker
+
+ユーザーが video と input グループに入っている必要があります
+（標準のユーザーは入っています）。入っていない場合は：
+
+  sudo usermod -aG video,input $USER
+
+を実行し、ログアウトしてから再ログインしてください。
+
+動作の目安：Pi 4 または Pi 5 を推奨します。Pi 3 ではフルスクリーン
+ではなく小さめのウィンドウで遊び、ほかのプログラムは閉じてください。
+
+「cannot execute binary file: Exec format error」と表示された場合は、
+OSに合わないパッケージを使っています。もう一方を試してください。
 
 
 3. 操作方法

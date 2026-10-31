@@ -52,6 +52,8 @@ Unzip the folder anywhere. Nothing needs to be installed.
   Windows: run rudebreaker.exe.
   Linux:   in a terminal, in the folder: chmod +x rudebreaker, then
            ./rudebreaker
+  Raspberry Pi: the same as Linux; see RASPBERRY PI at the end of
+           this section.
 
 Files of the port:
 
@@ -133,6 +135,54 @@ Files the game creates:
   rudebreaker.ini  Frame pacing choice: pacing=smooth or pacing=exact.
   pace.txt         A small timing report (see section 7). Safe to
                    delete.
+
+
+RASPBERRY PI
+
+There are two Raspberry Pi packages. Pick the one that matches your
+operating system, not your board:
+
+  RudeBreaker-RaspberryPi-*.zip    64-bit Raspberry Pi OS (aarch64).
+                                   Pi 3, Pi 4, Pi 5, Pi Zero 2 W.
+  RudeBreaker-RaspberryPi32-*.zip  32-bit Raspberry Pi OS (armhf).
+
+To check which system you have, open a terminal and run:
+
+  uname -m           aarch64 = 64-bit; armv7l or armv6l = 32-bit
+  getconf LONG_BIT   64 or 32
+
+Unzip the package, add SGM1.DAT, SONG.DAT and FPLAY.COM next to the
+program (same names, same upper case), then, inside that folder:
+
+  chmod +x rudebreaker
+  ./rudebreaker
+
+The package brings its own libSDL2-2.0.so.0, so nothing else needs
+to be installed.
+
+Desktop: on the current Raspberry Pi OS the desktop runs on Wayland,
+and the game uses it by default. If the window does not open or
+looks wrong, force X11:
+
+  SDL_VIDEODRIVER=x11 ./rudebreaker
+
+Raspberry Pi OS Lite (no desktop): run the game from the text
+console, not over SSH, with:
+
+  SDL_VIDEODRIVER=kmsdrm SDL_AUDIODRIVER=alsa ./rudebreaker
+
+Your user must be in the video and input groups (the default user
+already is). If it is not:
+
+  sudo usermod -aG video,input $USER
+
+then log out and back in.
+
+Performance: a Pi 4 or Pi 5 is recommended. On a Pi 3, keep the
+window small instead of full screen, and close other programs.
+
+"cannot execute binary file: Exec format error" means you are using
+the wrong package for your system: try the other one.
 
 
 3. CONTROLS

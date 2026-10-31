@@ -54,6 +54,8 @@ Descompacte a pasta em qualquer lugar. Não é preciso instalar nada.
   Windows: rode o rudebreaker.exe.
   Linux:   num terminal, dentro da pasta: chmod +x rudebreaker, e
            depois ./rudebreaker
+  Raspberry Pi: igual ao Linux; veja RASPBERRY PI no fim desta
+           seção.
 
 Arquivos do port:
 
@@ -136,6 +138,55 @@ Arquivos que o jogo cria:
                    pacing=exact.
   pace.txt         Um pequeno relatório de tempo (veja a seção 7).
                    Pode ser apagado.
+
+
+RASPBERRY PI
+
+Há dois pacotes para Raspberry Pi. Escolha pelo sistema operacional,
+não pela placa:
+
+  RudeBreaker-RaspberryPi-*.zip    Raspberry Pi OS de 64 bits
+                                   (aarch64). Pi 3, Pi 4, Pi 5,
+                                   Pi Zero 2 W.
+  RudeBreaker-RaspberryPi32-*.zip  Raspberry Pi OS de 32 bits (armhf).
+
+Para saber qual sistema você tem, abra um terminal e rode:
+
+  uname -m           aarch64 = 64 bits; armv7l ou armv6l = 32 bits
+  getconf LONG_BIT   64 ou 32
+
+Descompacte o pacote, coloque SGM1.DAT, SONG.DAT e FPLAY.COM junto
+do programa (mesmos nomes, em maiúsculas) e, dentro dessa pasta:
+
+  chmod +x rudebreaker
+  ./rudebreaker
+
+O pacote já traz a sua própria libSDL2-2.0.so.0, então não é preciso
+instalar mais nada.
+
+Com área de trabalho: no Raspberry Pi OS atual a área de trabalho
+roda em Wayland, e o jogo usa ele por padrão. Se a janela não abrir
+ou aparecer errada, force o X11:
+
+  SDL_VIDEODRIVER=x11 ./rudebreaker
+
+Raspberry Pi OS Lite (sem área de trabalho): rode o jogo no console
+de texto, não por SSH, assim:
+
+  SDL_VIDEODRIVER=kmsdrm SDL_AUDIODRIVER=alsa ./rudebreaker
+
+O seu usuário precisa estar nos grupos video e input (o usuário
+padrão já está). Se não estiver:
+
+  sudo usermod -aG video,input $USER
+
+e depois saia e entre de novo.
+
+Desempenho: o recomendado é um Pi 4 ou Pi 5. No Pi 3, use uma janela
+pequena em vez da tela cheia e feche os outros programas.
+
+"cannot execute binary file: Exec format error" quer dizer que você
+pegou o pacote errado para o seu sistema: use o outro.
 
 
 3. CONTROLES
