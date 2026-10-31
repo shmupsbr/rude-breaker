@@ -1,7 +1,7 @@
 RUDE BREAKER 30th AE - PORT PARA PC - MANUAL DO USUÁRIO
 =======================================================
 
-Build pr9zc - 30/10/2026
+Build pr9zd - 31/10/2026
 
 Também em: inglês (MANUAL.md / .txt), japonês (MANUAL.ja.md / .txt).
 
@@ -209,14 +209,19 @@ A tela de título mostra "30TH ANNIVERSARY EDITION" em branco,
 centralizado sob o logo, com um brilho suave em volta das letras a
 cada 5 segundos (o mesmo brilho aparece sob o logo no painel lateral
 esquerdo), o PUSH TRIGGER mudando suavemente entre amarelo e verde a
-cada 10 segundos, e as linhas de crédito (c) COMPILE 1996 e (c) 2026
-SHMUPSBR.
+cada 10 segundos, e as linhas de crédito (c) COMPILE 1996 e (c) SHMUPSBR
+2026.
 Aperte Tiro no título para começar, ou abra o CONFIG pelo menu do
 título.
 
 O CONFIG tem estas páginas:
 
 GAMEPLAY
+
+  As opções ficam em linhas seguidas, sem linha em branco entre elas,
+  nesta ordem: DIFFICULTY, SUICIDE BULLETS, SHIP SELECT, MOVE SPEED,
+  PALETTE, TRAINING, FRAME PACING, RANK, SIDE PANELS, BULLET COLOR,
+  LOOP e BACK.
 
   DIFFICULTY       VERY EASY, EASY, NORMAL, HARD, VERY HARD. São os
                    próprios níveis de dificuldade do jogo original.
@@ -329,10 +334,19 @@ GAMEPLAY
                    só sobe quando você pega uma medalha revelada e
                    volta a 0 a cada fase.
                    NO DEATH mostra YES até você perder uma vida, e
-                   depois NO com o número de vidas perdidas ("NO x2").
-                   Continua NO pelas cinco fases e num continue, e só
+                   depois NO (sem contagem). Continua NO pelas cinco fases e num continue, e só
                    volta a YES numa partida nova. No Training o
                    cabeçalho do quadro também mostra TRAINING.
+                   A partir do loop 2 (LOOP ON) o título do quadro
+                   RANK também mostra o loop: LOOP 2, LOOP 3 ... Fica
+                   oculto no loop 1 e com LOOP OFF.
+
+  LOOP             OFF (padrão): o jogo termina depois da fase 5 com o
+                   final, como no original. ON: vencer a fase 5 começa
+                   a fase 1 de novo como loop 2, depois loop 3 e assim
+                   por diante, mantendo pontuação, vidas e armas. Cada
+                   loop é mais difícil (veja a seção 6). Salvo no
+                   rudebreaker.cfg.
 
   BACK
 
@@ -444,6 +458,43 @@ original: sem subida, sem aceleração dos tiros e sem o bônus de
 +1000, e o painel lateral mostra RANK SYSTEM / OFFLINE no gráfico do
 rank.
 
+O LOOP (opção do GAMEPLAY, OFF por padrão) é uma adição deste port.
+Com LOOP ON, vencer a fase 5 não mostra o final: a fase 1 começa de
+novo como loop 2, depois loop 3 e assim por diante, e você mantém
+pontuação, vidas e armas. Em cada loop novo:
+
+  - A dificuldade base fica um nível acima da do loop anterior, a
+    partir da DIFFICULTY escolhida (VERY EASY -> EASY -> NORMAL ->
+    HARD -> VERY HARD). Em VERY HARD ela fica em VERY HARD e só o
+    multiplicador de loop abaixo continua crescendo. O nível novo, com
+    os ajustes do próprio jogo para ele (tiros e resistência dos
+    inimigos), vale a partir do começo da fase 1 do loop.
+  - O rank recomeça no ponto inicial da base nova. O teto de subida,
+    os limites do rank e a aceleração no teto seguem a base do mesmo
+    jeito que seguem a sua DIFFICULTY no loop 1 (por exemplo, uma
+    partida em NORMAL fica HARD no loop 2, e lá pode subir até VERY
+    HARD).
+  - Todo valor controlado pelo rank é multiplicado pelo número do
+    loop: x1 no loop 1, x2 no loop 2, x3 no loop 3 e assim por diante.
+    Isso vale para a velocidade com que o rank sobe, para quanto o
+    rank soma à velocidade dos tiros inimigos e para os passos de +1%
+    da aceleração no teto. Limites: o multiplicador para em x8 (loop 8
+    em diante); a velocidade dos tiros inimigos nunca passa do valor
+    VERY HARD do próprio jogo; a aceleração no teto vai até +25% vezes
+    o multiplicador, mas nunca passa de +50%.
+  - Perder uma vida volta para a dificuldade base do loop, com o rank
+    inicial dela.
+  - A partir do loop 2, o título do quadro RANK no painel lateral
+    mostra o loop (LOOP 2, LOOP 3 ...); fica oculto no loop 1. A
+    contagem para em 99.
+  - Game over encerra a partida; uma partida nova começa no loop 1 com
+    a DIFFICULTY escolhida.
+  - No Training, LOOP ON ainda começa a fase 1 de novo depois da fase
+    5, mas a dificuldade e o multiplicador não mudam.
+
+Com LOOP OFF o jogo termina depois da fase 5 exatamente como no
+original.
+
 O cheat de debug original continua no código. Durante a partida,
 pause com o Esc e digite N E K O C O. Depois:
 
@@ -527,7 +578,7 @@ Quando algo parecer, soar ou responder errado, por favor mande:
   5. A opção de PACING (SMOOTH ou EXACT) e o arquivo pace.txt da pasta
      do jogo (ele é reescrito toda vez que você sai, então copie logo
      depois do problema).
-  6. O nome da build: Rude Breaker 30th AE pr9zc.
+  6. O nome da build: Rude Breaker 30th AE pr9zd.
 
 Mande para Filipe Gracioli / shmupsbr.
 
@@ -541,7 +592,7 @@ Mande para Filipe Gracioli / shmupsbr.
                3-Clause (veja LICENSE-ymfm.txt).
   SDL2         Simple DirectMedia Layer, licença zlib.
   Port para PC Filipe Gracioli / shmupsbr.
-  30th AE      (c) 2026 ShmupsBR.
+  30th AE      (c) ShmupsBR 2026.
 
 Fonte dos painéis: Robotica, de Courtney Novits (fonte gratuita,
 dafont.com), embutida no programa.

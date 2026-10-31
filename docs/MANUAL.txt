@@ -1,7 +1,7 @@
 RUDE BREAKER 30th AE - PC PORT - USER MANUAL
 ============================================
 
-Build pr9zc - 2026-10-30
+Build pr9zd - 2026-10-31
 
 Also in: Portuguese (MANUAL.pt-BR.md / .txt), Japanese (MANUAL.ja.md / .txt).
 
@@ -26,7 +26,7 @@ same game with these additions:
   - Escape pauses only during a game, never on the title or in menus.
   - The final boss's homing shot now turns its trail sprite to the
     direction it flies, as in the original.
-  - New title screen with the 30th AE mark and a 2026 ShmupsBR credit.
+  - New title screen with the 30th AE mark and a ShmupsBR 2026 credit.
 
 The port does not remake the game. It runs the original game scripts
 and logic from the original data files. Enemy patterns, scoring, boss
@@ -208,12 +208,17 @@ The title screen shows "30TH ANNIVERSARY EDITION" in white, centred
 under the logo, with a soft glow around the letters every 5 seconds
 (the same glow plays under the logo in the left side panel), PUSH
 TRIGGER changing smoothly between yellow and green every 10 seconds,
-and the credit lines (c) COMPILE 1996 and (c) 2026 SHMUPSBR.
+and the credit lines (c) COMPILE 1996 and (c) SHMUPSBR 2026.
 Press Fire at the title to start, or open CONFIG from the title menu.
 
 CONFIG has these pages:
 
 GAMEPLAY
+
+  The options sit on consecutive lines, with no blank line between
+  them, in this order: DIFFICULTY, SUICIDE BULLETS, SHIP SELECT, MOVE
+  SPEED, PALETTE, TRAINING, FRAME PACING, RANK, SIDE PANELS, BULLET
+  COLOR, LOOP and BACK.
 
   DIFFICULTY       VERY EASY, EASY, NORMAL, HARD, VERY HARD. These are
                    the original game's own difficulty levels. NORMAL
@@ -323,10 +328,19 @@ GAMEPLAY
                    goes up only when you pick up a revealed medal and
                    starts again at 0 each stage.
                    NO DEATH shows YES until you lose a life, then NO
-                   with the number of lives lost ("NO x2"). It stays
-                   NO through all five stages and a continue, and
+                   (no count is shown). It stays NO through all five
+                   stages and a continue, and
                    starts again at YES only with a new game. In
                    Training the box header also shows TRAINING.
+                   From loop 2 on (LOOP ON) the RANK box title also
+                   shows the loop: LOOP 2, LOOP 3 ... It is hidden in
+                   loop 1 and with LOOP OFF.
+
+  LOOP             OFF (default): the game ends after stage 5 with the
+                   ending, as in the original. ON: clearing stage 5
+                   starts stage 1 again as loop 2, then loop 3 and so
+                   on, keeping your score, lives and weapons. Each loop
+                   is harder (see section 6). Saved in rudebreaker.cfg.
 
   BACK
 
@@ -437,6 +451,41 @@ exactly like the original: no step-up, no bullet speed-up and no
 +1000 bonus, and the side panel shows RANK SYSTEM / OFFLINE in the
 rank graph.
 
+LOOP (GAMEPLAY option, OFF by default) is an addition of this port.
+With LOOP ON, clearing stage 5 does not show the ending: stage 1
+starts again as loop 2, then loop 3 and so on, and you keep your
+score, lives and weapons. In each new loop:
+
+  - The base difficulty is one level above the loop before, starting
+    from the DIFFICULTY you chose (VERY EASY -> EASY -> NORMAL -> HARD
+    -> VERY HARD). At VERY HARD it stays VERY HARD and only the loop
+    multiplier below keeps growing. The new level, with the game's
+    own settings for it (enemy bullets and enemy strength), takes
+    effect when stage 1 of the loop starts.
+  - Rank starts again at the new base's starting point. The step-up
+    ceiling, the rank limits and the speed-up at the ceiling follow
+    the base the same way they follow your DIFFICULTY in loop 1 (for
+    example a NORMAL game is HARD in loop 2, so it can step up to VERY
+    HARD there).
+  - Every value driven by rank is multiplied by the loop number: x1 in
+    loop 1, x2 in loop 2, x3 in loop 3 and so on. That is how fast rank
+    rises, how much rank adds to enemy bullet speed, and the +1% steps
+    of the speed-up at the ceiling. Limits: the multiplier stops at x8
+    (loop 8 and later); enemy bullet speed never goes past the game's
+    own VERY HARD value; the speed-up at the ceiling goes up to +25%
+    times the multiplier, but never past +50%.
+  - Losing a life takes you back to the loop's base difficulty, with
+    its starting rank.
+  - From loop 2 on, the RANK box title in the side panel shows the
+    loop (LOOP 2, LOOP 3 ...); it is hidden in loop 1. The count stops
+    at 99.
+  - Game over ends the run; a new game starts at loop 1 with the
+    DIFFICULTY you chose.
+  - In Training, LOOP ON still starts stage 1 again after stage 5, but
+    the difficulty and the multiplier do not change.
+
+With LOOP OFF the game ends after stage 5 exactly as in the original.
+
 The original debug cheat is still in the code. During the game, pause
 with Escape and type N E K O C O. Then:
 
@@ -517,7 +566,7 @@ When something looks, sounds or feels wrong, please send:
   5. The PACING setting (SMOOTH or EXACT) and the file pace.txt from
      the game folder (it is rewritten each time you quit, so copy it
      right after the problem).
-  6. The build name: Rude Breaker 30th AE pr9zc.
+  6. The build name: Rude Breaker 30th AE pr9zd.
 
 Send it to Filipe Gracioli / shmupsbr.
 
@@ -531,7 +580,7 @@ Send it to Filipe Gracioli / shmupsbr.
                license (see LICENSE-ymfm.txt).
   SDL2         Simple DirectMedia Layer, zlib license.
   PC port      Filipe Gracioli / shmupsbr.
-  30th AE      (c) 2026 ShmupsBR.
+  30th AE      (c) ShmupsBR 2026.
 
 Panel font: Robotica by Courtney Novits (free font, dafont.com),
 built into the program.
