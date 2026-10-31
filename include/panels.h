@@ -34,7 +34,7 @@ typedef struct RbPanelData {
     int iframe;             /* invulnerability frames left (global DF) */
     int iframe_max;         /* its value when granted */
     int iframe_respawn;     /* 1 if granted by a respawn */
-    int onecc;              /* 1CC on record */
+    int run_deaths;         /* lives lost this run (NO DEATH) */
     int speed;              /* 0..2 */
     uint32_t score;
     uint32_t hiscore;
