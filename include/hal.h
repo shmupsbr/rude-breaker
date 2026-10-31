@@ -258,6 +258,12 @@ uint32_t *sys_frame_pixels(void);
 int       sys_window_wide(void);
 uint32_t *sys_wide_pixels(void);
 void      sys_set_wide(int on);
+/* Borderless fullscreen on the current display (aspect kept by the
+ * renderer's logical size), mouse cursor hidden while it is on. */
+void sys_set_fullscreen(int on);
+int  sys_fullscreen(void);
+/* 1 once per F11 press since the last call. */
+int  sys_take_fullscreen_key(void);
 void sys_draw_sprite(const RbSprite *spr);
 void sys_draw_rect(const RbRect *rect, uint32_t rgba);
 void sys_draw_text(int16_t x, int16_t y, const char *utf8, uint32_t rgba);

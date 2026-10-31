@@ -134,7 +134,11 @@ void vm_info(const RbVm *vm, RbVmInfo *out);
 int  vm_count_origin(const RbVm *vm, uint16_t script_ip);
 int  vm_collect_sprites(const RbVm *vm, RbVmSprite *out, int max);
 int  vm_quit_requested(const RbVm *vm);
+/* Ship collision box in screen pixels; 0 when no ship is shown. */
+int  vm_ship_box(const RbVm *vm, int *x0, int *y0, int *x1, int *y1);
 int  vm_boot_requested(const RbVm *vm);
+/* Title menu RETURN: the original restarts from the boot script. */
+int  vm_restart_requested(const RbVm *vm);
 /* 1 once, when this frame loaded the next stage (records 3..6). */
 int  vm_take_stage_gap(RbVm *vm);
 
