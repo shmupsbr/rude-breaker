@@ -1,13 +1,15 @@
 RUDE BREAKER 30th AE - PC PORT - USER MANUAL
 ============================================
 
-Build pr9y tester build - 2026-10-30
+Build pr9zc - 2026-10-30
+
+Also in: Portuguese (MANUAL.pt-BR.md / .txt), Japanese (MANUAL.ja.md / .txt).
 
 
 1. WHAT THIS IS
 ---------------
 
-This is a Windows PC port of Rude Breaker, the vertical shoot 'em up
+This is a PC (Windows and Linux) port of Rude Breaker, the vertical shoot 'em up
 Compile made for the NEC PC-98 (Disc Station, 1996).
 
 Rude Breaker 30th AE (30th Anniversary Edition) marks 30 years since
@@ -37,35 +39,97 @@ frame pacing, and a set of options in the CONFIG menu.
 
 IMPORTANT: the game data (SGM1.DAT, SONG.DAT, FPLAY.COM) is
 copyrighted. It is NOT part of the public port and must not be
-redistributed. This build includes it only
-because it is a private test build. Please do not share it.
+redistributed. You supply it from your own legal copy of the game
+(section 2). A private test build that includes it is for its tester
+only. Please do not share it.
 
 
-2. INSTALLING AND RUNNING
--------------------------
+2. INSTALLING, RUNNING AND THE GAME FILES
+-----------------------------------------
 
-Unzip the folder anywhere and run rudebreaker.exe. Nothing needs to be
-installed.
+Unzip the folder anywhere. Nothing needs to be installed.
 
-Files in the folder:
+  Windows: run rudebreaker.exe.
+  Linux:   in a terminal, in the folder: chmod +x rudebreaker, then
+           ./rudebreaker
 
-  rudebreaker.exe       The game.
-  SDL2.dll              Window, sound and gamepad library. Required.
-  SGM1.DAT              Original stages, sprites and scripts. Required.
-  SONG.DAT              Original music data. Required for music.
-  FPLAY.COM             Original music driver. Required for music.
+Files of the port:
+
+  rudebreaker.exe       The game (Windows).
+  SDL2.dll              Window, sound and gamepad library (Windows).
+  rudebreaker           The game (Linux x86_64).
+  libSDL2-2.0.so.0      The same library (Linux).
   LICENSE-ymfm.txt      License of the ymfm sound chip emulator.
   LICENSE-SDL2.txt      License of the SDL2 library.
   MANUAL.txt / .md      This manual.
 
-Files the game creates next to the exe:
+GAME FILES
+
+The port has no game data of its own. It reads it from your own copy
+of Rude Breaker (Disc Station Vol. 10, PC-98):
+
+  SGM1.DAT     required   Stages, sprites, scripts and the game program.
+  FPLAY.COM    required   The original music driver.
+  SONG.DAT     required   The music and sound effect data.
+  RBRANK.DAT   optional   The original hi-score and settings file.
+
+SGC.COM, READJS.COM and RUDEBR.BAT are also on the disk; they are not
+read and are not needed. No BIOS, font ROM or sound ROM is needed:
+the music uses YM2203 emulation, which needs no ROM.
+
+There are two ways to give the files to the port:
+
+  1. Loose files. Copy SGM1.DAT, FPLAY.COM and SONG.DAT (and
+     RBRANK.DAT if you want your old scores) into the game folder,
+     next to the program, or into a subfolder named RUDEBR:
+
+       Rude Breaker PC/
+         rudebreaker.exe
+         SDL2.dll
+         SGM1.DAT
+         FPLAY.COM
+         SONG.DAT
+
+     On Linux the names must match exactly, in upper case
+     (SGM1.DAT, not sgm1.dat).
+
+  2. A disk image. Put a PC-98 disk image of the game in the game
+     folder (or in its RUDEBR subfolder) as it is. Accepted:
+     .hdm, .fdi, .d88, .hdi, .nhd, or a .zip that holds one of those.
+     The port reads the files out of the image's FAT filesystem,
+     also from a RUDEBR folder inside it. Nothing is extracted to disk.
+     If there are several images, the first one that has the files
+     is used, trying .hdm, .zip, .fdi, .d88, .hdi and .nhd in that
+     order.
+
+Where the port looks, in this order. A folder or image given in 1 or
+2 is always used, even when the files are not there (you then get
+the window described below). Places 3 to 5 are used only when they
+have the files; if none has them, the program's folder is reported:
+
+  1. A folder or disk image given as the program argument, for
+     example: rudebreaker.exe D:\games\rudebr.hdm
+  2. The folder or image in the RUDEBR_ASSETS environment variable.
+  3. The program's own folder: loose files, then a disk image.
+  4. The RUDEBR subfolder of the program's folder.
+  5. assets/raw/RUDEBR under the current folder (for developers).
+
+If a required file is missing, the game does not start. A window
+titled "disk files needed" shows the folder or image it tried, and
+for each file whether it was found or is MISSING. Add the missing
+files and run the game again. If RBRANK.DAT is missing, the game
+starts with the original hi-score table and default settings and
+creates the file when it saves.
+
+Files the game creates:
 
   RBRANK.DAT       The original save file: the hi-score table and the
                    game settings (difficulty and the GAMEPLAY options).
-                   It is created with the original table if missing.
-                   Delete it to reset scores and settings.
+                   Kept in the folder the game files come from (next
+                   to the disk image, when you use one). Delete it to
+                   reset scores and settings.
   rudebreaker.cfg  PC options: palette, rank, training, key and pad
-                   bindings.
+                   bindings. Next to the program.
   rudebreaker.ini  Frame pacing choice: pacing=smooth or pacing=exact.
   pace.txt         A small timing report (see section 7). Safe to
                    delete.
@@ -116,9 +180,6 @@ The top bar shows the current speed as SPD LOW, SPD MID or SPD MAX.
 Each game starts at the MOVE SPEED chosen in GAMEPLAY. A change made
 with the button lasts until the game ends; it does not change the
 MOVE SPEED setting.
-
-The top bar shows the current speed as "SPD" with 1, 2 or 3 arrows,
-between the score and HI.
 
 PAUSE: Escape (or Start) pauses only while you are playing a game.
 On the title, in the attract demo and in the menus it does not pause.
@@ -203,9 +264,10 @@ GAMEPLAY
   SIDE PANELS      ON (default): in a 16:9 window or full screen, the
                    playfield sits in the middle with info panels on
                    both sides: rank graph, loadout, extends, i-frames,
-                   speed, score, hit ratio, medals, level, time, 1CC
-                   and an arcade stick that shows your input. The logo
-                   and side art are taken from your own title screen.
+                   speed, score, hit ratio, medals, level, time, NO
+                   DEATH and an arcade stick that shows your input.
+                   The logo and side art are taken from your own
+                   title screen.
                    OFF, or a 4:3 / 16:10 window: the classic look.
                    LOADOUT shows two levels, one block per level, level
                    1 included (it fills the first block). SHOT is the
@@ -260,10 +322,11 @@ GAMEPLAY
                    5). The count is the game's own medal counter: it
                    goes up only when you pick up a revealed medal and
                    starts again at 0 each stage.
-                   1CC shows YES once you have reached the ending on
-                   one credit (no continue, no Training, no stage
-                   select, no invincibility or debug keys); this is
-                   saved in the settings file.
+                   NO DEATH shows YES until you lose a life, then NO
+                   with the number of lives lost ("NO x2"). It stays
+                   NO through all five stages and a continue, and
+                   starts again at YES only with a new game. In
+                   Training the box header also shows TRAINING.
 
   BACK
 
@@ -449,12 +512,12 @@ When something looks, sounds or feels wrong, please send:
   2. The steps to make it happen again (stage, mode, menu, what you
      pressed). Say if it happens every time or only sometimes.
   3. A screenshot or a short video, if you can.
-  4. Your Windows version, graphics card, monitor refresh rate, and
+  4. Your Windows or Linux version, graphics card, monitor refresh rate, and
      the controller you use (keyboard or which gamepad).
   5. The PACING setting (SMOOTH or EXACT) and the file pace.txt from
      the game folder (it is rewritten each time you quit, so copy it
      right after the problem).
-  6. The build name: Rude Breaker 30th AE pr9y.
+  6. The build name: Rude Breaker 30th AE pr9zc.
 
 Send it to Filipe Gracioli / shmupsbr.
 
@@ -471,4 +534,4 @@ Send it to Filipe Gracioli / shmupsbr.
   30th AE      (c) 2026 ShmupsBR.
 
 Panel font: Robotica by Courtney Novits (free font, dafont.com),
-included as assets/fonts/Robotica.ttf.
+built into the program.
