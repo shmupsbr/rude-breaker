@@ -16,12 +16,14 @@ This program exists to build changes on top of a game I am a huge fan of, made b
 ### New in 30th AE
 - **SPEED button** (C / Ctrl, pad Y): changes the ship's speed during the game, cycling LOW / MID / MAX / MID / LOW. Each game starts at MID by default, or at the MOVE SPEED chosen in the menu. The top bar shows it as `SPD LOW`, `SPD MID` or `SPD MAX`.
 - **RANK** (GAMEPLAY menu, ON by default): a Zanac-style rank. It rises while you survive and score, halves when you lose a life, and speeds up enemy bullets (never slower than the chosen difficulty). Bonuses still follow the chosen difficulty. On VERY EASY and EASY rank only goes half way up; on HARD and VERY HARD it starts half way up. OFF plays exactly like the original.
+- **LOOP** (GAMEPLAY menu, OFF by default): with LOOP ON, clearing stage 5 starts stage 1 again as loop 2, 3 and so on, keeping score, lives and weapons. Each loop raises the base difficulty one level (up to VERY HARD), and every rank-driven value is multiplied by the loop number (capped at x8; enemy bullet speed never passes VERY HARD; the speed-up at the ceiling never passes +50%). Losing a life goes back to the loop's base difficulty. From loop 2 on, the RANK box title shows LOOP 2, LOOP 3... OFF keeps the original ending. Details in section 6 of the manual.
+- The GAMEPLAY menu lists its options on consecutive lines, with no blank lines between them.
 - **MODERN palette** is now the default.
 - **Weapon change during the game** (SHIP SELECT OFF) is now the default: pick up V, L or M capsules to switch weapon.
 - **Escape** pauses only during a game.
 - The final boss's homing shot now points its trail in the direction it flies, as in the original.
 - A short 30th AE card ("Rude Breaker - 30th Anniversary Edition by ShmupsBR 2026") before the Compile logo; trigger or Start skips it.
-- New title screen with the 30th AE mark and the © 2026 ShmupsBR credit, and a 30th AE credit line in the ending. The ranking screen keeps its original look.
+- New title screen with the 30th AE mark and the © ShmupsBR 2026 credit, and a 30th AE credit line in the ending. The ranking screen keeps its original look.
 
 ### Why the game files are not included
 This repository contains **only the engine** (the code written for this port). It does **not** include any of the original game's files, and never will:
