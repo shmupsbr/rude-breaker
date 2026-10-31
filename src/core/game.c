@@ -40,6 +40,21 @@ static int          g_panels_on = 1;
 static int          g_bullet_c;     /* 0 ORIGINAL, 1 PINK, 2 LILAC, 3 BLUE, 4 GREEN */
 static const char *const k_bullet_name[5] = {"ORIGINAL", "PINK", "LILAC", "BLUE", "GREEN"};
 static int          g_cfg_9r;      /* settings file has the pr9r defaults */
+/* HITBOX: 0 OFF, then the bullet colours (PINK..GREEN) plus RED and
+ * WHITE. Never the colour enemy bullets use (ORIGINAL is the red). */
+#define HIT_N 7
+static int          g_hitbox;
+static const char *const k_hit_name[HIT_N] = {
+    "OFF", "PINK", "LILAC", "BLUE", "GREEN", "RED", "WHITE"
+};
+static const uint32_t k_hit_rgba[HIT_N] = {
+    0, 0xFF60D0FFu, 0xD8A0FFFFu, 0x50C8FFFFu, 0x78FFC8FFu, 0xFF3030FFu,
+    0xFFFFFFFFu
+};
+static const char *const k_hit_cfg[HIT_N] = {
+    "off", "pink", "lilac", "blue", "green", "red", "white"
+};
+static int          g_fullscreen;   /* FULLSCREEN option / F11 */
 /* 1CC on record (saved) and whether this run still counts. */
 static int          g_onecc;
 /* Lives lost this run (NO DEATH box); cleared only by a new game. */
@@ -117,6 +132,8 @@ static void load_cfg(const RbGame *g)
     g_cfg_9r = 0;
     g_onecc = 0;
     g_loop_on = 0;
+    g_hitbox = 0;
+    g_fullscreen = 0;
     g_cfg_v9p = 0;
     sys_bind_restore();
     cfg_path(g, path, sizeof path);
@@ -159,6 +176,21 @@ static void load_cfg(const RbGame *g)
                     g_bullet_c = k;
                 }
             }
+        } else if (strncmp(line, "hitbox=", 7) == 0) {
+            int k;
+
+            for (k = 0; k < HIT_N; k++) {
+                size_t m = strlen(k_hit_cfg[k]);
+
+                if (strncmp(line + 7, k_hit_cfg[k], m) == 0 &&
+                    (line[7 + m] == '\n' || line[7 + m] == '\r' || !line[7 + m])) {
+                    g_hitbox = k;
+                }
+            }
+        } else if (strncmp(line, "fullscreen=on", 13) == 0) {
+            g_fullscreen = 1;
+        } else if (strncmp(line, "fullscreen=off", 14) == 0) {
+            g_fullscreen = 0;
         } else if (strncmp(line, "loop=on", 7) == 0) {
             g_loop_on = 1;
         } else if (strncmp(line, "loop=off", 8) == 0) {
@@ -404,6 +436,8 @@ static void save_cfg(const RbGame *g)
             g_panels_on ? "on" : "off",
             g_onecc ? "yes" : "no");
     fprintf(fp, "loop=%s\n", g_loop_on ? "on" : "off");
+    fprintf(fp, "hitbox=%s\nfullscreen=%s\n", k_hit_cfg[g_hitbox],
+            g_fullscreen ? "on" : "off");
     sys_bind_write(fp);
     fclose(fp);
 }
@@ -415,6 +449,89 @@ static void apply_host_options(void)
     }
     vm_set_training(g_vm, g_training);
     vm_set_grade(g_vm, g_modern);
+}
+
+/* The hitbox colour that would match the enemy bullets. ORIGINAL
+ * bullets are the game's bright red, so RED is the one taken then. */
+static int hit_blocked(int h)
+{
+    if (h >= 1 && h <= 4) {
+        return h == g_bullet_c;
+    }
+    return h == 5 && g_bullet_c == 0;
+}
+
+static int hit_step(int h, int dir)
+{
+    int n;
+
+    for (n = 0; n < HIT_N; n++) {
+        h = (h + (dir < 0 ? HIT_N - 1 : 1)) % HIT_N;
+        if (!hit_blocked(h)) {
+            break;
+        }
+    }
+    return h;
+}
+
+/* After the bullet colour changes: move the hitbox off a clash. */
+static void hit_fix(void)
+{
+    if (g_hitbox && hit_blocked(g_hitbox)) {
+        g_hitbox = hit_step(g_hitbox, 1);
+        if (g_hitbox == 0) {
+            g_hitbox = hit_step(0, 1);
+        }
+    }
+}
+
+static void fullscreen_apply(int on)
+{
+    sys_set_fullscreen(on);
+    g_fullscreen = sys_fullscreen();
+}
+
+/* HITBOX overlay: the ship's own collision box (the words the hit test
+ * reads), filled as a round dot with a thin dark rim, over the ship. */
+static void hitbox_draw(uint32_t *fb)
+{
+    int x0, y0, x1, y1;
+    int x, y;
+    uint32_t c;
+    int w, h;
+
+    if (!fb || !g_vm || !g_hitbox || !vm_ship_box(g_vm, &x0, &y0, &x1, &y1)) {
+        return;
+    }
+    c = k_hit_rgba[g_hitbox];
+    w = x1 - x0;
+    h = y1 - y0;
+    for (y = y0 - 1; y <= y1; y++) {
+        for (x = x0 - 1; x <= x1; x++) {
+            /* Ellipse test in doubled units, centre (x0+x1-1)/2. */
+            long dx = 2L * x + 1 - (x0 + x1);
+            long dy = 2L * y + 1 - (y0 + y1);
+            long rw = w;
+            long rh = h;
+            long in = dx * dx * rh * rh + dy * dy * rw * rw;
+            long lim = rw * rw * rh * rh;
+            long rw2 = rw + 2;
+            long rh2 = rh + 2;
+            uint32_t *d;
+
+            if (x < 0 || y < 0 || x >= RB_NATIVE_W || y >= RB_NATIVE_H) {
+                continue;
+            }
+            d = &fb[(size_t)y * RB_NATIVE_W + (size_t)x];
+            if (x >= x0 && x < x1 && y >= y0 && y < y1 &&
+                (w < 4 || h < 4 || in <= lim + lim / 4)) {
+                *d = c;
+            } else if (dx * dx * rh2 * rh2 + dy * dy * rw2 * rw2 <=
+                       rw2 * rw2 * rh2 * rh2) {
+                *d = 0x101010FFu;
+            }
+        }
+    }
 }
 
 static int btn_pressed(const RbGame *g, uint16_t mask);
@@ -626,7 +743,7 @@ static void joy_auto(void)
 static int page_count(void)
 {
     switch (g_page) {
-    case PAGE_GAME:  return 12;
+    case PAGE_GAME:  return 14;
     case PAGE_CTRL:  return 3;
     case PAGE_KEYS:  return 11;
     case PAGE_SOUND: return 7;
@@ -692,10 +809,19 @@ static void change_value(RbGame *g, int dir)
             /* Host only: recolours enemy bullets, saved to the settings file. */
             g_bullet_c = (g_bullet_c + (dir < 0 ? 4 : 1)) % 5;
             gfx_set_bullet_color(g_bullet_c);
+            hit_fix();
             changed = 1;
         } else if (g_cursor == 10) {
+            /* Host only: never the bullet colour, saved. */
+            g_hitbox = hit_step(g_hitbox, dir);
+            changed = 1;
+        } else if (g_cursor == 11) {
             /* Host only, saved to the settings file. */
             g_loop_on = !g_loop_on;
+            changed = 1;
+        } else if (g_cursor == 12) {
+            /* Host only, saved to the settings file. F11 does the same. */
+            fullscreen_apply(!g_fullscreen);
             changed = 1;
         }
     } else if (g_page == PAGE_CTRL && g_cursor == 0) {
@@ -763,7 +889,7 @@ static void activate_row(RbGame *g)
         menu_ok();
         return;
     }
-    if (g_page == PAGE_GAME && g_cursor == 11) {
+    if (g_page == PAGE_GAME && g_cursor == 13) {
         enter_page(PAGE_ROOT);
         menu_ok();
         return;
@@ -1041,7 +1167,7 @@ static int menu_row(int first, int index)
     return first + index * 2;
 }
 
-/* GAMEPLAY has 12 rows, so they sit on consecutive lines. */
+/* GAMEPLAY has 14 rows, so they sit on consecutive lines. */
 static int game_row(int index)
 {
     return 4 + index;
@@ -1240,8 +1366,12 @@ static void host_menu_paint(void)
                    g_panels_on);
         paint_line(9, game_row(9), "BULLET COLOR", k_bullet_name[g_bullet_c],
                    g_bullet_c != 0);
-        paint_line(10, game_row(10), "LOOP", g_loop_on ? "ON" : "OFF", g_loop_on);
-        paint_line(11, game_row(11), "BACK", NULL, 0);
+        paint_line(10, game_row(10), "HITBOX", k_hit_name[g_hitbox],
+                   g_hitbox != 0);
+        paint_line(11, game_row(11), "LOOP", g_loop_on ? "ON" : "OFF", g_loop_on);
+        paint_line(12, game_row(12), "FULLSCREEN", g_fullscreen ? "ON" : "OFF",
+                   g_fullscreen);
+        paint_line(13, game_row(13), "BACK", NULL, 0);
     } else if (g_page == PAGE_CTRL) {
         paint_line(0, menu_row(4, 0), "JOYSTICK", joy_value(), joy_flag());
         paint_line(1, menu_row(4, 1), "DEFINE KEYS", NULL, 0);
@@ -1545,6 +1675,10 @@ void game_init(RbGame *g, const RbDisk *disk)
         save_cfg(g);
     }
     gfx_set_bullet_color(g_bullet_c);
+    hit_fix();
+    if (g_fullscreen) {
+        fullscreen_apply(1);
+    }
     if (g_cfg_v9p != 1) {
         /* One-time move to the pr9p defaults: modern palette and ship
          * select OFF (weapons change in play through the capsules). */
@@ -1646,6 +1780,14 @@ static void step_script(RbGame *g)
     }
     if (vm_quit_requested(g_vm)) {
         g->state = RB_STATE_QUIT;
+    } else if (vm_restart_requested(g_vm)) {
+        /* RETURN on the title menu: back to the Compile logo with the
+         * saved settings and scores, like the original's 0x08E6. */
+        rank_flush(g);
+        vm_reset_boot(g_vm);
+        rank_load(g);
+        apply_host_options();
+        g->state = RB_STATE_TITLE;
     } else if (vm_boot_requested(g_vm)) {
         vm_ack_boot(g_vm);
         if (g->state != RB_STATE_QUIT) {
@@ -2561,6 +2703,11 @@ void game_update(RbGame *g)
     uint16_t swallowed = 0;
 
     g->frame++;
+    if (sys_take_fullscreen_key()) {
+        /* F11 any time: same as the FULLSCREEN option, and saved. */
+        fullscreen_apply(!g_fullscreen);
+        save_cfg(g);
+    }
     g->input.buttons = (uint16_t)(g->input.buttons |
                                   script_buttons_env("RUDEBR_SCRIPT", g->frame));
     /* Same syntax, pressed on the gamepad side (pad_buttons). */
@@ -2779,6 +2926,7 @@ void game_render(const RbGame *g)
 
             if (frame && vm_gfx_active(g_vm)) {
                 vm_present(g_vm, frame, RB_NATIVE_W, RB_NATIVE_H);
+                hitbox_draw(frame);
             } else {
                 RbVmSprite spr[256];
                 int n;

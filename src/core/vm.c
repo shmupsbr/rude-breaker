@@ -66,6 +66,7 @@ struct RbVm {
     uint16_t prev_held;
     int quit;
     int boot;
+    int restart;
     int view_chunk;
     uint32_t spawns;
     uint8_t foe[256];      /* 1 counted enemy, 2 counted and destroyed */
@@ -4155,6 +4156,7 @@ void vm_reset_boot(RbVm *vm)
     vm->loads = 0;
     vm->quit = 0;
     vm->boot = 0;
+    vm->restart = 0;
     vm->pause_hold = 0;
     vm->pause_saved = 0;
     vm->pause_blink = 0;
@@ -4639,6 +4641,38 @@ void vm_sustain_ship(RbVm *vm)
     }
 }
 
+/* The ship's collision box (entity id 0x0012): centre X/Y at +0x22 /
+ * +0x24 and edges +0x42 / +0x44 / +0x46 / +0x48, the same words the
+ * hit test 0x426E reads. Returns 0 when there is no ship on screen. */
+int vm_ship_box(const RbVm *vm, int *x0, int *y0, int *x1, int *y1)
+{
+    int i;
+
+    if (!vm) {
+        return 0;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        uint16_t type = eu16(vm, i, 0);
+        int16_t x;
+        int16_t y;
+
+        if (type == 0 || eu16(vm, i, 4) != 0x0012u) {
+            continue;
+        }
+        if ((type & 0x00FFu) == 0 || (type & 0x0200u) != 0) {
+            return 0;
+        }
+        x = (int16_t)eu16(vm, i, 0x22);
+        y = (int16_t)eu16(vm, i, 0x24);
+        *x0 = x + (int16_t)eu16(vm, i, 0x42);
+        *x1 = x + (int16_t)eu16(vm, i, 0x44);
+        *y0 = y + (int16_t)eu16(vm, i, 0x46);
+        *y1 = y + (int16_t)eu16(vm, i, 0x48);
+        return *x1 > *x0 && *y1 > *y0;
+    }
+    return 0;
+}
+
 uint8_t vm_global_u8(const RbVm *vm, uint8_t field)
 {
     if (!vm) {
@@ -5049,6 +5083,18 @@ void vm_frame(RbVm *vm)
     for (i = 0; i < ENT_N; i++) {
         run_entity(vm, i);
     }
+    /* Title menu RETURN / EXIT (chunk 1 0x7EFE / 0x7F44) store byte
+     * [bp+0xBC] (0 RETURN, 1 EXIT), OR bit 0x8000 into the edge word
+     * [bp+0x6E], fade to black and end the script. The frame loop sees
+     * that bit and leaves; 0x0A5A then jumps back to the boot path
+     * (0x08E6) when BC is 0, or quits to DOS when it is 1. */
+    if (!vm->quit && !vm->restart && (gu16(vm, 0x6E) & 0x8000u)) {
+        if (vm->g[0xBC] == 0) {
+            vm->restart = 1;
+        } else {
+            vm->quit = 1;
+        }
+    }
     bullet_pct(vm);
     foe_scan(vm);
     /* Frame loop 0x0978 / 0x09CE. 0x5EF5 is the timer wait. 0x0FB9
@@ -5205,6 +5251,11 @@ void vm_ack_boot(RbVm *vm)
 int vm_quit_requested(const RbVm *vm)
 {
     return vm && vm->quit;
+}
+
+int vm_restart_requested(const RbVm *vm)
+{
+    return vm && vm->restart;
 }
 
 int vm_boot_requested(const RbVm *vm)
