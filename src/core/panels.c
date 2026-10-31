@@ -1388,21 +1388,27 @@ static void draw_right(uint32_t *o, const RbPanelData *d)
                  (unsigned)(d->time_cs / 100u % 60u), (unsigned)(d->time_cs % 100u));
         tab_c(o, X + 198 + 95, at_cap(F20, band_top(yl, 64, cap(F20))), F20, buf, C_Y);
 
-        /* 1CC: YES lit when a one-credit clear is on record. Training
-         * shows in the header. */
-        box_shape(o, X, yc, 388, 80, "1CC", d->training ? "TRAINING" : NULL, C_G);
+        /* NO DEATH: YES until the first life lost this run, then NO
+         * with the count. Training shows in the header. */
+        box_shape(o, X, yc, 388, 80, "NO DEATH", d->training ? "TRAINING" : NULL, C_G);
         {
             enum { PH2 = 26 };
             int pw = (388 - 2 * MX - 10) / 2;
             int ry = band_top(yc, 80, PH2);
+            int ok = d->run_deaths == 0;
+            char nb[16];
 
-            rect(o, X + MX, ry, pw, PH2, d->onecc ? C_G : scale(C_EDGE, 1, 2),
-                 d->onecc ? 255 : 160);
-            text_c(o, X + MX + pw / 2, mid(F20, ry, PH2), F20, "YES", d->onecc ? C_BG : C_DIM);
-            rect(o, X + MX + pw + 10, ry, pw, PH2, !d->onecc ? C_R : scale(C_EDGE, 1, 2),
-                 !d->onecc ? 255 : 160);
-            text_c(o, X + MX + pw + 10 + pw / 2, mid(F20, ry, PH2), F20, "NO",
-                   !d->onecc ? C_BG : C_DIM);
+            if (ok) {
+                snprintf(nb, sizeof nb, "NO");
+            } else {
+                snprintf(nb, sizeof nb, "NO  x%d", d->run_deaths);
+            }
+            rect(o, X + MX, ry, pw, PH2, ok ? C_G : scale(C_EDGE, 1, 2), ok ? 255 : 160);
+            text_c(o, X + MX + pw / 2, mid(F20, ry, PH2), F20, "YES", ok ? C_BG : C_DIM);
+            rect(o, X + MX + pw + 10, ry, pw, PH2, !ok ? C_R : scale(C_EDGE, 1, 2),
+                 !ok ? 255 : 160);
+            text_c(o, X + MX + pw + 10 + pw / 2, mid(F20, ry, PH2), F20, nb,
+                   !ok ? C_BG : C_DIM);
         }
 
         draw_input(o, X, yi, d->buttons);

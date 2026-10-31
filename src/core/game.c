@@ -42,6 +42,8 @@ static const char *const k_bullet_name[5] = {"ORIGINAL", "PINK", "LILAC", "BLUE"
 static int          g_cfg_9r;      /* settings file has the pr9r defaults */
 /* 1CC on record (saved) and whether this run still counts. */
 static int          g_onecc;
+/* Lives lost this run (NO DEATH box); cleared only by a new game. */
+static int          g_run_deaths;
 static int          g_run_ok;
 static int          g_last_clear;
 /* 30th AE intro card before the Compile logo: about 3 s at the
@@ -2119,7 +2121,7 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
         d.iframe_max = top;
         d.iframe_respawn = respawn;
     }
-    d.onecc = g_onecc;
+    d.run_deaths = g_run_deaths;
     d.speed = g_live_speed;
     d.score = info.score;
     d.hiscore = info.hiscore > info.score ? info.hiscore : info.score;
@@ -2192,6 +2194,7 @@ static void live_update(RbGame *g)
         if (info.score == 0u) {
             live_reset_match();
             pt_reset();
+            g_run_deaths = 0;
             /* A run from the start, without Training or stage select. */
             g_run_ok = !g_training && !getenv("RUDEBR_STAGE") && g->stage <= 1;
         }
@@ -2257,6 +2260,9 @@ static void live_update(RbGame *g)
     }
     /* Stage scripts set 0xCC when a stage is cleared; after stage 5,
      * the last one, the game goes to the ending. */
+    if ((flags & 0x8000u) == 0u && lives < g_live_prev_lives && g_run_deaths < 999) {
+        g_run_deaths++;
+    }
     pt_update(g, (flags & 0x8000u) == 0u && lives < g_live_prev_lives, flags);
     if ((flags & 0x8000u) == 0u) {
         const int prog = g_rank_on && !g_training;
