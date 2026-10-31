@@ -831,6 +831,15 @@ static void note_capture(const SDL_Event *ev)
 }
 
 static int g_any_press;
+static int g_f11;
+
+int sys_take_fullscreen_key(void)
+{
+    int r = g_f11;
+
+    g_f11 = 0;
+    return r;
+}
 
 int sys_any_press(void)
 {
@@ -864,6 +873,10 @@ void sys_read_input(RbInput *out)
             ev.type == SDL_CONTROLLERBUTTONDOWN ||
             ev.type == SDL_JOYBUTTONDOWN) {
             g_any_press = 1;
+        }
+        if (ev.type == SDL_KEYDOWN && !ev.key.repeat && !g_cap &&
+            ev.key.keysym.scancode == SDL_SCANCODE_F11) {
+            g_f11 = 1;
         }
         note_capture(&ev);
     }

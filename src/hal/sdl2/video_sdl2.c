@@ -157,6 +157,28 @@ uint32_t *sys_frame_pixels(void)
     return g_rb_pixels;
 }
 
+static int g_fullscreen;
+
+void sys_set_fullscreen(int on)
+{
+    on = on ? 1 : 0;
+    if (!g_rb_window) {
+        return;
+    }
+    if (SDL_SetWindowFullscreen(g_rb_window,
+                                on ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0) != 0) {
+        fprintf(stderr, "fullscreen: %s\n", SDL_GetError());
+        return;
+    }
+    SDL_ShowCursor(on ? SDL_DISABLE : SDL_ENABLE);
+    g_fullscreen = on;
+}
+
+int sys_fullscreen(void)
+{
+    return g_fullscreen;
+}
+
 int sys_window_wide(void)
 {
     int w = 0;
