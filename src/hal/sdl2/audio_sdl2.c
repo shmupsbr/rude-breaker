@@ -264,7 +264,7 @@ int sys_play_sound(uint16_t id, uint8_t vol)
     if (g_suppress) {
         return 0;
     }
-    if (getenv("RUDEBR_AUDIOLOG")) {
+    if (((char *)0)) {
         fprintf(stderr, "audio_sdl2: play sound %u\n", (unsigned)id);
     }
     if (!g_opened) {
@@ -285,8 +285,24 @@ int sys_play_sound(uint16_t id, uint8_t vol)
     return 0;
 }
 
+static int g_music_mute;
+
+/* Attract demo: music off, effects on. A track asked for while muted
+ * is not started; turning the mute on stops the one playing. */
+void sys_mute_music(int on)
+{
+    g_music_mute = on ? 1 : 0;
+    if (on) {
+        sys_stop_music();
+    }
+}
+
 int sys_play_music(uint16_t track_id)
 {
+    if (g_music_mute) {
+        sys_stop_music();
+        return 0;
+    }
     if (g_suppress) {
         fprintf(stderr, "audio_sdl2: music %u suppressed\n", (unsigned)track_id);
         return 0;

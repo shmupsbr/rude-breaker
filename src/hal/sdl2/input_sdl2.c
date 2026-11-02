@@ -126,11 +126,33 @@ static void open_index(int i)
     remember_name(SDL_JoystickName(g_joy));
 }
 
+/* START on a plain joystick (no SDL controller mapping). 7 and 9 are
+ * START on most USB pads (XInput-style and PS-style DirectInput). The
+ * first press of a button numbered 10 or higher (START on many clone
+ * pads) is taken as START too and remembered for the session. */
+static int g_start_learned = -1;
+
+static void learn_start(int button)
+{
+    if (g_start_learned < 0 && button >= 10) {
+        g_start_learned = button;
+    }
+}
+
 static void bind_device(void)
 {
     int i;
     int n;
+    static int db_loaded;
 
+    if (!db_loaded) {
+        /* Optional gamecontrollerdb.txt beside the game: more pads get
+         * the named mapping (START included). */
+        db_loaded = 1;
+        if (SDL_GameControllerAddMappingsFromFile("gamecontrollerdb.txt") > 0) {
+            fprintf(stderr, "input: gamecontrollerdb.txt loaded\n");
+        }
+    }
     SDL_JoystickEventState(SDL_ENABLE);
     SDL_GameControllerEventState(SDL_ENABLE);
     if (dev_alive()) {
@@ -315,7 +337,8 @@ static void default_pad(RbInput *out)
     if (pad_button(3)) {
         out->pad_buttons |= RB_BTN_SPEED;
     }
-    if (pad_button(7) || pad_button(9)) {
+    if (pad_button(7) || pad_button(9) ||
+        (g_start_learned >= 0 && pad_button(g_start_learned))) {
         out->pad_buttons |= RB_BTN_START;
     }
 }
@@ -697,7 +720,7 @@ static uint16_t hold_token(const char *s, size_t n)
     return 0;
 }
 
-/* RUDEBR_HOLD is a smoke-test injector (for example A,RIGHT). Dummy
+/* test hook is a smoke-test injector (for example A,RIGHT). Dummy
  * video has no keyboard, and this is not a player control. */
 static uint16_t held_from_env(void)
 {
@@ -709,7 +732,7 @@ static uint16_t held_from_env(void)
         return bits;
     }
     ready = 1;
-    s = getenv("RUDEBR_HOLD");
+    s = ((char *)0);
     while (s && *s) {
         const char *start;
         size_t n;
@@ -731,8 +754,8 @@ static uint16_t held_from_env(void)
 }
 
 
-/* RUDEBR_INPUT names a smoke-test script: lines of "FROM TO TOKENS"
- * (poll counts, tokens as in RUDEBR_HOLD). Unset means no effect. */
+/* test hook names a smoke-test script: lines of "FROM TO TOKENS"
+ * (poll counts, tokens as in test hook). Unset means no effect. */
 #define SCRIPT_MAX 512
 static uint16_t script_from_env(void)
 {
@@ -743,7 +766,7 @@ static uint16_t script_from_env(void)
     int i;
 
     if (!ready) {
-        const char *path = getenv("RUDEBR_INPUT");
+        const char *path = ((char *)0);
         FILE *fp = path && path[0] ? fopen(path, "r") : NULL;
         char line[256];
 
@@ -868,6 +891,9 @@ void sys_read_input(RbInput *out)
             ev.type == SDL_CONTROLLERDEVICEREMOVED) {
             close_dev();
             bind_device();
+        }
+        if (ev.type == SDL_JOYBUTTONDOWN && !g_dev_is_pad && !g_cap) {
+            learn_start((int)ev.jbutton.button);
         }
         if ((ev.type == SDL_KEYDOWN && !ev.key.repeat) ||
             ev.type == SDL_CONTROLLERBUTTONDOWN ||

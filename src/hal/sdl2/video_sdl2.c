@@ -27,13 +27,21 @@ static SDL_Texture *g_wide_texture;
 static void scaling_apply(void);
 static uint32_t    *g_wide_pixels;
 static int          g_wide_on;
+static SDL_Texture *g_tate_texture;
+static uint32_t    *g_tate_pixels;
+static int          g_orient;
+static SDL_Texture *g_rot_tex[3];
+static uint32_t *g_rot_px[3];
+static int g_rot_w[3];
+static int g_rot_o[3];
+
 uint32_t     *g_rb_pixels   = NULL; /* RGBA8888, native resolution */
 
 static uint32_t g_start_ticks;
 
 static int frames_are_fast(void)
 {
-    const char *v = getenv("RUDEBR_FAST");
+    const char *v = ((char *)0);
 
     return v && v[0] && strcmp(v, "0") != 0;
 }
@@ -43,7 +51,7 @@ void sys_message(const char *title, const char *text)
     const char *drv;
 
     fprintf(stderr, "%s\n%s\n", title ? title : "Rude Breaker", text ? text : "");
-    if (frames_are_fast() || getenv("RUDEBR_STOP") || getenv("RUDEBR_TRACE")) {
+    if (frames_are_fast() || ((char *)0) || ((char *)0)) {
         return;
     }
     drv = SDL_GetCurrentVideoDriver();
@@ -78,9 +86,9 @@ int sys_init(const char *title)
      * each one is held for a whole number of refreshes. The logic clock
      * does not follow the monitor: sys_pace_frame_start decides how many
      * VM frames run, and a refresh that is not a multiple of 30 Hz only
-     * repeats the latest frame. RUDEBR_VSYNC=0 turns it off. */
+     * repeats the latest frame. test hook=0 turns it off. */
     {
-        const char *vs = getenv("RUDEBR_VSYNC");
+        const char *vs = ((char *)0);
         int want_vsync = !(vs && strcmp(vs, "0") == 0);
 
         if (want_vsync) {
@@ -138,6 +146,22 @@ void sys_shutdown(void)
     if (g_wide_texture) {
         SDL_DestroyTexture(g_wide_texture);
         g_wide_texture = NULL;
+    }
+    free(g_tate_pixels);
+    g_tate_pixels = NULL;
+    {
+        int k;
+
+        for (k = 0; k < 3; k++) {
+            if (g_rot_tex[k]) SDL_DestroyTexture(g_rot_tex[k]);
+            g_rot_tex[k] = NULL;
+            free(g_rot_px[k]);
+            g_rot_px[k] = NULL;
+        }
+    }
+    if (g_tate_texture) {
+        SDL_DestroyTexture(g_tate_texture);
+        g_tate_texture = NULL;
     }
     if (g_rb_texture) {
         SDL_DestroyTexture(g_rb_texture);
@@ -202,6 +226,20 @@ uint32_t *sys_wide_pixels(void)
     return g_wide_pixels;
 }
 
+uint32_t *sys_tate_pixels(void)
+{
+    if (!g_tate_pixels) {
+        g_tate_pixels = (uint32_t *)calloc((size_t)RB_TATE_FW * (size_t)RB_TATE_FH,
+                                           sizeof(uint32_t));
+    }
+    return g_tate_pixels;
+}
+
+void sys_set_orientation(int o)
+{
+    g_orient = o & 3;
+}
+
 /* SCALING: 0 SMOOTH (bilinear), 1 SHARP (nearest, fills the screen
  * with the aspect kept), 2 INTEGER (nearest, whole multiples only). */
 /* 3 AUTO (default): INTEGER when it covers >= 80% of the output height,
@@ -220,6 +258,9 @@ static void scaling_apply(void)
     }
     if (g_wide_texture) {
         SDL_SetTextureScaleMode(g_wide_texture, m);
+    }
+    if (g_tate_texture) {
+        SDL_SetTextureScaleMode(g_tate_texture, m);
     }
 }
 
@@ -255,6 +296,14 @@ static SDL_Rect fit_rect(int ow, int oh, int aw, int ah)
  *   4:3  SMOOTH/SHARP fill 4:3; INTEGER height 400n (n = H/400),
  *        width round(400n*4/3).
  * INTEGER with no room for n >= 1 acts as SHARP. */
+/* ORIENTATION 90 / 270: the picture is laid out in a portrait
+ * oh x ow space and turned when copied. Chosen by the player, never
+ * guessed from the monitor. */
+static int tate_rotated(void)
+{
+    return g_orient & 1;
+}
+
 static SDL_Rect dest_rect(int wide)
 {
     int ow = 0, oh = 0;
@@ -263,6 +312,27 @@ static SDL_Rect dest_rect(int wide)
     SDL_GetRendererOutputSize(g_rb_renderer, &ow, &oh);
     if (ow <= 0 || oh <= 0) {
         return r;
+    }
+    if (tate_rotated()) {
+        int t = ow;
+
+        ow = oh;
+        oh = t;
+    }
+    if (wide == 2) {
+        /* TATE frame: 9:16, nearest at whole multiples when INTEGER fits. */
+        if (g_scaling >= 2 && ow >= RB_TATE_FW && oh >= RB_TATE_FH) {
+            int n = ow / RB_TATE_FW < oh / RB_TATE_FH ? ow / RB_TATE_FW : oh / RB_TATE_FH;
+
+            r.w = RB_TATE_FW * n;
+            r.h = RB_TATE_FH * n;
+            r.x = (ow - r.w) / 2;
+            r.y = (oh - r.h) / 2;
+            if (g_scaling == 2 || (long)r.h * 100 >= (long)oh * 80) {
+                return r;
+            }
+        }
+        return fit_rect(ow, oh, 9, 16);
     }
     if (wide) {
         return fit_rect(ow, oh, 16, 9);
@@ -309,6 +379,16 @@ void sys_set_scaling(int mode)
 
 void sys_set_wide(int on)
 {
+    if (on == 2) {
+        if (g_rb_renderer && sys_tate_pixels() && !g_tate_texture) {
+            g_tate_texture = SDL_CreateTexture(g_rb_renderer, SDL_PIXELFORMAT_RGBA8888,
+                                               SDL_TEXTUREACCESS_STREAMING, RB_TATE_FW,
+                                               RB_TATE_FH);
+        }
+        g_wide_on = g_tate_texture ? 2 : 0;
+        scaling_apply();
+        return;
+    }
     on = on && g_rb_renderer && sys_wide_pixels();
     if (on && !g_wide_texture) {
         g_wide_texture = SDL_CreateTexture(g_rb_renderer, SDL_PIXELFORMAT_RGBA8888,
@@ -464,7 +544,7 @@ static void note_timing(unsigned counts)
     static uint64_t origin;
     static uint64_t window;
     static unsigned frames;
-    const char *v = getenv("RUDEBR_TIMING");
+    const char *v = ((char *)0);
     uint64_t freq;
     uint64_t now;
 
@@ -495,7 +575,7 @@ static void note_timing(unsigned counts)
 void sys_wait_vblank(unsigned counts)
 {
     /* Absolute deadline so a slow frame does not stack extra delay, and
-     * a late frame resyncs instead of trying to catch up. RUDEBR_FAST
+     * a late frame resyncs instead of trying to catch up. test hook
      * skips the wait. It is not a player control. */
     static uint64_t next;
     uint64_t freq;
@@ -715,7 +795,7 @@ static void pace_load_pref(void)
 {
     char path[1100];
     char line[128];
-    const char *env = getenv("RUDEBR_PACING");
+    const char *env = ((char *)0);
     FILE *fp;
 
     if (pace_pref_loaded) {
@@ -1118,6 +1198,67 @@ void sys_idle(unsigned ms)
     }
 }
 
+/* ORIENTATION: the frame is turned o quarters clockwise in software
+ * (no renderer rotation needed), into a texture of its own. */
+
+/* Copy t (pixels px, w x h) to d, given in the layout space. */
+static void present_copy(SDL_Texture *t, const uint32_t *px, int w, int h, SDL_Rect d)
+{
+    if (g_orient && px) {
+        int k = w == RB_NATIVE_W ? 0 : w == RB_WIDE_W ? 1 : 2;
+        int o = g_orient;
+        int rw = (o & 1) ? h : w;
+        int rh = (o & 1) ? w : h;
+        int ow = 0, oh = 0;
+        int x;
+        int y;
+        SDL_Rect e;
+        SDL_ScaleMode m;
+
+        if (!g_rot_tex[k] || g_rot_w[k] != w || g_rot_o[k] != o) {
+            if (g_rot_tex[k]) SDL_DestroyTexture(g_rot_tex[k]);
+            free(g_rot_px[k]);
+            g_rot_tex[k] = SDL_CreateTexture(g_rb_renderer, SDL_PIXELFORMAT_RGBA8888,
+                                             SDL_TEXTUREACCESS_STREAMING, rw, rh);
+            g_rot_px[k] = (uint32_t *)malloc((size_t)w * (size_t)h * sizeof(uint32_t));
+            g_rot_w[k] = w;
+            g_rot_o[k] = o;
+            if (!g_rot_tex[k] || !g_rot_px[k]) {
+                g_rot_w[k] = 0;
+                return;
+            }
+        }
+        for (y = 0; y < h; y++) {
+            const uint32_t *src = px + (size_t)y * w;
+            uint32_t *r = g_rot_px[k];
+
+            if (o == 1) {        /* (x, y) -> (h - 1 - y, x) */
+                for (x = 0; x < w; x++) r[(size_t)x * rw + (h - 1 - y)] = src[x];
+            } else if (o == 2) { /* (x, y) -> (w - 1 - x, h - 1 - y) */
+                uint32_t *row = r + (size_t)(h - 1 - y) * rw;
+                for (x = 0; x < w; x++) row[w - 1 - x] = src[x];
+            } else {             /* (x, y) -> (y, w - 1 - x) */
+                for (x = 0; x < w; x++) r[(size_t)(w - 1 - x) * rw + y] = src[x];
+            }
+        }
+        if (SDL_GetTextureScaleMode(t, &m) == 0) {
+            SDL_SetTextureScaleMode(g_rot_tex[k], m);
+        }
+        SDL_UpdateTexture(g_rot_tex[k], NULL, g_rot_px[k], rw * (int)sizeof(uint32_t));
+        SDL_GetRendererOutputSize(g_rb_renderer, &ow, &oh);
+        if (o == 1) {
+            e.x = ow - d.y - d.h; e.y = d.x; e.w = d.h; e.h = d.w;
+        } else if (o == 2) {
+            e.x = ow - d.x - d.w; e.y = oh - d.y - d.h; e.w = d.w; e.h = d.h;
+        } else {
+            e.x = d.y; e.y = oh - d.x - d.w; e.w = d.h; e.h = d.w;
+        }
+        SDL_RenderCopy(g_rb_renderer, g_rot_tex[k], NULL, &e);
+    } else {
+        SDL_RenderCopy(g_rb_renderer, t, NULL, &d);
+    }
+}
+
 void sys_present(void)
 {
     scaling_apply();
@@ -1126,18 +1267,18 @@ void sys_present(void)
     }
     SDL_SetRenderDrawColor(g_rb_renderer, 0, 0, 0, 255);
     SDL_RenderClear(g_rb_renderer);
-    if (g_wide_on && g_wide_texture) {
+    if (g_wide_on == 2 && g_tate_texture) {
+        SDL_UpdateTexture(g_tate_texture, NULL, g_tate_pixels,
+                          RB_TATE_FW * (int)sizeof(uint32_t));
+        present_copy(g_tate_texture, g_tate_pixels, RB_TATE_FW, RB_TATE_FH, dest_rect(2));
+    } else if (g_wide_on && g_wide_texture) {
         SDL_UpdateTexture(g_wide_texture, NULL, g_wide_pixels,
                           RB_WIDE_W * (int)sizeof(uint32_t));
-        SDL_Rect d = dest_rect(1);
-
-        SDL_RenderCopy(g_rb_renderer, g_wide_texture, NULL, &d);
+        present_copy(g_wide_texture, g_wide_pixels, RB_WIDE_W, RB_WIDE_H, dest_rect(1));
     } else {
         SDL_UpdateTexture(g_rb_texture, NULL, g_rb_pixels,
                           RB_NATIVE_W * (int)sizeof(uint32_t));
-        SDL_Rect d = dest_rect(0);
-
-        SDL_RenderCopy(g_rb_renderer, g_rb_texture, NULL, &d);
+        present_copy(g_rb_texture, g_rb_pixels, RB_NATIVE_W, RB_NATIVE_H, dest_rect(0));
     }
     SDL_RenderPresent(g_rb_renderer);
     pace_note_present();

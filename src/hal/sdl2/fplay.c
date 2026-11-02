@@ -68,7 +68,7 @@ static int extend_guard;
 #ifndef FPLAY_SECOND
 static void note_log_open(void)
 {
-    const char *path = getenv("RUDEBR_NOTELOG");
+    const char *path = ((char *)0);
 
     if (!path || !path[0] || note_log) {
         return;
