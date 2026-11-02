@@ -229,9 +229,9 @@ going up and down in turn:
 
 The top bar shows the current speed as SPD LOW, SPD MID or SPD MAX.
 
-Each game starts at the MOVE SPEED chosen in GAMEPLAY. A change made
+Each game starts at the DEFAULT SPEED chosen in GAMEPLAY. A change made
 with the button lasts until the game ends; it does not change the
-MOVE SPEED setting.
+DEFAULT SPEED setting.
 
 PAUSE: Escape (or Start) pauses only while you are playing a game.
 On the title, in the attract demo and in the menus it does not pause.
@@ -272,9 +272,10 @@ CONFIG has these pages:
 GAMEPLAY
 
   The options sit on consecutive lines, with no blank line between
-  them, in this order: DIFFICULTY, SUICIDE BULLETS, SHIP SELECT, MOVE
+  them, in this order: DIFFICULTY, SUICIDE BULLETS, SHIP SELECT, DEFAULT
   SPEED, PALETTE, TRAINING, FRAME PACING, RANK, SIDE PANELS, BULLET
-  COLOR, HITBOX, LOOP, FULLSCREEN and BACK.
+  COLOR, HITBOX, LOOP, SOUND CHANNELS, FULLSCREEN, SCALING, ASPECT
+  and BACK.
 
   DIFFICULTY       VERY EASY, EASY, NORMAL, HARD, VERY HARD. These are
                    the original game's own difficulty levels. NORMAL
@@ -282,6 +283,9 @@ GAMEPLAY
 
   SUICIDE BULLETS  ON: enemies fire bullets back when they are
                    destroyed, as in the original option. OFF: they don't.
+                   (Builds before pr9zg showed this label inverted.
+                   The saved setting is unchanged, so the game plays
+                   the same; only the label is now right.)
 
   SHIP SELECT      The original game's option of the same name. It
                    controls how weapons work:
@@ -293,11 +297,15 @@ GAMEPLAY
                    L and M, and you change weapon during the game by
                    picking up a capsule of another letter.
 
-  MOVE SPEED       LOW, MID (default), MAX. The ship's movement
+  DEFAULT SPEED    LOW, MID (default), MAX. The ship's movement
                    speed, as in the original. Each game starts at it.
 
-  RANK             ON (default): enemy bullets get faster or slower
-                   with how you play (see section 6). OFF: bullet
+  RANK             CLASSIC (default), ADVANCED or OFF. CLASSIC:
+                   enemy bullets get faster or slower with how you
+                   play (see section 6). ADVANCED: a hidden rank
+                   that also reacts to your power, pickups and
+                   medals, and adds return bullets and a score bonus
+                   (see section 6, RANK MODE ADVANCED). OFF: bullet
                    speed stays fixed, as in the original.
 
   BULLET COLOR     PINK (default), LILAC, BLUE, GREEN or ORIGINAL.
@@ -355,15 +363,16 @@ GAMEPLAY
                    It is cleared at the start of each stage (the rank
                    itself is not).
                    With RANK OFF (or in Training) the graph box shows
-                   RANK SYSTEM / OFFLINE instead, with a slow CRT-style
-                   scanline rising through it every 15 seconds, and the
-                   rank number reads "/ 159  OFF".
+                   RANK SYSTEM / OFFLINE in green instead, with a slow
+                   CRT-style scanline rising through it every 15
+                   seconds, and the rank numbers are hidden. Rank then
+                   has no effect at all on the game.
                    Rank carries over from stage to stage; it starts
                    again only with a new game. The small "x1.05" next
                    to it is the current rank rise multiplier.
-                   In this layout the playfield is shown at the 4:3
-                   shape of a PC-98 monitor (pixels 1.2 times taller
-                   than wide); the classic look uses square pixels.
+                   The playfield follows ASPECT: 4:3 (default) shows it
+                   with the shape of a PC-98 monitor (pixels 1.2 times
+                   taller than wide); 1:1 uses square pixels.
                    HIT COUNT shows the stage's
                    enemies you destroyed / the
                    stage's fixed number of enemies
@@ -402,16 +411,51 @@ GAMEPLAY
                    RED is skipped with BULLET COLOR ORIGINAL (the
                    original bullets are red). Saved in rudebreaker.cfg.
 
-  LOOP             OFF (default): the game ends after stage 5 with the
-                   ending, as in the original. ON: clearing stage 5
+  LOOP             ON (default) or OFF. OFF: the game ends after
+                   stage 5 with the ending, as in the original. ON: clearing stage 5
                    starts stage 1 again as loop 2, then loop 3 and so
                    on, keeping your score, lives and weapons. Each loop
                    is harder (see section 6). Saved in rudebreaker.cfg.
+
+  SOUND CHANNELS   EXTRA (default): effects play on a second emulated
+                   chip, so the music is never cut. ORIGINAL: sound
+                   effects share the FM chip with the music, as on
+                   the PC-98, so an effect can cut a music channel
+                   for a moment. Saved in rudebreaker.cfg.
 
   FULLSCREEN       OFF (default) or ON. Fills the whole monitor,
                    keeping the game's proportions (SIDE PANELS fill the
                    sides on wide screens) and hiding the mouse pointer.
                    F11 switches it at any time. Saved in
+                   rudebreaker.cfg.
+
+  SCALING          How the picture is scaled to the window or monitor.
+                   AUTO (default): INTEGER when it fills at least 80%
+                   of the screen height, otherwise SHARP. That gives
+                   SHARP at 720p and 1080p, INTEGER at 1440p, 4K and
+                   800x480.
+                   INTEGER: every game line becomes the same whole
+                   number of screen lines, with black borders around.
+                   With ASPECT 1:1 the pixels are square and all the
+                   same size. With ASPECT 4:3 the height is a whole
+                   multiple (2x = 800 lines, 3x = 1200) and the width
+                   is set to close the 4:3 shape.
+                   SHARP: fills as much of the screen as possible
+                   keeping the proportions, without blur (some pixels
+                   come out one screen pixel bigger). SMOOTH: fills
+                   the same way with soft (bilinear) filtering. If the
+                   window is too small for INTEGER, it acts as SHARP.
+                   With SIDE PANELS shown the 16:9 picture always
+                   fills the screen. Saved in rudebreaker.cfg.
+
+  ASPECT           4:3 (default): the 640x400 picture is shown with
+                   the shape of a PC-98 monitor, each pixel 1.2 times
+                   taller than wide (5:6), as the art was drawn to be
+                   seen. On a 1080p screen that is 1440x1080 with
+                   SHARP. 1:1: square pixels; the picture looks a
+                   little flatter than on the original. With SIDE
+                   PANELS the playfield follows the same choice (1:1
+                   leaves black bars above and below it). Saved in
                    rudebreaker.cfg.
 
   BACK
@@ -470,7 +514,7 @@ format. A new score is saved when you enter your name.
 
 Difficulty and all gameplay rules work as in the original.
 
-RANK (GAMEPLAY option, ON by default) is an addition of this port,
+RANK (GAMEPLAY option, CLASSIC by default) is an addition of this port,
 modeled on the rank system of Zanac. A hidden rank value goes up
 while you stay alive and when you score points, and is reset when you
 lose a life (see below). It rises at one third of the rate used by
@@ -523,7 +567,57 @@ exactly like the original: no step-up, no bullet speed-up and no
 +1000 bonus, and the side panel shows RANK SYSTEM / OFFLINE in the
 rank graph.
 
-LOOP (GAMEPLAY option, OFF by default) is an addition of this port.
+RANK MODE ADVANCED (RANK set to ADVANCED; saved as rank_mode=advanced)
+replaces the rules above with a hidden rank from 0 to 1000. No number
+is shown: the RANK graph has no values and a thin bar under it shows
+progress toward the next LEVEL band: empty at the start of the band,
+full at the next one, when the LEVEL box flashes, an up arrow is
+marked on the RANK graph (as in CLASSIC) and the bar starts again for
+the new band. At the ceiling it stays full, drawn brighter
+with an outline. It starts and is kept between limits set by
+DIFFICULTY:
+
+  VERY EASY  starts 0,   at most 400
+  EASY       starts 80,  at most 550
+  NORMAL     starts 150, at most 800
+  HARD       starts 280, at most 900
+  VERY HARD  starts 400, at most 1000
+
+It never goes below the start. It goes up:
+  - every second you stay alive, faster the longer since your last
+    life lost (up to three times the rate after 3 minutes);
+  - when the main shot gains a level, and a little every second while
+    the main shot is at level 3 or 4;
+  - when you pick up a sub-weapon or level it up (more for a stronger
+    one);
+  - when you take a medal (each medal of a stage is worth more than
+    the one before);
+  - a little every second for each life in stock (up to 5);
+  - a little every second while you hold the shot button.
+While NO DEATH is still YES, every rise is 10% larger.
+It goes down when you lose a life (by 15% to 25% of its value, more
+when it is high; the survival bonus starts again) and a little (4%)
+when you lose the sub-weapon.
+
+What it changes:
+  - Enemy bullet speed follows rank smoothly, from the speed of the
+    DIFFICULTY you chose (never slower) up to the VERY HARD speed at
+    the top. Above 850 bullets get up to 15% faster again.
+  - From 700 up, destroyed enemies fire return bullets (as with
+    SUICIDE BULLETS), even if that option is off. Below 700 the option
+    you chose applies again.
+  - Score: every point you earn is raised by up to 50% at rank 1000
+    (half of rank/1000).
+  - The LEVEL box shows the band rank is in (V.EASY to V.HARD, never
+    below your DIFFICULTY) and flashes when it moves up a band.
+The rate and number of enemy shots are not changed: in the game data
+each enemy's shot timing is its own counter inside its script, so it
+cannot be changed for all enemies without changing their patterns.
+With LOOP, each new loop starts rank 100 higher and allows it 50
+higher (at most 1000), and every rise is 25% larger per loop.
+Not in Training. RANK OFF turns all of this off.
+
+LOOP (GAMEPLAY option, ON by default) is an addition of this port.
 With LOOP ON, clearing stage 5 does not show the ending: stage 1
 starts again as loop 2, then loop 3 and so on, and you keep your
 score, lives and weapons. In each new loop:

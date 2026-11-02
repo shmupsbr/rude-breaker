@@ -232,9 +232,9 @@ subindo e descendo alternadamente:
 A barra de cima mostra a velocidade atual como SPD LOW, SPD MID ou
 SPD MAX.
 
-Cada partida começa na MOVE SPEED escolhida em GAMEPLAY. A mudança
+Cada partida começa na DEFAULT SPEED escolhida em GAMEPLAY. A mudança
 feita pelo botão vale até o fim da partida; ela não altera a opção
-MOVE SPEED.
+DEFAULT SPEED.
 
 PAUSA: o Esc (ou Start) só pausa enquanto você está jogando. No
 título, na demo e nos menus ele não pausa. Nos menus, o Esc (teclado)
@@ -276,9 +276,10 @@ O CONFIG tem estas páginas:
 GAMEPLAY
 
   As opções ficam em linhas seguidas, sem linha em branco entre elas,
-  nesta ordem: DIFFICULTY, SUICIDE BULLETS, SHIP SELECT, MOVE SPEED,
-  PALETTE, TRAINING, FRAME PACING, RANK, SIDE PANELS, BULLET COLOR,
-  HITBOX, LOOP, FULLSCREEN e BACK.
+  nesta ordem: DIFFICULTY, SUICIDE BULLETS, SHIP SELECT, DEFAULT
+  SPEED, PALETTE, TRAINING, FRAME PACING, RANK, SIDE PANELS, BULLET
+  COLOR, HITBOX, LOOP, SOUND CHANNELS, FULLSCREEN, SCALING, ASPECT
+  e BACK.
 
   DIFFICULTY       VERY EASY, EASY, NORMAL, HARD, VERY HARD. São os
                    próprios níveis de dificuldade do jogo original.
@@ -286,7 +287,10 @@ GAMEPLAY
 
   SUICIDE BULLETS  ON: os inimigos soltam tiros de volta quando são
                    destruídos (tiros suicidas), como na opção
-                   original. OFF: não soltam.
+                   original. OFF: não soltam. (Versões anteriores à
+                   pr9zg mostravam este rótulo invertido. A opção
+                   salva não muda, então o jogo continua igual; só o
+                   rótulo agora está certo.)
 
   SHIP SELECT      A opção de mesmo nome do jogo original. Ela define
                    como as armas funcionam:
@@ -298,13 +302,17 @@ GAMEPLAY
                    V, L e M, e você troca de arma durante a partida
                    pegando uma cápsula de outra letra.
 
-  MOVE SPEED       LOW, MID (padrão), MAX. A velocidade da nave, como
+  DEFAULT SPEED    LOW, MID (padrão), MAX. A velocidade da nave, como
                    no original. Cada partida começa nela.
 
-  RANK             ON (padrão): os tiros inimigos ficam mais rápidos ou
-                   mais lentos conforme você joga (veja a seção 6).
-                   OFF: a velocidade dos tiros fica fixa, como no
-                   original.
+  RANK             CLASSIC (padrão), ADVANCED ou OFF. CLASSIC: os
+                   tiros inimigos ficam mais rápidos ou mais lentos
+                   conforme você joga (veja a seção 6). ADVANCED: um
+                   rank oculto que também reage ao seu poder, aos
+                   itens e às medalhas, e acrescenta tiros de
+                   revanche e um bônus de pontos (seção 6, RANK MODE
+                   ADVANCED). OFF: a velocidade dos tiros fica fixa,
+                   como no original.
 
   BULLET COLOR     PINK (padrão), LILAC, BLUE, GREEN ou ORIGINAL.
                    Todo tiro inimigo que não pode ser destruído é
@@ -365,16 +373,16 @@ GAMEPLAY
                    entram os novos. Ele é limpo no começo de cada fase
                    (o rank em si não).
                    Com RANK OFF (ou no Training) o quadro do gráfico
-                   mostra RANK SYSTEM / OFFLINE, com uma linha de
-                   varredura lenta, estilo CRT, subindo por ele a cada
-                   15 segundos, e o número do rank fica "/ 159  OFF".
+                   mostra RANK SYSTEM / OFFLINE em verde, com uma linha
+                   de varredura lenta, estilo CRT, subindo por ele a
+                   cada 15 segundos, e os números do rank ficam
+                   escondidos. O rank então não muda nada no jogo.
                    O rank passa de uma fase para a outra; ele só
                    recomeça numa partida nova. O pequeno "x1.05" ao
                    lado é o multiplicador atual de subida do rank.
-                   Nesse layout a área de jogo é mostrada no formato
-                   4:3 de um monitor PC-98 (pixels 1,2 vez mais altos
-                   que largos); o visual clássico usa pixels
-                   quadrados.
+                   A área de jogo segue o ASPECT: 4:3 (padrão) mostra
+                   no formato de um monitor PC-98 (pixels 1,2 vez mais
+                   altos que largos); 1:1 usa pixels quadrados.
                    HIT COUNT mostra os inimigos da fase que você
                    destruiu / o número fixo de inimigos da fase (369,
                    315, 128, 205 e 46 nas fases 1 a 5: os inimigos
@@ -409,11 +417,18 @@ GAMEPLAY
                    tiros originais são vermelhos). Salvo no
                    rudebreaker.cfg.
 
-  LOOP             OFF (padrão): o jogo termina depois da fase 5 com o
-                   final, como no original. ON: vencer a fase 5 começa
+  LOOP             ON (padrão) ou OFF. OFF: o jogo termina depois da
+                   fase 5 com o final, como no original. ON: vencer a fase 5 começa
                    a fase 1 de novo como loop 2, depois loop 3 e assim
                    por diante, mantendo pontuação, vidas e armas. Cada
                    loop é mais difícil (veja a seção 6). Salvo no
+                   rudebreaker.cfg.
+
+  SOUND CHANNELS   EXTRA (padrão): os efeitos tocam num segundo chip
+                   emulado, e a música nunca é cortada. ORIGINAL: os
+                   efeitos sonoros dividem o chip FM com a música,
+                   como no PC-98, então um efeito pode cortar um
+                   canal da música por um instante. Salvo no
                    rudebreaker.cfg.
 
   FULLSCREEN       OFF (padrão) ou ON. Ocupa o monitor inteiro,
@@ -421,6 +436,35 @@ GAMEPLAY
                    preenchem as laterais em telas largas) e escondendo
                    o ponteiro do mouse. F11 alterna a qualquer
                    momento. Salvo no rudebreaker.cfg.
+
+  SCALING          Como a imagem é ampliada para a janela ou o
+                   monitor. AUTO (padrão): usa INTEGER quando ele
+                   ocupa pelo menos 80% da altura da tela; se não,
+                   SHARP. Fica SHARP em 720p e 1080p, e INTEGER em
+                   1440p, 4K e 800x480.
+                   INTEGER: cada linha do jogo vira o mesmo número
+                   inteiro de linhas da tela, com bordas pretas em
+                   volta. Com ASPECT 1:1 os pixels são quadrados e
+                   todos do mesmo tamanho. Com ASPECT 4:3 a altura é
+                   um múltiplo inteiro (2x = 800 linhas, 3x = 1200) e
+                   a largura é ajustada pra fechar o formato 4:3.
+                   SHARP: ocupa o máximo da tela mantendo a
+                   proporção, sem borrar (alguns pixels saem um pixel
+                   de tela maiores). SMOOTH: ocupa do mesmo jeito, com
+                   filtro suave (bilinear). Se a janela for pequena
+                   demais para o INTEGER, ele funciona como SHARP. Com
+                   as SIDE PANELS a imagem 16:9 sempre ocupa a tela.
+                   Salvo no rudebreaker.cfg.
+
+  ASPECT           4:3 (padrão): a imagem 640x400 aparece no formato
+                   de um monitor PC-98, com cada pixel 1,2 vez mais
+                   alto que largo (5:6), como a arte foi desenhada pra
+                   ser vista. Numa tela 1080p fica 1440x1080 com
+                   SHARP. 1:1: pixels quadrados; o jogo fica um pouco
+                   mais achatado que no original. Com as SIDE PANELS a
+                   área de jogo segue a mesma escolha (1:1 deixa
+                   faixas pretas em cima e embaixo). Salvo no
+                   rudebreaker.cfg.
 
   BACK
 
@@ -479,7 +523,7 @@ pontuação nova é salva quando você digita o seu nome.
 
 A dificuldade e todas as regras do jogo funcionam como no original.
 
-O RANK (opção de GAMEPLAY, ligado por padrão) é um acréscimo deste
+O RANK (opção de GAMEPLAY, CLASSIC por padrão) é um acréscimo deste
 port, inspirado no sistema de rank do Zanac. Um valor de rank
 escondido sobe enquanto você continua vivo e quando você pontua, e
 zera quando você perde uma vida (veja abaixo). Ele sobe a um terço da
@@ -531,6 +575,58 @@ Não vale no Training. Com RANK OFF o jogo fica exatamente igual ao
 original: sem subida, sem aceleração dos tiros e sem o bônus de
 +1000, e o painel lateral mostra RANK SYSTEM / OFFLINE no gráfico do
 rank.
+
+RANK MODE ADVANCED (RANK em ADVANCED; salvo como rank_mode=advanced)
+troca as regras acima por um rank oculto de 0 a 1000. Nenhum número
+aparece: o gráfico do RANK fica sem valores e uma barra fina embaixo
+dele mostra o progresso até a próxima faixa do LEVEL: vazia no começo
+da faixa, cheia na próxima, quando o quadro LEVEL pisca, uma seta para cima
+aparece no gráfico do RANK (como no CLASSIC) e a barra
+recomeça para a faixa nova. No teto ela fica cheia, mais clara e com
+contorno. Ele começa e fica entre limites
+definidos pela DIFFICULTY:
+
+  VERY EASY  começa em 0,   no máximo 400
+  EASY       começa em 80,  no máximo 550
+  NORMAL     começa em 150, no máximo 800
+  HARD       começa em 280, no máximo 900
+  VERY HARD  começa em 400, no máximo 1000
+
+Ele nunca fica abaixo do início. Sobe:
+  - a cada segundo vivo, mais rápido quanto mais tempo desde a última
+    vida perdida (até três vezes mais rápido depois de 3 minutos);
+  - quando o tiro principal ganha nível, e um pouco a cada segundo
+    com o tiro principal no nível 3 ou 4;
+  - ao pegar uma sub-arma ou subir o nível dela (mais para uma mais
+    forte);
+  - ao pegar uma medalha (cada medalha da fase vale mais que a
+    anterior);
+  - um pouco a cada segundo por vida em estoque (até 5);
+  - um pouco a cada segundo enquanto você segura o tiro.
+Enquanto o NO DEATH ainda está em YES, toda subida é 10% maior.
+Cai quando você perde uma vida (de 15% a 25% do valor, mais quando
+está alto; o bônus de sobrevivência recomeça) e um pouco (4%) quando
+você perde a sub-arma.
+
+O que ele muda:
+  - A velocidade dos tiros inimigos acompanha o rank de forma
+    contínua, da velocidade da DIFFICULTY escolhida (nunca mais lenta)
+    até a velocidade do VERY HARD no topo. Acima de 850 os tiros ficam
+    até 15% mais rápidos.
+  - A partir de 700, inimigos destruídos soltam tiros de revanche
+    (como no SUICIDE BULLETS), mesmo com essa opção desligada. Abaixo
+    de 700 volta a valer a opção escolhida.
+  - Pontos: cada ponto ganho aumenta até 50% no rank 1000 (metade de
+    rank/1000).
+  - O quadro LEVEL mostra a faixa do rank (V.EASY a V.HARD, nunca
+    abaixo da sua DIFFICULTY) e pisca quando sobe de faixa.
+A cadência e a quantidade de tiros dos inimigos não mudam: nos dados
+do jogo o tempo de tiro de cada inimigo é um contador próprio dentro
+do script dele, e não dá para mudar isso para todos sem alterar os
+padrões.
+Com LOOP, cada loop novo começa o rank 100 mais alto e permite 50 a
+mais (no máximo 1000), e toda subida é 25% maior por loop.
+Não vale no Training. RANK OFF desliga tudo isso.
 
 O LOOP (opção do GAMEPLAY, OFF por padrão) é uma adição deste port.
 Com LOOP ON, vencer a fase 5 não mostra o final: a fase 1 começa de
