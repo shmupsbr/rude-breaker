@@ -538,6 +538,11 @@ static void blit_sprite(RbGfx *gfx, const uint8_t *src, uint32_t len,
     }
 }
 
+/* Last presented scroll and its last per-frame step (logo / intro). */
+static int g_pres_scroll;
+static int g_pres_step;
+static int g_pres_valid;
+
 static int wrap_line(int v)
 {
     while (v < 0) {
@@ -617,6 +622,22 @@ static void blit_sprite_smooth(RbGfx *gfx, const uint8_t *src, uint32_t len,
         (void)speed;
         if (screen < 0 || screen >= RB_GFX_H) {
             continue;
+        }
+        if (!blank_sides && g_pres_valid) {
+            /* Logo / intro: present runs after this frame's scroll step,
+             * so a line drawn at the bottom (or top) edge can land past
+             * the seam and show on the opposite edge. Predict the
+             * present's scroll from the last step and drop such lines. */
+            int d = scroll76 - (g_pres_scroll + g_pres_step);
+            int disp;
+
+            while (d >= RB_GFX_H / 2) d -= RB_GFX_H;
+            while (d < -RB_GFX_H / 2) d += RB_GFX_H;
+            disp = world + d;
+
+            if (disp < 0 || disp >= RB_GFX_H) {
+                continue;
+            }
         }
         gv = wrap_line(world + scroll76);
         decode_plane(src + row * 2, shift, mask);
@@ -3049,6 +3070,17 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
             scroll -= RB_GFX_H;
         }
     }
+    if (!blank_sides) {
+        int st = scroll - g_pres_scroll;
+
+        while (st >= RB_GFX_H / 2) st -= RB_GFX_H;
+        while (st < -RB_GFX_H / 2) st += RB_GFX_H;
+        g_pres_step = g_pres_valid ? st : 0;
+        g_pres_valid = 1;
+    } else {
+        g_pres_valid = 0;
+    }
+    g_pres_scroll = scroll;
     /* One scene for the whole frame. The grade scales each palette
      * index from that scene's settled 4-bit color, so a fade still
      * tracks the script. Original mode leaves scene at -1. */

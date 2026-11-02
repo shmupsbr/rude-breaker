@@ -35,6 +35,8 @@ static int          g_data_missing;
 static int          g_modern = 1;
 static int          g_training;
 static int          g_rank_on = 1;
+/* RANK MODE: 0 CLASSIC, 1 ADVANCED (hidden 0..1000 rank). */
+static int          g_rank_mode = 0;
 /* Side panels for 16:9 windows (host option, saved). */
 static int          g_panels_on = 1;
 static int          g_bullet_c;     /* 0 ORIGINAL, 1 PINK, 2 LILAC, 3 BLUE, 4 GREEN */
@@ -55,6 +57,10 @@ static const char *const k_hit_cfg[HIT_N] = {
     "off", "pink", "lilac", "blue", "green", "red", "white"
 };
 static int          g_fullscreen;   /* FULLSCREEN option / F11 */
+static int          g_scaling = 3;  /* SCALING: 0 SMOOTH, 1 SHARP, 2 INTEGER, 3 AUTO */
+static int          g_aspect43 = 1; /* ASPECT: 1 = 4:3, 0 = 1:1 */
+static int          g_sndx = 1;         /* SOUND CHANNELS: 0 ORIGINAL, 1 EXTRA */
+static int          g_cfg_9zf;      /* settings file has the pr9zf defaults */
 /* 1CC on record (saved) and whether this run still counts. */
 static int          g_onecc;
 /* Lives lost this run (NO DEATH box); cleared only by a new game. */
@@ -127,11 +133,16 @@ static void load_cfg(const RbGame *g)
     g_modern = 1;
     g_training = 0;
     g_rank_on = 1;
+    g_rank_mode = 0;
     g_panels_on = 1;
     g_bullet_c = 1;
     g_cfg_9r = 0;
     g_onecc = 0;
-    g_loop_on = 0;
+    g_loop_on = 1;
+    g_sndx = 1;
+    g_scaling = 3;
+    g_aspect43 = 1;
+    g_cfg_9zf = 0;
     g_hitbox = 0;
     g_fullscreen = 0;
     g_cfg_v9p = 0;
@@ -155,6 +166,10 @@ static void load_cfg(const RbGame *g)
             g_rank_on = 1;
         } else if (strncmp(line, "rank=off", 8) == 0) {
             g_rank_on = 0;
+        } else if (strncmp(line, "rank_mode=advanced", 18) == 0) {
+            g_rank_mode = 1;
+        } else if (strncmp(line, "rank_mode=classic", 17) == 0) {
+            g_rank_mode = 0;
         } else if (strncmp(line, "panels=on", 9) == 0) {
             g_panels_on = 1;
         } else if (strncmp(line, "panels=off", 10) == 0) {
@@ -191,6 +206,24 @@ static void load_cfg(const RbGame *g)
             g_fullscreen = 1;
         } else if (strncmp(line, "fullscreen=off", 14) == 0) {
             g_fullscreen = 0;
+        } else if (strncmp(line, "scaling=smooth", 14) == 0) {
+            g_scaling = 0;
+        } else if (strncmp(line, "scaling=sharp", 13) == 0) {
+            g_scaling = 1;
+        } else if (strncmp(line, "scaling=integer", 15) == 0) {
+            g_scaling = 2;
+        } else if (strncmp(line, "scaling=auto", 12) == 0) {
+            g_scaling = 3;
+        } else if (strncmp(line, "aspect=1:1", 10) == 0) {
+            g_aspect43 = 0;
+        } else if (strncmp(line, "aspect=4:3", 10) == 0) {
+            g_aspect43 = 1;
+        } else if (strncmp(line, "sound_channels=extra", 20) == 0) {
+            g_sndx = 1;
+        } else if (strncmp(line, "sound_channels=original", 23) == 0) {
+            g_sndx = 0;
+        } else if (strncmp(line, "defaults9zf=1", 13) == 0) {
+            g_cfg_9zf = 1;
         } else if (strncmp(line, "loop=on", 7) == 0) {
             g_loop_on = 1;
         } else if (strncmp(line, "loop=off", 8) == 0) {
@@ -435,7 +468,12 @@ static void save_cfg(const RbGame *g)
             g_rank_on ? "on" : "off",
             g_panels_on ? "on" : "off",
             g_onecc ? "yes" : "no");
-    fprintf(fp, "loop=%s\n", g_loop_on ? "on" : "off");
+    fprintf(fp, "loop=%s\nsound_channels=%s\ndefaults9zf=1\n", g_loop_on ? "on" : "off",
+            g_sndx ? "extra" : "original");
+    fprintf(fp, "rank_mode=%s\n", g_rank_mode ? "advanced" : "classic");
+    fprintf(fp, "scaling=%s\naspect=%s\n",
+            g_scaling == 0 ? "smooth" : g_scaling == 1 ? "sharp" : g_scaling == 2 ? "integer" : "auto",
+            g_aspect43 ? "4:3" : "1:1");
     fprintf(fp, "hitbox=%s\nfullscreen=%s\n", k_hit_cfg[g_hitbox],
             g_fullscreen ? "on" : "off");
     sys_bind_write(fp);
@@ -645,10 +683,13 @@ static void set_speed(int i)
     set_flag_word(f);
 }
 
-/* RETURN FIRE. Bit 0x0008 set is the OFF label. Clear is ON. */
+/* SUICIDE BULLETS. Bit 0x0008 set makes the enemy death scripts fire
+ * their return bullets (origins 04DB / 058B / 0640 spawn), so set is
+ * ON. Earlier builds showed it inverted; the saved bit is unchanged,
+ * only the label now matches what the game does. */
 static int suicide_on(void)
 {
-    return (flag_word() & 0x0008u) == 0;
+    return (flag_word() & 0x0008u) != 0;
 }
 
 /* SHIP SELECT. Bit 0x0080 set skips the scene (the OFF label). */
@@ -743,7 +784,7 @@ static void joy_auto(void)
 static int page_count(void)
 {
     switch (g_page) {
-    case PAGE_GAME:  return 14;
+    case PAGE_GAME:  return 17;
     case PAGE_CTRL:  return 3;
     case PAGE_KEYS:  return 11;
     case PAGE_SOUND: return 7;
@@ -799,7 +840,16 @@ static void change_value(RbGame *g, int dir)
             changed = 1;
         } else if (g_cursor == 7) {
             /* Host only, saved to the settings file. */
-            g_rank_on = !g_rank_on;
+            /* OFF -> CLASSIC -> ADVANCED -> OFF. */
+            if (!g_rank_on) {
+                g_rank_on = 1;
+                g_rank_mode = 0;
+            } else if (!g_rank_mode) {
+                g_rank_mode = 1;
+            } else {
+                g_rank_on = 0;
+                g_rank_mode = 0;
+            }
             changed = 1;
         } else if (g_cursor == 8) {
             /* Host only, saved to the settings file. */
@@ -820,8 +870,24 @@ static void change_value(RbGame *g, int dir)
             g_loop_on = !g_loop_on;
             changed = 1;
         } else if (g_cursor == 12) {
+            /* Host only: EXTRA plays effects on a second chip. Saved. */
+            g_sndx = !g_sndx;
+            sys_audio_extra(g_sndx);
+            changed = 1;
+        } else if (g_cursor == 13) {
             /* Host only, saved to the settings file. F11 does the same. */
             fullscreen_apply(!g_fullscreen);
+            changed = 1;
+        } else if (g_cursor == 14) {
+            /* Host only: SMOOTH / SHARP / INTEGER, saved. */
+            g_scaling = (g_scaling + (dir < 0 ? 3 : 1)) % 4;
+            sys_set_scaling(g_scaling);
+            changed = 1;
+        } else if (g_cursor == 15) {
+            /* Host only: 4:3 (PC-98 monitor) or 1:1 square pixels. */
+            g_aspect43 = !g_aspect43;
+            sys_set_aspect(g_aspect43);
+            panels_set_aspect(g_aspect43);
             changed = 1;
         }
     } else if (g_page == PAGE_CTRL && g_cursor == 0) {
@@ -889,7 +955,7 @@ static void activate_row(RbGame *g)
         menu_ok();
         return;
     }
-    if (g_page == PAGE_GAME && g_cursor == 13) {
+    if (g_page == PAGE_GAME && g_cursor == 16) {
         enter_page(PAGE_ROOT);
         menu_ok();
         return;
@@ -1167,7 +1233,7 @@ static int menu_row(int first, int index)
     return first + index * 2;
 }
 
-/* GAMEPLAY has 14 rows, so they sit on consecutive lines. */
+/* GAMEPLAY has 17 rows, so they sit on consecutive lines. */
 static int game_row(int index)
 {
     return 4 + index;
@@ -1351,7 +1417,7 @@ static void host_menu_paint(void)
                    suicide_on() ? "ON" : "OFF", suicide_on());
         paint_line(2, game_row(2), "SHIP SELECT", ship_on() ? "ON" : "OFF",
                    ship_on());
-        paint_line(3, game_row(3), "MOVE SPEED", speed_name(),
+        paint_line(3, game_row(3), "DEFAULT SPEED", speed_name(),
                    speed_index() != 1);
         paint_line(4, game_row(4), "PALETTE",
                    g_modern ? "MODERN" : "ORIGINAL", g_modern);
@@ -1360,7 +1426,8 @@ static void host_menu_paint(void)
         paint_line(6, game_row(6), "FRAME PACING",
                    sys_pace_pref_exact() ? "EXACT" : "SMOOTH",
                    sys_pace_pref_exact());
-        paint_line(7, game_row(7), "RANK", g_rank_on ? "ON" : "OFF",
+        paint_line(7, game_row(7), "RANK",
+                   !g_rank_on ? "OFF" : g_rank_mode ? "ADVANCED" : "CLASSIC",
                    g_rank_on);
         paint_line(8, game_row(8), "SIDE PANELS", g_panels_on ? "ON" : "OFF",
                    g_panels_on);
@@ -1369,9 +1436,16 @@ static void host_menu_paint(void)
         paint_line(10, game_row(10), "HITBOX", k_hit_name[g_hitbox],
                    g_hitbox != 0);
         paint_line(11, game_row(11), "LOOP", g_loop_on ? "ON" : "OFF", g_loop_on);
-        paint_line(12, game_row(12), "FULLSCREEN", g_fullscreen ? "ON" : "OFF",
+        paint_line(12, game_row(12), "SOUND CHANNELS", g_sndx ? "EXTRA" : "ORIGINAL",
+                   g_sndx);
+        paint_line(13, game_row(13), "FULLSCREEN", g_fullscreen ? "ON" : "OFF",
                    g_fullscreen);
-        paint_line(13, game_row(13), "BACK", NULL, 0);
+        paint_line(14, game_row(14), "SCALING",
+                   g_scaling == 0 ? "SMOOTH" : g_scaling == 1 ? "SHARP" :
+                   g_scaling == 2 ? "INTEGER" : "AUTO",
+                   g_scaling != 3);
+        paint_line(15, game_row(15), "ASPECT", g_aspect43 ? "4X3" : "1X1", !g_aspect43);
+        paint_line(16, game_row(16), "BACK", NULL, 0);
     } else if (g_page == PAGE_CTRL) {
         paint_line(0, menu_row(4, 0), "JOYSTICK", joy_value(), joy_flag());
         paint_line(1, menu_row(4, 1), "DEFINE KEYS", NULL, 0);
@@ -1674,8 +1748,18 @@ void game_init(RbGame *g, const RbDisk *disk)
         g_cfg_9r = 1;
         save_cfg(g);
     }
+    if (!g_cfg_9zf) {
+        /* pr9zf update: LOOP defaults to ON, once. */
+        g_loop_on = 1;
+        g_cfg_9zf = 1;
+        save_cfg(g);
+    }
     gfx_set_bullet_color(g_bullet_c);
     hit_fix();
+    sys_audio_extra(g_sndx);
+    sys_set_scaling(g_scaling);
+    sys_set_aspect(g_aspect43);
+    panels_set_aspect(g_aspect43);
     if (g_fullscreen) {
         fullscreen_apply(1);
     }
@@ -2024,6 +2108,8 @@ static uint32_t rank_cap(int i)
     return i <= 1 ? RANK_HALF : RANK_MAX;
 }
 
+static void adv_reset(void);
+static int adv_bar(void);
 static void live_reset_match(void)
 {
     g_eff = base_diff();
@@ -2035,6 +2121,7 @@ static void live_reset_match(void)
     g_rk_shot = g_rk_sub = g_rk_ext = 0;
     g_rk_d9 = -1;
     g_rk_subcut = 0;
+    adv_reset();
 }
 
 /* ---- side panel data ---------------------------------------------- */
@@ -2190,6 +2277,7 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
     d.rank_on = g_rank_on && !g_training;
     d.rank_now = (int)(g_rank >> 8);
     d.rank_mul = rank_mul_pct();
+    d.rank_adv = g_rank_on && g_rank_mode && !g_training;
     d.rank_hist = g_pt_rank;
     d.rank_n = g_pt_rank_n;
     d.deaths = g_pt_death;
@@ -2197,6 +2285,7 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
     d.ups = g_pt_up;
     d.up_n = g_pt_up_n;
     d.level_flash = g_lv_flash;
+    d.rank_bar = adv_bar();
     /* Global D8 is the weapon the ship has: 0 VULCAN, 1 MISSILE,
      * 2 LASER (set by the capsule pickup). */
     {
@@ -2362,7 +2451,7 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
     d.difficulty = g_live && g_rank_on && !g_training ? g_eff : base_diff();
     d.loop = g_loop;
     d.loop_on = g_loop_on;
-    d.level_pct = g_live && g_rank_on && !g_training ? (int)g_vh_pct : 0;
+    d.level_pct = g_live && g_rank_on && !g_training && !g_rank_mode ? (int)g_vh_pct : 0;
     if (getenv("RUDEBR_DBG_LVPCT")) {
         /* Test hook: panel layout of the LEVEL extra. */
         d.level_pct = atoi(getenv("RUDEBR_DBG_LVPCT"));
@@ -2371,6 +2460,219 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
     d.buttons = g_pt_buttons;
     panels_render(wide, frame, &d);
     sys_set_wide(1);
+}
+
+/* ---- RANK MODE ADVANCED ------------------------------------------- */
+/* Hidden rank 0..1000. It rises with survival time (faster the longer
+ * since the last death), main shot power, sub-weapon pickups, medals,
+ * lives in stock and holding fire; a death cuts it by 15-25 % and a
+ * lost sub-weapon by 4 %. It never leaves [floor, ceiling] of the
+ * chosen difficulty (raised each loop). It drives the enemy shot speed
+ * copy (C9 at spawn), an extra bullet-speed percent near the top,
+ * RETURN FIRE from 70 % and a score bonus. Fire interval and bullet
+ * count are per-script counters in the game data, not touched. Logic runs at 92/3 frames per second. */
+#define ADV_FPS (92.0 / 3.0)
+static const double k_adv_start[5] = {0, 80, 150, 280, 400};
+static const double k_adv_ceil[5] = {400, 550, 800, 900, 1000};
+static double   g_ar;
+static double   g_ar_floor, g_ar_ceil;
+static uint32_t g_ar_t;          /* frames since start / last death */
+static int      g_ar_d9 = -1, g_ar_d5, g_ar_d6, g_ar_d1, g_ar_lives;
+static int      g_ar_band;
+static double   g_ar_score_acc;
+static uint32_t g_ar_prev_score;
+
+static int adv_active(void)
+{
+    return g_rank_on && g_rank_mode && !g_training;
+}
+
+static void adv_limits(void)
+{
+    int d = live_diff();
+    int lp = g_loop > 1 ? g_loop - 1 : 0;
+
+    if (d < 0) d = 0;
+    if (d > 4) d = 4;
+    g_ar_floor = k_adv_start[d] + 100.0 * lp;
+    g_ar_ceil = k_adv_ceil[d] + 50.0 * lp;
+    if (g_ar_ceil > 1000.0) g_ar_ceil = 1000.0;
+    if (g_ar_floor > g_ar_ceil - 100.0) g_ar_floor = g_ar_ceil - 100.0;
+}
+
+static void adv_reset(void)
+{
+    adv_limits();
+    g_ar = g_ar_floor;
+    g_ar_t = 0;
+    g_ar_d9 = -1;
+    g_ar_band = -1;
+    g_ar_score_acc = 0;
+    g_ar_prev_score = 0;
+}
+
+static int adv_band(double r)
+{
+    int b = r < 200 ? 0 : r < 400 ? 1 : r < 600 ? 2 : r < 800 ? 3 : 4;
+
+    return b < base_diff() ? base_diff() : b;
+}
+
+/* Panel bar: progress toward the next LEVEL band, 0..1000. The band
+ * the chosen DIFFICULTY clamps to starts at the floor; the last band
+ * (or a ceiling below the next threshold) ends at the ceiling, and at
+ * the ceiling the bar stays full. */
+static int adv_bar(void)
+{
+    int b = adv_band(g_ar);
+    double lo = 200.0 * b, hi = b < 4 ? 200.0 * (b + 1) : g_ar_ceil;
+    double v;
+
+    if (lo > g_ar_floor && b == adv_band(g_ar_floor)) lo = g_ar_floor;
+    if (hi > g_ar_ceil) hi = g_ar_ceil;
+    if (g_ar >= g_ar_ceil || hi <= lo) return 1000;
+    v = (g_ar - lo) * 1000.0 / (hi - lo);
+    return v < 0 ? 0 : v > 1000 ? 1000 : (int)v;
+}
+
+static void adv_update(RbGame *g, uint16_t flags, int lives, const RbVmInfo *info)
+{
+    int d9 = vm_global_u8(g_vm, 0xD9);
+    int d5 = vm_global_u8(g_vm, 0xD5);
+    int d6 = vm_global_u8(g_vm, 0xD6);
+    int d1 = vm_global_u8(g_vm, 0xD1);
+    double gain = 0.0;
+    double lmul = 1.0 + 0.25 * (g_loop > 1 ? g_loop - 1 : 0);
+    unsigned c9, pct;
+    int band;
+
+    adv_limits();
+    if ((flags & 0x8000u) == 0u) {
+        if (g_ar_d9 < 0) {
+            g_ar_d9 = d9; g_ar_d5 = d5; g_ar_d6 = d6; g_ar_d1 = d1;
+            g_ar_lives = lives;
+            g_ar_prev_score = info->score;
+        }
+        if (lives < g_ar_lives) {
+            double cut = g_ar * (0.15 + 0.10 * g_ar / 1000.0);
+
+            g_ar -= cut;
+            g_ar_t = 0;
+            if (env_on("RUDEBR_RANKLOG")) {
+                fprintf(stderr, "arank death f=%u cut=%.1f now=%.1f\n", (unsigned)g->frame, cut, g_ar);
+            }
+        } else {
+            double ts = g_ar_t / ADV_FPS;
+            double surv = 0.6 * (1.0 + (ts / 90.0 > 2.0 ? 2.0 : ts / 90.0));
+
+            g_ar_t++;
+            gain += surv / ADV_FPS;
+            if (d9 >= 2) {
+                gain += 0.15 * (d9 - 1) / ADV_FPS;
+            }
+            if (lives > 1) {
+                /* Lives in stock, counted up to 5. */
+                gain += 0.08 * (lives - 1 > 5 ? 5 : lives - 1) / ADV_FPS;
+            }
+            if ((g->input.buttons | g->input.pad_buttons) & RB_BTN_A) {
+                gain += 0.10 / ADV_FPS;
+            }
+            if (d9 > g_ar_d9) {
+                gain += 12.0 * (d9 - g_ar_d9);
+            }
+            if (d5 && !g_ar_d5) {
+                gain += 8.0 * (d6 + 1);
+            } else if (d5 && d6 > g_ar_d6) {
+                gain += 8.0 * (d6 - g_ar_d6);
+            }
+            if (d1 > g_ar_d1) {
+                int n = d1 > 10 ? 10 : d1;
+
+                gain += 4.0 * n;   /* the n-th medal of the stage */
+            }
+            if (!d5 && g_ar_d5) {
+                g_ar -= g_ar * 0.04;
+            }
+            if (g_run_deaths == 0) {
+                gain *= 1.10;      /* NO DEATH */
+            }
+            if (gain >= 1.0 && env_on("RUDEBR_RANKLOG")) {
+                fprintf(stderr, "arank event f=%u +%.1f d9 %d->%d sub %d/%d->%d/%d medals %d->%d\n",
+                        (unsigned)g->frame, gain * lmul, g_ar_d9, d9, g_ar_d5, g_ar_d6, d5, d6,
+                        g_ar_d1, d1);
+            }
+            g_ar += gain * lmul;
+        }
+        if (g_ar < g_ar_floor) g_ar = g_ar_floor;
+        if (g_ar > g_ar_ceil) g_ar = g_ar_ceil;
+        /* Score bonus: up to +50 % of what was scored, by rank. */
+        if (info->score > g_ar_prev_score && info->score - g_ar_prev_score < 200000u) {
+            uint32_t sc;
+
+            g_ar_score_acc += (info->score - g_ar_prev_score) * 0.5 * g_ar / 1000.0;
+            if (g_ar_score_acc >= 10.0) {
+                uint32_t add = (uint32_t)(g_ar_score_acc / 10.0) * 10u;
+
+                g_ar_score_acc -= add;
+                sc = info->score + add;
+                vm_set_global_u8(g_vm, 0x8E, (uint8_t)sc);
+                vm_set_global_u8(g_vm, 0x8F, (uint8_t)(sc >> 8));
+                vm_set_global_u8(g_vm, 0x90, (uint8_t)(sc >> 16));
+                vm_set_global_u8(g_vm, 0x91, (uint8_t)(sc >> 24));
+                g_ar_prev_score = sc;
+            } else {
+                g_ar_prev_score = info->score;
+            }
+        } else {
+            g_ar_prev_score = info->score;
+        }
+        g_ar_d9 = d9; g_ar_d5 = d5; g_ar_d6 = d6; g_ar_d1 = d1;
+        g_ar_lives = lives;
+        g_live_prev_score = info->score;
+        g_live_prev_lives = lives;
+        if (g_lv_flash > 0) {
+            g_lv_flash--;
+        }
+    }
+    band = adv_band(g_ar);
+    if (g_ar_band >= 0 && band > g_ar_band) {
+        /* Band up: same as a CLASSIC step-up on the panel (LEVEL flash,
+         * green line and up arrow in the RANK graph). */
+        g_lv_flash = 61;
+        if (g_pt_up_n < 256) {
+            g_pt_up[g_pt_up_n++] = (uint16_t)((g_pt_frames - g_pt_base) * 3u / 92u);
+        }
+    }
+    g_ar_band = band;
+    g_eff = band;
+    g_rank = (uint32_t)(g_ar * 159.0 / 1000.0 * 256.0);
+    /* Shot speed copy: 0/200/400/600/1000 -> C9 0/4/7/10/28, never
+     * below the chosen difficulty. */
+    {
+        static const double px[5] = {0, 200, 400, 600, 1000};
+        int i = 0;
+        double v;
+
+        while (i < 3 && g_ar >= px[i + 1]) i++;
+        v = k_c9[i] + (k_c9[i + 1] - k_c9[i]) * (g_ar - px[i]) / (px[i + 1] - px[i]);
+        if (v > k_c9[4]) v = k_c9[4];
+        c9 = (unsigned)(v + 0.5);
+        if (c9 < base_c9()) c9 = base_c9();
+    }
+    pct = g_ar > 850.0 ? (unsigned)((g_ar - 850.0) * 15.0 / 150.0 * lmul + 0.5) : 0u;
+    if (pct > 30u) pct = 30u;
+    g_vh_pct = pct;
+    vm_set_shot_pct(g_vm, pct);
+    vm_set_return_fire(g_vm, g_ar >= 700.0);
+    g_live_c9_now = (uint8_t)c9;
+    vm_set_global_u8(g_vm, 0xC9, base_c9());
+    vm_set_shot_c9(g_vm, g_live_c9_now != base_c9() ? g_live_c9_now : 0u);
+    if (env_on("RUDEBR_RANKLOG") && (g->frame % 60u) == 0u) {
+        fprintf(stderr, "arank f=%u r=%.1f [%.0f,%.0f] band=%d c9=%u pct=%u rf=%d hits=%u lives=%d d9=%d score=%u\n",
+                (unsigned)g->frame, g_ar, g_ar_floor, g_ar_ceil, band, c9, pct,
+                g_ar >= 700.0, vm_shot_c9_hits(g_vm), lives, d9,
+                (unsigned)info->score);
+    }
 }
 
 static void live_update(RbGame *g)
@@ -2521,6 +2823,14 @@ static void live_update(RbGame *g)
         g_run_deaths++;
     }
     pt_update(g, (flags & 0x8000u) == 0u && lives < g_live_prev_lives, flags);
+    if (getenv("RUDEBR_DBG_ARANK") && g->frame == 30u) {
+        /* Test hook (debug env): preset the ADVANCED rank. */
+        g_ar = atof(getenv("RUDEBR_DBG_ARANK"));
+    }
+    if (adv_active()) {
+        adv_update(g, flags, lives, &info);
+    } else {
+    vm_set_return_fire(g_vm, 0);
     if ((flags & 0x8000u) == 0u) {
         const int prog = g_rank_on && !g_training;
         uint32_t cap = rank_cap(prog ? g_eff : base_diff());
@@ -2678,6 +2988,7 @@ static void live_update(RbGame *g)
      * shot spawns see rank. */
     vm_set_global_u8(g_vm, 0xC9, base_c9());
     vm_set_shot_c9(g_vm, g_live_c9_now != base_c9() ? g_live_c9_now : 0u);
+    }
     gfx_set_hud_speed(g_live_speed + 1);
     if (getenv("RUDEBR_DBG_DE") && g->frame == 900u) {
         /* Test hook: preset the power-up item count once. */

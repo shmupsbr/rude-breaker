@@ -692,7 +692,7 @@ static void draw_rank_offline(uint32_t *o, int gx, int gy, int gw, int gh, uint3
     const char *b = "OFFLINE";
     const int fa = F26;
     int al, ar, bl, br, fb, extra, wa, gap, ha, hb, top, x0;
-    Rgb c = scale(C_DIM, 85, 100);
+    Rgb c = C_G;
     int ph = (int)(fr % CYCLE);
     int k;
 
@@ -762,10 +762,13 @@ static void draw_rank(uint32_t *o, int X, const RbPanelData *d)
         if (d->rank_on) {
             rect(o, gx, y, gw, 1, scale(C_EDGE, 1, 2), 255);
         }
-        snprintf(buf, sizeof buf, "%d", v);
-        text_r(o, gx - 8, y - 10, F20, buf, C_DIM);
+        if (d->rank_on && !d->rank_adv) {
+            /* ADVANCED keeps the rank hidden: no values on the axis. */
+            snprintf(buf, sizeof buf, "%d", v);
+            text_r(o, gx - 8, y - 10, F20, buf, C_DIM);
+        }
     }
-    for (t = 0; t <= total; t += step) {
+    for (t = 0; d->rank_on && t <= total; t += step) {
         int x = gx + t * (gw - 1) / total;
 
         rect(o, x, gy + gh, 1, 6, C_DIM, 255);
@@ -833,7 +836,22 @@ static void draw_rank(uint32_t *o, int X, const RbPanelData *d)
             }
         }
     }
-    {
+    if (d->rank_on && d->rank_adv) {
+        /* ADVANCED: a discreet bar, no numbers. */
+        int t0 = gy + gh + 8 + cap(F20) + 4;
+        int top = t0 + (16 + 392 - 3 - t0 - cap(F34) + 1) / 2;
+        int bx = X + MX, bw = 388 - 2 * MX, bh = 10;
+        int by = top + (cap(F34) - bh) / 2;
+        int fill = bw * (d->rank_bar < 0 ? 0 : d->rank_bar > 1000 ? 1000 : d->rank_bar) / 1000;
+
+        /* Progress toward the next LEVEL band; full = maxed (top band
+         * or ceiling), drawn brighter with an edge. */
+        rect(o, bx, by, bw, bh, scale(C_Y, 1, 6), 255);
+        rect(o, bx, by, fill, bh, d->rank_bar >= 1000 ? C_Y : scale(C_Y, 2, 3), 255);
+        if (d->rank_bar >= 1000) {
+            frame(o, bx - 2, by - 2, bw + 4, bh + 4, 1, C_Y);
+        }
+    } else if (d->rank_on) {
         /* NOW row: centred between the time labels and the frame. */
         int t0 = gy + gh + 8 + cap(F20) + 4;
         int top = t0 + (16 + 392 - 3 - t0 - cap(F34) + 1) / 2;
@@ -842,9 +860,9 @@ static void draw_rank(uint32_t *o, int X, const RbPanelData *d)
         text(o, X + MX, yb, F20, "NOW", C_DIM);
         snprintf(buf, sizeof buf, "%d", d->rank_now);
         t = X + MX + text_w(F20, "NOW") + 12;
-        text(o, t, at_cap(F34, top), F34, buf, d->rank_on ? C_Y : C_DIM);
-        text(o, t + text_w(F34, buf) + 10, yb, F20, d->rank_on ? "/ 159" : "/ 159  OFF", C_DIM);
-        if (d->rank_on && d->rank_mul > 0) {
+        text(o, t, at_cap(F34, top), F34, buf, C_Y);
+        text(o, t + text_w(F34, buf) + 10, yb, F20, "/ 159", C_DIM);
+        if (d->rank_mul > 0) {
             snprintf(buf, sizeof buf, "x%d.%02d", d->rank_mul / 100, d->rank_mul % 100);
             text_r(o, X + 388 - MX, yb, F20, buf, d->rank_mul > 100 ? C_Y : C_DIM);
         }
@@ -1383,8 +1401,61 @@ static void draw_right(uint32_t *o, const RbPanelData *d)
             f = text_w(F20, lv) > 190 - 2 * MX ? F16 : F20;
             ty = at_cap(f, band_top(yl, 64, cap(f)));
             if (d->level_flash > 0) {
-                /* Step-up: 2 s of flashing, green and yellow. */
-                text_c(o, X + 95, ty, f, lv, (d->level_flash / 4) % 2 ? C_G : C_Y);
+                /* Step-up flash, pixel art on the game's 3 px grid
+                 * (640x400 units): hard edges, no alpha. Only the dark
+                 * area behind the value lights up (never the frame or
+                 * the header): a 4x4 Bayer dither of white / cyan that
+                 * thins in four steps, plus small 4-point stars inside
+                 * it. The value is drawn on top. */
+                static const uint8_t bayer[4][4] = {
+                    {0, 8, 2, 10}, {12, 4, 14, 6}, {3, 11, 1, 9}, {15, 7, 13, 5}};
+                const Rgb cy = {120, 240, 255};
+                const int bw = 190, bh = 64, t = 3, td = 5;
+                int lf = d->level_flash > 61 ? 61 : d->level_flash;
+                int el = 61 - lf;
+                int lvl = lf > 50 ? 12 : lf > 40 ? 8 : lf > 30 ? 4 : lf > 20 ? 2 : 0;
+                int px, py, k;
+
+#define LV_DARK(px_, py_) ((py_) >= HEAD && (px_) >= t && (px_) < bw - t && (py_) < bh - t && \
+                           cham_in((px_), (py_), bw, bh, CHAMF) && \
+                           (bw - 1 - (px_)) + (bh - 1 - (py_)) >= CHAMF + td && (px_) + (py_) >= CHAMF + td)
+                for (py = HEAD; lvl && py < bh; py++) {
+                    for (px = 0; px < bw; px++) {
+                        int gx = (X + px) / PIX, gy = (yl + py) / PIX;
+
+                        if (LV_DARK(px, py) && bayer[gy & 3][gx & 3] < lvl) {
+                            blend(o, X + px, yl + py, (gx + gy) % 5 ? C_W : cy, 255);
+                        }
+                    }
+                }
+                if (lf > 14 && (el / 4) % 3 != 2) {
+                    /* Small stars (5x5 / 3x3 cells) near the inner
+                     * corners of the dark area, clipped to it. */
+                    const int sx[4] = {6, bw - 8, 6, bw - 12};
+                    const int sy[4] = {HEAD + 3, HEAD + 3, bh - 9, bh - 9};
+                    int n = (el / 4) % 3 == 0 ? 2 : 1;
+
+                    for (k = 0; k < 4; k++) {
+                        int j, q;
+
+                        for (j = -n; j <= n; j++) {
+                            for (q = 0; q < PIX * PIX; q++) {
+                                int ax = (sx[k] / PIX + j) * PIX + q % PIX, ay = (sy[k] / PIX) * PIX + q / PIX;
+                                int bx = (sx[k] / PIX) * PIX + q % PIX, by2 = (sy[k] / PIX + j) * PIX + q / PIX;
+                                Rgb sc = j ? C_Y : C_W;
+
+                                if (LV_DARK(ax, ay)) blend(o, X + ax, yl + ay, sc, 255);
+                                if (LV_DARK(bx, by2)) blend(o, X + bx, yl + by2, sc, 255);
+                            }
+                        }
+                    }
+                }
+#undef LV_DARK
+                /* Text (on top): dark on the dense dither, then white / yellow on
+                 * alternate 3-frame steps, then the green / yellow. */
+                text_c(o, X + 95, ty, f, lv,
+                       lf > 40 ? C_BG : lf > 18 ? ((lf / 3) % 2 ? C_W : C_Y) :
+                       ((lf / 4) % 2 ? C_G : C_Y));
             } else {
                 text_c(o, X + 95, ty, f, lv, C_W);
             }
@@ -1464,33 +1535,55 @@ static void pad_check(uint32_t *out)
     }
 }
 
+/* ASPECT: 1 = 4:3 (the 480 visible game columns fill FIELD_W x PH,
+ * pixels 5:6 like a PC-98 monitor), 0 = 1:1 (square: 2.25 x 2.25,
+ * FIELD_W x 900, centred with black above and below). */
+static int g_panels_43 = 1;
+
+void panels_set_aspect(int a43)
+{
+    g_panels_43 = a43 ? 1 : 0;
+}
+
 void panels_render(uint32_t *out, const uint32_t *game, const RbPanelData *d)
 {
     static int map_x[FIELD_W];
     static int map_y[PH];
-    static int maps;
+    static int maps = -1;
     int x;
     int y;
 
-    if (!maps) {
+    if (maps != g_panels_43) {
+        int fh = g_panels_43 ? PH : 400 * FIELD_W / GAME_W;
+        int top = (PH - fh) / 2;
+
         for (x = 0; x < FIELD_W; x++) {
             map_x[x] = GAME_X0 + x * GAME_W / FIELD_W;
         }
         for (y = 0; y < PH; y++) {
-            map_y[y] = y * 400 / PH;
+            map_y[y] = y < top || y >= top + fh ? -1 : (y - top) * 400 / fh;
         }
-        maps = 1;
+        maps = g_panels_43;
     }
     if (g_back_ok != g_have_title) {
         build_back();
     }
     memcpy(out, g_back, sizeof g_back);
     for (y = 0; y < PH; y++) {
-        const uint32_t *src = game + map_y[y] * 640;
         uint32_t *dst = out + y * PW + FIELD_X;
 
-        for (x = 0; x < FIELD_W; x++) {
-            dst[x] = src[map_x[x]];
+        if (map_y[y] < 0) {
+            for (x = 0; x < FIELD_W; x++) {
+                dst[x] = 0x000000FFu;
+            }
+            continue;
+        }
+        {
+            const uint32_t *src = game + map_y[y] * 640;
+
+            for (x = 0; x < FIELD_W; x++) {
+                dst[x] = src[map_x[x]];
+            }
         }
     }
     rect(out, FIELD_X - 3, 0, 3, PH, C_EDGE, 255);

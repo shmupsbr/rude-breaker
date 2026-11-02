@@ -106,6 +106,8 @@ struct RbVm {
      * 0 = no rank, shots read C9 itself. */
     uint8_t shot_c9;
     uint8_t shot_pct;      /* extra enemy bullet speed, percent */
+    /* ADVANCED rank: return bullets forced on while the scan runs. */
+    int force_rf;
     /* LOOP (host option): ending load after stage 5 becomes stage 1. */
     int loop_on;
     int loop_event;
@@ -3882,6 +3884,13 @@ int vm_bonus_1000(RbVm *vm, int dy)
     return spawn_at_ship(vm, 0x4DA8u, 0x8000u, dy) < 0 ? -1 : 0;
 }
 
+void vm_set_return_fire(RbVm *vm, int force)
+{
+    if (vm) {
+        vm->force_rf = force;
+    }
+}
+
 void vm_set_shot_pct(RbVm *vm, unsigned pct)
 {
     if (vm) {
@@ -5080,8 +5089,21 @@ void vm_frame(RbVm *vm)
      * the first entry only. */
     debug_hud(vm);
     vm->score0 = (uint32_t)gu16(vm, 0x8E) | ((uint32_t)gu16(vm, 0x90) << 16);
-    for (i = 0; i < ENT_N; i++) {
-        run_entity(vm, i);
+    {
+        uint16_t f72 = gu16(vm, 0x72);
+
+        if (vm->force_rf) {
+            /* Bit 0x0008 set: the enemy death scripts spawn their
+             * return bullets (origins 04DB / 058B / 0640 appear). */
+            sgu16(vm, 0x72, (uint16_t)(f72 | 0x0008u));
+        }
+        for (i = 0; i < ENT_N; i++) {
+            run_entity(vm, i);
+        }
+        if (vm->force_rf) {
+            /* Put the player's RETURN FIRE choice back. */
+            sgu16(vm, 0x72, (uint16_t)((gu16(vm, 0x72) & ~0x0008u) | (f72 & 0x0008u)));
+        }
     }
     /* Title menu RETURN / EXIT (chunk 1 0x7EFE / 0x7F44) store byte
      * [bp+0xBC] (0 RETURN, 1 EXIT), OR bit 0x8000 into the edge word
