@@ -15,6 +15,8 @@ typedef struct RbPanelData {
     int training;
     int rank_on;            /* rank option (OFF shows the value dimmed) */
     int rank_now;           /* 0..159 */
+    int rank_adv;           /* RANK MODE ADVANCED: bar, no numbers */
+    int rank_bar;           /* ADVANCED: progress to the next LEVEL band, 0..1000 */
     const uint32_t *ship;   /* 32x48 player ship, or NULL */
     int rank_mul;           /* rise multiplier, percent */
     const uint8_t *rank_hist;  /* one sample per second */
@@ -60,6 +62,8 @@ void panels_capture_title(const uint32_t *rgba640);
 int  panels_have_title(void);
 const uint32_t *panels_title_pixels(void);
 /* Composite the playfield (640x400 game frame) and the panels. */
+/* ASPECT for the playfield: 1 = 4:3 (default), 0 = 1:1. */
+void panels_set_aspect(int a43);
 void panels_render(uint32_t *out, const uint32_t *game640, const RbPanelData *d);
 
 #endif

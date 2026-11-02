@@ -88,6 +88,8 @@ void vm_set_training(RbVm *vm, int on);
 /* Rank-adjusted C9 copied by enemy shot spawns only; 0 turns it off. */
 void vm_set_shot_c9(RbVm *vm, uint8_t v);
 void vm_set_shot_pct(RbVm *vm, unsigned pct);
+/* ADVANCED rank: force RETURN FIRE on (the player's option is kept). */
+void vm_set_return_fire(RbVm *vm, int force);
 /* LOOP: when on, the load of the ending after stage 5 loads stage 1
  * instead, with C9 / B2 set to c9 / b2 before the stage init runs.
  * vm_take_loop returns 1 once per such load. */

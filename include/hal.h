@@ -262,6 +262,10 @@ void      sys_set_wide(int on);
  * renderer's logical size), mouse cursor hidden while it is on. */
 void sys_set_fullscreen(int on);
 int  sys_fullscreen(void);
+/* SCALING: 0 SMOOTH, 1 SHARP, 2 INTEGER (default). */
+void sys_set_scaling(int mode);
+/* ASPECT: 1 = 4:3 (default, PC-98 monitor shape), 0 = 1:1 square pixels. */
+void sys_set_aspect(int a43);
 /* 1 once per F11 press since the last call. */
 int  sys_take_fullscreen_key(void);
 void sys_draw_sprite(const RbSprite *spr);
@@ -328,6 +332,8 @@ int  sys_audio_bands(float *out, int n);
 void sys_audio_pause(int on);
 /* While on, play/stop/fade calls are dropped (silent hidden VM runs). */
 void sys_audio_suppress(int on);
+/* SOUND CHANNELS: 1 EXTRA puts effects on a second chip. */
+void sys_audio_extra(int on);
 
 /* Milliseconds since sys_init (debug / Phase 1 only; core must not rely). */
 uint32_t sys_ticks_ms(void);
