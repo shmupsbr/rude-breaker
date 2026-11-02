@@ -34,12 +34,14 @@ ifeq ($(PLATFORM),sdl2)
 	src/hal/sdl2/video_sdl2.c \
 	src/hal/sdl2/audio_sdl2.c \
 	src/hal/sdl2/fplay.c \
+	src/hal/sdl2/fplay_sfx.c \
 	src/hal/sdl2/input_sdl2.c
   YMFM_SRCS := \
 	third_party/ymfm/ymfm_opn.cpp \
 	third_party/ymfm/ymfm_ssg.cpp \
 	third_party/ymfm/ymfm_adpcm.cpp \
-	src/hal/sdl2/opna_ymfm.cpp
+	src/hal/sdl2/opna_ymfm.cpp \
+	src/hal/sdl2/opna_sfx.cpp
   SDL2_CFLAGS ?= $(shell pkg-config --cflags sdl2)
   SDL2_LIBS   ?= $(shell pkg-config --libs sdl2)
   CFLAGS  += $(SDL2_CFLAGS) -DSDL_MAIN_HANDLED
