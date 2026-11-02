@@ -139,17 +139,15 @@ Files the game creates:
 
 RASPBERRY PI
 
-There are two Raspberry Pi packages. Pick the one that matches your
-operating system, not your board:
+The Raspberry Pi package is for 64-bit Raspberry Pi OS:
 
   RudeBreaker-RaspberryPi-*.zip    64-bit Raspberry Pi OS (aarch64).
                                    Pi 3, Pi 4, Pi 5, Pi Zero 2 W.
-  RudeBreaker-RaspberryPi32-*.zip  32-bit Raspberry Pi OS (armhf).
 
-To check which system you have, open a terminal and run:
+To check your system, open a terminal and run:
 
-  uname -m           aarch64 = 64-bit; armv7l or armv6l = 32-bit
-  getconf LONG_BIT   64 or 32
+  uname -m           aarch64 = 64-bit
+  getconf LONG_BIT   64
 
 Unzip the package, add SGM1.DAT, SONG.DAT and FPLAY.COM next to the
 program (same names, same upper case), then, inside that folder:
@@ -182,7 +180,8 @@ Performance: a Pi 4 or Pi 5 is recommended. On a Pi 3, keep the
 window small instead of full screen, and close other programs.
 
 "cannot execute binary file: Exec format error" means you are using
-the wrong package for your system: try the other one.
+a 32-bit system or the wrong package. Only 64-bit Raspberry Pi OS
+is supported; 32-bit builds are no longer made.
 
 
 3. CONTROLS
@@ -229,11 +228,23 @@ going up and down in turn:
 
 The top bar shows the current speed as SPD LOW, SPD MID or SPD MAX.
 
-Each game starts at the DEFAULT SPEED chosen in GAMEPLAY. A change made
-with the button lasts until the game ends; it does not change the
-DEFAULT SPEED setting.
+Each game starts at MID. A change made with the button lasts until the
+game ends. How fast each step really is depends on SHIP SPEED in
+GAMEPLAY.
 
-PAUSE: Escape (or Start) pauses only while you are playing a game.
+PAUSE: Escape or the pad's START button pauses only while you are
+playing a game. START is detected automatically: on pads known to SDL
+(Xbox, PlayStation, Switch and most others) it is the START/OPTIONS/+
+button; on plain joysticks it is button 8 or 10, or the first other
+button above 10 that you press during play. While paused, a menu shows
+RESUME, CONFIG and EXIT. RESUME (or Escape/START/B again) goes back to
+the game. CONFIG opens GAMEPLAY, GRAPHICS, SOUND and CONTROLS; changes
+take effect at once and BACK returns to the pause menu. EXIT ends the
+game and goes back to the title sequence (Compile logo first).
+The pause menu is drawn over the frozen game picture, which keeps the
+COLOR FILTER and CRT effects on. The pause menu and all CONFIG pages
+work on the pad too: d-pad or stick to move, A to confirm, B to go
+back one page, START to resume.
 On the title, in the attract demo and in the menus it does not pause.
 In the menus, Escape (keyboard) or the B button (pad) goes back one
 page.
@@ -267,19 +278,39 @@ logo, demo and title, as in the original) and EXIT closes the game.
 The menu rows sit over the big (c) COMPILE 1996 line of the title art;
 that is how the original lays it out.
 
-CONFIG has these pages:
+Attract mode (GAMEPLAY > ATTRACT MODE, ON by default): when nobody
+touches the keyboard or pad, the original loop (Compile logo, intro
+flight, title, ranking) plays once, and as soon as the ranking ends a
+30-second demo of one stage follows, without music (only the game's
+sound effects), with a
+blinking INSERT COIN in the middle of the screen, arcade style (just
+for fun: no coins needed); then the loop again and the next stage, from
+stage 1 to stage 5 and around. Any key or button ends the demo and
+goes back to the title sequence. A demo saves nothing: no hi-score,
+no ranking entry, no settings. The demo ship's movement follows a
+real player's path; it is our own input recording, not game data.
+
+CONFIG has these pages: GAMEPLAY, GRAPHICS, SOUND, CONTROLS, RANKING,
+PASSWORD and BACK. Settings keep their old names in rudebreaker.cfg,
+so saves from earlier builds load unchanged.
 
 GAMEPLAY
 
-  The options sit on consecutive lines, with no blank line between
-  them, in this order: DIFFICULTY, SUICIDE BULLETS, SHIP SELECT, DEFAULT
-  SPEED, PALETTE, TRAINING, FRAME PACING, RANK, SIDE PANELS, BULLET
-  COLOR, HITBOX, LOOP, SOUND CHANNELS, FULLSCREEN, SCALING, ASPECT
-  and BACK.
+  Options, in this order: DIFFICULTY, RANK, SUICIDE BULLETS, SHIP
+  SELECT, SHIP SPEED, TRAINING, LOOP, ATTRACT MODE and BACK.
 
   DIFFICULTY       VERY EASY, EASY, NORMAL, HARD, VERY HARD. These are
                    the original game's own difficulty levels. NORMAL
                    is the original default. Saved in RBRANK.DAT.
+
+  RANK             ADVANCED (default), CLASSIC or OFF. ADVANCED: a
+                   hidden rank that also reacts to your power, pickups
+                   and medals, and adds return bullets and a score bonus
+                   (see section 6, RANK MODE ADVANCED). CLASSIC: enemy
+                   bullets get faster or slower with how you play (see
+                   section 6). OFF: bullet speed stays fixed, as in the
+                   original. ADVANCED is the default only for a new
+                   rudebreaker.cfg; an existing save keeps its choice.
 
   SUICIDE BULLETS  ON: enemies fire bullets back when they are
                    destroyed, as in the original option. OFF: they don't.
@@ -297,40 +328,89 @@ GAMEPLAY
                    L and M, and you change weapon during the game by
                    picking up a capsule of another letter.
 
-  DEFAULT SPEED    LOW, MID (default), MAX. The ship's movement
-                   speed, as in the original. Each game starts at it.
-
-  RANK             CLASSIC (default), ADVANCED or OFF. CLASSIC:
-                   enemy bullets get faster or slower with how you
-                   play (see section 6). ADVANCED: a hidden rank
-                   that also reacts to your power, pickups and
-                   medals, and adds return bullets and a score bonus
-                   (see section 6, RANK MODE ADVANCED). OFF: bullet
-                   speed stays fixed, as in the original.
-
-  BULLET COLOR     PINK (default), LILAC, BLUE, GREEN or ORIGINAL.
-                   Every enemy bullet that cannot be shot down is
-                   recoloured, boss lasers included
-                   at full length, Cave style,
-                   whatever its original
-                   colour (red, orange or gold); its dark rim, body
-                   and bright core keep their shading. The game marks
-                   these in the object type, not by colour: enemy
-                   bullets have the bullet bit and no "can be shot"
-                   bits. Bullets you can shoot, enemies, items and
-                   your own shot keep their colours, and so do the
-                   harmless fireballs left when you shoot a bullet
-                   down. ORIGINAL leaves
-                   every bullet as in the game.
-
-  PALETTE          MODERN (default): Filipe's color rebalance of the
-                   game. ORIGINAL: the PC-98 colors.
+  SHIP SPEED       STANDARD (default) or AGGRESSIVE. STANDARD: LOW,
+                   MID and MAX move the ship as in the original.
+                   AGGRESSIVE: LOW is 15% slower, MID is the same and
+                   MAX is 15% faster. Every game starts at MID; the
+                   in-game speed button still switches LOW / MID /
+                   MAX. The attract demo always uses the original
+                   movement. Saved in rudebreaker.cfg as ship_speed.
 
   TRAINING         ON: practice mode (see section 5). OFF: normal game.
 
-  FRAME PACING     SMOOTH or EXACT (see section 7).
+  LOOP             ON (default) or OFF. OFF: the game ends after
+                   stage 5 with the ending, as in the original. ON: clearing stage 5
+                   starts stage 1 again as loop 2, then loop 3 and so
+                   on, keeping your score, lives and weapons. Each loop
+                   is harder (see section 6). Saved in rudebreaker.cfg.
 
-  SIDE PANELS      ON (default): in a 16:9 window or full screen, the
+  ATTRACT MODE     ON (default) or OFF. ON: after the ranking screen a
+                   30-second demo plays (no music, sound effects only),
+                   then the Compile logo again. OFF: no demo. Saved in
+                   rudebreaker.cfg.
+
+  BACK
+
+GRAPHICS
+
+  Options, in this order: FULLSCREEN, SCALING, ASPECT, ORIENTATION, SIDE
+  PANELS, PALETTE, BULLET COLOR, HITBOX, COLOR FILTER, the six CRT
+  effects, FRAME PACING and BACK.
+
+  FULLSCREEN       OFF (default) or ON. Fills the whole monitor,
+                   keeping the game's proportions (SIDE PANELS fill the
+                   sides on wide screens) and hiding the mouse pointer.
+                   F11 switches it at any time. Saved in
+                   rudebreaker.cfg.
+
+  SCALING          How the picture is scaled to the window or monitor.
+                   AUTO (default): INTEGER when it fills at least 80%
+                   of the screen height, otherwise SHARP. That gives
+                   SHARP at 720p and 1080p, INTEGER at 1440p, 4K and
+                   800x480.
+                   INTEGER: every game line becomes the same whole
+                   number of screen lines, with black borders around.
+                   With ASPECT 1:1 the pixels are square and all the
+                   same size. With ASPECT 4:3 the height is a whole
+                   multiple (2x = 800 lines, 3x = 1200) and the width
+                   is set to close the 4:3 shape.
+                   SHARP: fills as much of the screen as possible
+                   keeping the proportions, without blur (some pixels
+                   come out one screen pixel bigger). SMOOTH: fills
+                   the same way with soft (bilinear) filtering. If the
+                   window is too small for INTEGER, it acts as SHARP.
+                   With SIDE PANELS shown the 16:9 picture always
+                   fills the screen. Saved in rudebreaker.cfg.
+
+  ASPECT           4:3 (default): the 640x400 picture is shown with
+                   the shape of a PC-98 monitor, each pixel 1.2 times
+                   taller than wide (5:6), as the art was drawn to be
+                   seen. On a 1080p screen that is 1440x1080 with
+                   SHARP. 1:1: square pixels; the picture looks a
+                   little flatter than on the original. With SIDE
+                   PANELS the playfield follows the same choice (1:1
+                   leaves black bars above and below it). With 1:1 the
+                   ship's vertical movement is 1.2 times faster, so it
+                   crosses the flatter playfield in the same time as
+                   on 4:3 (the attract demo keeps the original moves).
+                   Saved in rudebreaker.cfg.
+
+  ORIENTATION      0 (default), 90, 180 or 270. Turns the whole picture
+                   (game, title and menus) by that many degrees
+                   clockwise, for a monitor that is turned or mounted
+                   upside down. It is never guessed from the monitor:
+                   you choose it. 0 and 180 use the normal wide layout.
+                   90 and 270 use the vertical (TATE) layout: at the
+                   top, the logo with the title's frame, then SCORE,
+                   LOADOUT, and NO DEATH over SPEED; the whole playfield
+                   in the middle, full width; at the bottom RANK, HIT
+                   RATIO / HIT COUNT, LEVEL / TIME, EXTENDS / I-FRAMES,
+                   and MEDALS over INPUT. With 90, turn the monitor so
+                   its right edge is on top; with 270, its left edge.
+                   Best with FULLSCREEN ON. SCALING and ASPECT apply as
+                   usual. Saved in rudebreaker.cfg as orientation.
+
+  SIDE PANELS      ON (default) or OFF. ON: in a 16:9 window or full screen, the
                    playfield sits in the middle with info panels on
                    both sides: rank graph, loadout, extends, i-frames,
                    speed, score, hit ratio, medals, level, time, NO
@@ -400,6 +480,28 @@ GAMEPLAY
                    From loop 2 on (LOOP ON) the RANK box title also
                    shows the loop: LOOP 2, LOOP 3 ... It is hidden in
                    loop 1 and with LOOP OFF.
+                   The vertical (portrait) layout is no longer a SIDE
+                   PANELS choice: it comes from ORIENTATION 90 or 270. A
+                   save from an earlier build with SIDE PANELS TATE
+                   loads as ON with ORIENTATION 90.
+
+  PALETTE          MODERN (default): Filipe's color rebalance of the
+                   game. ORIGINAL: the PC-98 colors.
+
+  BULLET COLOR     PINK (default), LILAC, BLUE, GREEN or ORIGINAL.
+                   Every enemy bullet that cannot be shot down is
+                   recoloured, boss lasers included
+                   at full length, Cave style,
+                   whatever its original
+                   colour (red, orange or gold); its dark rim, body
+                   and bright core keep their shading. The game marks
+                   these in the object type, not by colour: enemy
+                   bullets have the bullet bit and no "can be shot"
+                   bits. Bullets you can shoot, enemies, items and
+                   your own shot keep their colours, and so do the
+                   harmless fireballs left when you shoot a bullet
+                   down. ORIGINAL leaves
+                   every bullet as in the game.
 
   HITBOX           OFF (default), PINK, LILAC, BLUE, GREEN, RED or
                    WHITE. Draws a dot on the ship with the exact size
@@ -411,11 +513,64 @@ GAMEPLAY
                    RED is skipped with BULLET COLOR ORIGINAL (the
                    original bullets are red). Saved in rudebreaker.cfg.
 
-  LOOP             ON (default) or OFF. OFF: the game ends after
-                   stage 5 with the ending, as in the original. ON: clearing stage 5
-                   starts stage 1 again as loop 2, then loop 3 and so
-                   on, keeping your score, lives and weapons. Each loop
-                   is harder (see section 6). Saved in rudebreaker.cfg.
+  COLOR FILTER     ORIGINAL (default), GAME BOY, VIRTUAL BOY, COMMODORE 64,
+                   GAME GEAR, PC ENGINE. Recolours only the playfield, and
+                   only while a game (or the attract demo) is running:
+                   title, menus, ranking, name entry and the side panels
+                   always keep their real colours. The game's art and its
+                   palette are untouched, and PALETTE still works
+                   underneath. These filters are for fun: each one
+                   exaggerates its machine's look. GAME BOY: DMG greens by
+                   brightness, with the slow LCD (moving things leave a
+                   ghost) and the visible dot grid. VIRTUAL BOY: shades of
+                   red on black, with the short glow of the LEDs and the
+                   dark gaps between LED columns. COMMODORE 64: the 16 C64
+                   colours (Pepto), wide pixels, 3 colours plus black per
+                   cell for the scenery; sprites, bullets and items keep
+                   their own colours, and PAL blending (each line mixes with
+                   the one above). GAME GEAR: colour version of the GAME BOY
+                   look: 4096-colour palette (4 bits per channel) with at
+                   most 32 colours on screen (16 background + 16 sprite),
+                   chosen each frame, big crisp pixels (about 160x144
+                   detail), slow LCD with ghosting, a faint pixel grid and
+                   slightly washed backlit colours. PC ENGINE: strong,
+                   saturated and bright colours (9-bit, 512), 16 colours per
+                   tile, no dithering, only a slight composite softness.
+                   Saved in rudebreaker.cfg as color_filter (old values of
+                   filters that were removed, such as spectrum, msx1, msx2,
+                   nes, mastersystem or megadrive, now load as ORIGINAL).
+
+  CRT effects: six separate ON/OFF switches, all OFF by default. Like
+  COLOR FILTER they touch only the playfield during play (and the
+  demo), never the title, menus, ranking or side panels. They can be
+  combined with each other and with any COLOR FILTER, and work in
+  every ORIENTATION. Saved in rudebreaker.cfg as crt_scanlines,
+  crt_mask, crt_curvature, crt_bloom, crt_vignette and crt_badrf.
+  Each one costs some speed; on a Raspberry Pi turn on only the ones
+  you want.
+
+  SCANLINES        Darker gaps between the lines, as on a low-resolution
+                   CRT.
+
+  CRT MASK         The red/green/blue slot mask of a TV tube.
+
+  CURVATURE        Bends the playfield like the curved glass of a tube,
+                   with black corners.
+
+  BLOOM            Bright parts glow softly onto their surroundings.
+
+  VIGNETTE         The edges and corners get gradually darker.
+
+  BAD RF CABLE     A cheap aerial (RF) connection: wobbling lines,
+                   colour bleed, a faint ghost image and some snow.
+
+  FRAME PACING     SMOOTH or EXACT (see section 7).
+
+  BACK
+
+SOUND
+
+  Options: SOUND CHANNELS, SOUND TEST and BACK.
 
   SOUND CHANNELS   EXTRA (default): effects play on a second emulated
                    chip, so the music is never cut. ORIGINAL: sound
@@ -423,40 +578,7 @@ GAMEPLAY
                    the PC-98, so an effect can cut a music channel
                    for a moment. Saved in rudebreaker.cfg.
 
-  FULLSCREEN       OFF (default) or ON. Fills the whole monitor,
-                   keeping the game's proportions (SIDE PANELS fill the
-                   sides on wide screens) and hiding the mouse pointer.
-                   F11 switches it at any time. Saved in
-                   rudebreaker.cfg.
-
-  SCALING          How the picture is scaled to the window or monitor.
-                   AUTO (default): INTEGER when it fills at least 80%
-                   of the screen height, otherwise SHARP. That gives
-                   SHARP at 720p and 1080p, INTEGER at 1440p, 4K and
-                   800x480.
-                   INTEGER: every game line becomes the same whole
-                   number of screen lines, with black borders around.
-                   With ASPECT 1:1 the pixels are square and all the
-                   same size. With ASPECT 4:3 the height is a whole
-                   multiple (2x = 800 lines, 3x = 1200) and the width
-                   is set to close the 4:3 shape.
-                   SHARP: fills as much of the screen as possible
-                   keeping the proportions, without blur (some pixels
-                   come out one screen pixel bigger). SMOOTH: fills
-                   the same way with soft (bilinear) filtering. If the
-                   window is too small for INTEGER, it acts as SHARP.
-                   With SIDE PANELS shown the 16:9 picture always
-                   fills the screen. Saved in rudebreaker.cfg.
-
-  ASPECT           4:3 (default): the 640x400 picture is shown with
-                   the shape of a PC-98 monitor, each pixel 1.2 times
-                   taller than wide (5:6), as the art was drawn to be
-                   seen. On a 1080p screen that is 1440x1080 with
-                   SHARP. 1:1: square pixels; the picture looks a
-                   little flatter than on the original. With SIDE
-                   PANELS the playfield follows the same choice (1:1
-                   leaves black bars above and below it). Saved in
-                   rudebreaker.cfg.
+  SOUND TEST       Opens the SOUND TEST page (below).
 
   BACK
 
@@ -471,7 +593,7 @@ CONTROLS
                    listed in section 3.
   BACK
 
-SOUND TEST
+SOUND TEST (opened from SOUND)
 
   SOUND            Music and sound effects ON or OFF.
   BGM              Choose a music track (0-47) with left/right; Fire
@@ -514,7 +636,7 @@ format. A new score is saved when you enter your name.
 
 Difficulty and all gameplay rules work as in the original.
 
-RANK (GAMEPLAY option, CLASSIC by default) is an addition of this port,
+RANK (GAMEPLAY option, ADVANCED by default for a new cfg) is an addition of this port,
 modeled on the rank system of Zanac. A hidden rank value goes up
 while you stay alive and when you score points, and is reset when you
 lose a life (see below). It rises at one third of the rate used by
@@ -614,7 +736,8 @@ The rate and number of enemy shots are not changed: in the game data
 each enemy's shot timing is its own counter inside its script, so it
 cannot be changed for all enemies without changing their patterns.
 With LOOP, each new loop starts rank 100 higher and allows it 50
-higher (at most 1000), and every rise is 25% larger per loop.
+higher (at most 1000), and rank rises the loop number times faster
+(see LOOP below).
 Not in Training. RANK OFF turns all of this off.
 
 LOOP (GAMEPLAY option, ON by default) is an addition of this port.
@@ -640,6 +763,19 @@ score, lives and weapons. In each new loop:
     (loop 8 and later); enemy bullet speed never goes past the game's
     own VERY HARD value; the speed-up at the ceiling goes up to +25%
     times the multiplier, but never past +50%.
+  - From loop 2 on (not in Training), rank gain is multiplied by the
+    loop number in both rank modes, and enemy bullets get faster with
+    rank inside the loop: the rank range of the loop (start to
+    ceiling) is split in 10 steps, and each step adds 5% bullet speed
+    times (loop - 1): +5% per step in loop 2, +10% in loop 3 and so
+    on, up to +100% at most.
+  - From loop 2 on, SUICIDE BULLETS is always ON (the menu option is
+    kept and applies again in loop 1 / a new game).
+  - From loop 2 on, bosses have more HP: each stage boss +50% per
+    extra loop (x1.5 in loop 2, x2 in loop 3 ...), and the final boss
+    (the stage 5 fortress) +100% per extra loop (x2 in loop 2, x3 in
+    loop 3 ...). The loop multiplier stops at x8 and HP is capped so
+    it never overflows.
   - Losing a life takes you back to the loop's base difficulty, with
     its starting rank.
   - From loop 2 on, the RANK box title in the side panel shows the
