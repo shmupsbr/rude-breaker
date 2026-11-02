@@ -106,6 +106,10 @@ struct RbVm {
      * 0 = no rank, shots read C9 itself. */
     uint8_t shot_c9;
     uint8_t shot_pct;      /* extra enemy bullet speed, percent */
+    /* Host HP scaling (loop 2+ bosses): last HP seen and its origin. */
+    uint16_t hp_last[ENT_N];
+    uint16_t hp_org[ENT_N];
+    int music;             /* last music track started, -1 none */
     /* ADVANCED rank: return bullets forced on while the scan runs. */
     int force_rf;
     /* LOOP (host option): ending load after stage 5 becomes stage 1. */
@@ -242,7 +246,7 @@ static uint16_t rd16(const RbVm *vm, int ent, uint16_t ip)
 }
 
 
-/* RUDEBR_DIFFLOG: every distinct place that reads the difficulty bytes
+/* test hook: every distinct place that reads the difficulty bytes
  * C9 / B2, logged once (research aid). */
 static void diff_note(const char *kind, unsigned origin, unsigned ip, unsigned field,
                       unsigned a, unsigned b)
@@ -252,7 +256,7 @@ static void diff_note(const char *kind, unsigned origin, unsigned ip, unsigned f
     uint32_t key = ((uint32_t)ip << 12) ^ ((uint32_t)origin << 4) ^ (uint32_t)(kind[0] + kind[1]);
     int i;
 
-    if (!getenv("RUDEBR_DIFFLOG")) {
+    if (!((char *)0)) {
         return;
     }
     for (i = 0; i < n; i++) {
@@ -987,7 +991,7 @@ static void one_subop(RbVm *vm, int script, int target, uint16_t *di)
              * bonus tables that compare C9 with 4/7/10/28 still match. */
             if (b == 0xC9u && a == 0x33u && vm->shot_c9 != 0u) {
                 gv = vm->shot_c9;
-                if (getenv("RUDEBR_RANKLOG")) {
+                if (((char *)0)) {
                     vm->shot_hits++;
                 }
             }
@@ -2296,6 +2300,7 @@ static void x86_native(RbVm *vm, int ent, uint16_t ip0)
             if (vec == 0x7Fu && (vm->g[0xB9] & 0x04u) == 0) {
                 if ((r[0] >> 8) == 0) {
                     sys_play_music((uint16_t)(r[0] & 0xFFu));
+                    vm->music = (int)(r[0] & 0xFFu);
                 } else {
                     sys_play_sound((uint16_t)(r[0] & 0xFFu), 180);
                 }
@@ -2358,6 +2363,7 @@ static void play_al(RbVm *vm, uint8_t ah, uint8_t al)
         if (al != vm->g[0xBB]) {
             vm->g[0xBB] = al;
             sys_play_music(al);
+            vm->music = (int)al;
         }
         return;
     }
@@ -2375,7 +2381,7 @@ static void play_al(RbVm *vm, uint8_t ah, uint8_t al)
         return;
     }
     if (ah == 1) {
-        const char *log = getenv("RUDEBR_SFXLOG");
+        const char *log = ((char *)0);
 
         if (log && log[0]) {
             fprintf(stderr, "sfx %02X\n", al);
@@ -4390,6 +4396,87 @@ int vm_take_rank_commit(RbVm *vm)
     return pending;
 }
 
+/* Loop 2+ boss HP. Every live non-ship entity whose HP went up since the
+ * last call (a spawn, or its script setting HP) with the new HP at or
+ * above thr gets HP * pct / 100, capped at 0xFFFF. Damage only lowers
+ * HP, so each set is scaled once. Returns how many were scaled; info
+ * (optional) gets the last one: origin, type, HP before and after. */
+/* Boss HP for later loops. Stage bosses are the parts of type 0x41..0x4F
+ * spawned while the boss track (8) plays; the final boss is the stage 5
+ * fortress (its core and turret parts, by script origin). HP is scaled
+ * once, on the spawn frame (0 -> n), so per-frame timers that reuse the
+ * HP word are never touched. */
+#define VM_BOSS_MUSIC 8
+static int vm_hp_kind(const RbVm *vm, int i, int final_stage)
+{
+    static const uint16_t fin[] = { 0x8490u, 0x8722u, 0x882Au, 0x864Du, 0x895Eu };
+    uint16_t type = eu16(vm, i, 4), org = vm->origin[i];
+    unsigned k;
+
+    if (final_stage) {
+        for (k = 0; k < sizeof fin / sizeof fin[0]; k++) {
+            if (org == fin[k]) {
+                return 2;
+            }
+        }
+        return 0;
+    }
+    if (vm->music == VM_BOSS_MUSIC && type >= 0x0041u && type <= 0x004Fu) {
+        return 1;
+    }
+    return 0;
+}
+
+int vm_scale_hp(RbVm *vm, unsigned pct_boss, unsigned pct_final, int final_stage,
+                uint16_t info[4])
+{
+    int i, n = 0;
+
+    if (!vm) {
+        return 0;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        uint16_t hp, org;
+        uint32_t v;
+        unsigned pct;
+        int kind;
+
+        if (eu16(vm, i, 0) == 0 || eu16(vm, i, 4) == 0x0012u) {
+            vm->hp_last[i] = 0;
+            continue;
+        }
+        hp = eu16(vm, i, 0x3C);
+        org = vm->origin[i];
+        if (org != vm->hp_org[i]) {
+            vm->hp_org[i] = org;
+            vm->hp_last[i] = 0;
+        }
+        if (vm->hp_last[i] == 0u && hp >= 64u && hp < 0x8000u
+            && (kind = vm_hp_kind(vm, i, final_stage)) != 0) {
+            pct = kind == 2 ? pct_final : pct_boss;
+            v = (uint32_t)hp * pct / 100u;
+            if (v > 0x7FFFu) {
+                v = 0x7FFFu;  /* keep it a positive word: no wrap, no sign flip */
+            }
+            if (info) {
+                info[0] = org; info[1] = eu16(vm, i, 4); info[2] = hp; info[3] = (uint16_t)v;
+            }
+            if (v != hp) {
+                su16(vm, i, 0x3C, (uint16_t)v);
+            }
+            hp = (uint16_t)v;
+            n++;
+        }
+        vm->hp_last[i] = hp;
+    }
+    return n;
+}
+
+int vm_music(const RbVm *vm)
+{
+    return vm ? vm->music : -1;
+}
+
 uint16_t vm_peak_hp(const RbVm *vm)
 {
     int i;
@@ -4541,6 +4628,21 @@ uint16_t vm_text_cell(const RbVm *vm, int col, int row)
     return (uint16_t)(vm->text[off] | (vm->text[off + 1u] << 8));
 }
 
+/* Whole text page (codes and attributes), for the host pause menu. */
+void vm_text_save(const RbVm *vm, uint8_t *out)
+{
+    if (vm && out) {
+        memcpy(out, vm->text, TEXT_SIZE);
+    }
+}
+
+void vm_text_restore(RbVm *vm, const uint8_t *in)
+{
+    if (vm && in) {
+        memcpy(vm->text, in, TEXT_SIZE);
+    }
+}
+
 uint8_t vm_text_attr(const RbVm *vm, int col, int row)
 {
     unsigned off;
@@ -4680,6 +4782,50 @@ int vm_ship_box(const RbVm *vm, int *x0, int *y0, int *x1, int *y1)
         return *x1 > *x0 && *y1 > *y0;
     }
     return 0;
+}
+
+/* Ship position (globals 0x96 / 0x98, mirrored in the ship entity at
+ * +0x22 / +0x24). Returns 0 when there is no live ship. */
+int vm_ship_pos(const RbVm *vm, int *x, int *y)
+{
+    int i;
+
+    if (!vm) {
+        return 0;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        uint16_t type = eu16(vm, i, 0);
+
+        if (type == 0 || eu16(vm, i, 4) != 0x0012u) {
+            continue;
+        }
+        if ((type & 0x00FFu) == 0 || (type & 0x0200u) != 0) {
+            return 0;
+        }
+        *x = (int16_t)gu16(vm, 0x96);
+        *y = (int16_t)gu16(vm, 0x98);
+        return 1;
+    }
+    return 0;
+}
+
+/* Move the ship by (dx, dy): both the globals and the entity copy. */
+void vm_ship_shift(RbVm *vm, int dx, int dy)
+{
+    int i;
+
+    if (!vm || (dx == 0 && dy == 0)) {
+        return;
+    }
+    sgu16(vm, 0x96, (uint16_t)((int16_t)gu16(vm, 0x96) + dx));
+    sgu16(vm, 0x98, (uint16_t)((int16_t)gu16(vm, 0x98) + dy));
+    for (i = 0; i < ENT_N; i++) {
+        if (eu16(vm, i, 0) == 0 || eu16(vm, i, 4) != 0x0012u) {
+            continue;
+        }
+        su16(vm, i, 0x22, (uint16_t)((int16_t)eu16(vm, i, 0x22) + dx));
+        su16(vm, i, 0x24, (uint16_t)((int16_t)eu16(vm, i, 0x24) + dy));
+    }
 }
 
 uint8_t vm_global_u8(const RbVm *vm, uint8_t field)

@@ -313,7 +313,7 @@ static int cham_in(int px, int py, int w, int h, int k)
            px + py >= k && (w - 1 - px) + (h - 1 - py) >= k;
 }
 
-/* Boxes drawn this frame, for the padding check (RUDEBR_PADCHECK). */
+/* Boxes drawn this frame, for the padding check (test hook). */
 typedef struct PBox {
     int x, y, w, h, head;
     const char *label;
@@ -474,8 +474,8 @@ void panels_capture_title(const uint32_t *rgba640)
 {
     memcpy(g_title, rgba640, sizeof g_title);
     g_have_title = 1;
-    if (getenv("RUDEBR_TITLEDUMP")) {
-        FILE *f = fopen(getenv("RUDEBR_TITLEDUMP"), "wb");
+    if (((char *)0)) {
+        FILE *f = fopen(((char *)0), "wb");
 
         if (f) {
             fwrite(g_title, 1, sizeof g_title, f);
@@ -1149,8 +1149,24 @@ static void draw_left(uint32_t *o, const uint32_t *game, const RbPanelData *d)
                 ih = y1 - y0 + 1;
             }
         }
+        int lf = F34;
+        int gap = 16;
+        int tw0;
+
         snprintf(buf, sizeof buf, "x %d", d->lives);
-        gw = (iw ? iw * 56 / ih + 16 : 0) + tab_w(F34, "x 8");
+        /* Two or more digits must still fit inside the frame: tighten
+         * the gap, then drop to the smaller font. */
+        tw0 = tab_w(lf, buf) > tab_w(lf, "x 8") ? tab_w(lf, buf) : tab_w(lf, "x 8");
+        gw = (iw ? iw * 56 / ih + gap : 0) + tw0;
+        if (gw > 190 - 2 * MX) {
+            gap = 8;
+            gw -= 8;
+        }
+        if (gw > 190 - 2 * MX) {
+            lf = F26;
+            tw0 = tab_w(lf, buf);
+            gw = (iw ? iw * 56 / ih + gap : 0) + tw0;
+        }
         gx = X + (190 - gw) / 2;
         if (iw) {
             /* Scaled to 56 dots tall (nearest dot), the same height as
@@ -1169,9 +1185,9 @@ static void draw_left(uint32_t *o, const uint32_t *game, const RbPanelData *d)
                     }
                 }
             }
-            gx += tw + 16;
+            gx += tw + gap;
         }
-        tab(o, gx, at_cap(F34, band_top(664, 120, cap(F34))), F34, buf, C_Y);
+        tab(o, gx, at_cap(lf, band_top(664, 120, cap(lf))), lf, buf, C_Y);
     }
     /* I-FRAMES: the ship's invulnerability timer (global DF, one count
      * per logic frame) as a pie: a full disc when granted, a wedge
@@ -1486,7 +1502,7 @@ static void draw_right(uint32_t *o, const RbPanelData *d)
     }
 }
 
-/* RUDEBR_PADCHECK: redraw each box empty on the bare background and
+/* test hook: redraw each box empty on the bare background and
  * flag every content dot closer than INSET to the frame's inner edge,
  * the title strip or a cut. Offenders are painted magenta and counted
  * on stderr; the safe area is outlined in cyan. */
@@ -1592,7 +1608,223 @@ void panels_render(uint32_t *out, const uint32_t *game, const RbPanelData *d)
     g_frame = d->frame;
     draw_left(out, game, d);
     draw_right(out, d);
-    if (getenv("RUDEBR_PADCHECK")) {
+    if (((char *)0)) {
         pad_check(out);
+    }
+}
+
+/* ---- TATE (vertical) layout ---------------------------------------- */
+/* 1080x1920 portrait frame: a top marquee with the logo and SCORE /
+ * LOADOUT / NO DEATH over SPEED, the playfield 1080x1080 in the middle
+ * and a bottom bar with RANK, the small boxes, MEDALS and INPUT. The
+ * boxes are the wide layout's ones, reduced to 84% with 3x3 area
+ * sampling, keyed against the side art so only their own pixels land. */
+#define TW RB_TATE_W
+#define TH RB_TATE_H
+#define T_TOP 487
+#define T_GAME 1080
+#define T_BOT (TH - T_TOP - T_GAME)
+#define T_SC_NUM 84
+#define T_SC_DEN 100
+
+static int tsc(int v)
+{
+    return (v * T_SC_NUM + T_SC_DEN / 2) / T_SC_DEN;
+}
+
+static const PBox *find_box(const char *label)
+{
+    int k;
+
+    for (k = 0; k < g_nbox; k++) {
+        if (g_boxes[k].label && strcmp(g_boxes[k].label, label) == 0) {
+            return &g_boxes[k];
+        }
+    }
+    return NULL;
+}
+
+/* Side art for a TATE pixel: the same column tiling as build_back,
+ * mirrored about the centre. */
+static uint32_t tate_back(int x, int y)
+{
+    int xx = x < TW / 2 ? x : TW - 1 - x;
+
+    if (!g_have_title) {
+        return pack(C_BG);
+    }
+    {
+        int sy = (y / 3) % 400;
+        int u = xx + 48;
+        int tile = u / 132;
+        int tx = (u % 132) / 3;
+        int sx = (tile & 1) ? 43 - tx : tx;
+        Rgb c;
+        Rgb b = C_BG;
+
+        if (sx > 43) sx = 43;
+        c = unpack(g_title[sy * 640 + sx]);
+        b.r += (c.r - b.r) * 45 / 100;
+        b.g += (c.g - b.g) * 45 / 100;
+        b.b += (c.b - b.b) * 45 / 100;
+        return pack(b);
+    }
+}
+
+/* Copy wide rows [r0,r1) of box b (rows in skip[] left out) to dx,dy. */
+static void tate_box(uint32_t *o, const uint32_t *wide, const PBox *b, int dx, int dy,
+                     const int *cut, int ncut)
+{
+    int rows[1080];
+    int nr = 0;
+    int r;
+    int dw;
+    int dh;
+    int i;
+    int j;
+
+    if (!b) {
+        return;
+    }
+    for (r = 0; r < b->h; r++) {
+        int k;
+        int skip = 0;
+
+        for (k = 0; k < ncut; k++) {
+            if (r >= cut[2 * k] && r < cut[2 * k + 1]) skip = 1;
+        }
+        if (!skip) rows[nr++] = r;
+    }
+    dw = tsc(b->w);
+    dh = tsc(nr);
+    for (j = 0; j < dh; j++) {
+        for (i = 0; i < dw; i++) {
+            int sr = 0, sg = 0, sb = 0, n = 0;
+            int a;
+            int b2;
+
+            for (b2 = 0; b2 < 3; b2++) {
+                int ry = rows[((j * 3 + b2) * nr * 2 + nr) / (dh * 6)];
+                int sy = b->y + ry;
+
+                for (a = 0; a < 3; a++) {
+                    int sx = b->x + ((i * 3 + a) * b->w * 2 + b->w) / (dw * 6);
+                    uint32_t p = wide[sy * PW + sx];
+
+                    if (p != g_back[sy * PW + sx]) {
+                        Rgb c = unpack(p);
+
+                        sr += c.r; sg += c.g; sb += c.b; n++;
+                    }
+                }
+            }
+            if (n) {
+                Rgb c = {sr / n, sg / n, sb / n};
+
+                {
+                    int x = dx + i;
+                    int y = dy + j;
+
+                    if (x >= 0 && x < TW && y >= 0 && y < TH) {
+                        Rgb u = unpack(o[y * TW + x]);
+                        int al = n * 255 / 9;
+
+                        u.r += (c.r - u.r) * al / 255;
+                        u.g += (c.g - u.g) * al / 255;
+                        u.b += (c.b - u.b) * al / 255;
+                        o[y * TW + x] = pack(u);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Marquee art: the title's cut-out frame (lip rows 84-95, body rows
+ * 104-244, the lip mirrored below), nearest-scaled to w x h. */
+static void tate_logo(uint32_t *o, int x0, int y0, int w, int h)
+{
+    int i;
+    int j;
+
+    if (!g_have_title) {
+        return; /* no title art yet: the marquee stays plain */
+    }
+    for (j = 0; j < h; j++) {
+        int v = j * 163 / h;
+        int sy = v < 12 ? 84 + v : v < 153 ? 104 + (v - 12) : 95 - (v - 153);
+
+        for (i = 0; i < w; i++) {
+            o[(y0 + j) * TW + x0 + i] = g_title[sy * 640 + i * 640 / w];
+        }
+    }
+}
+
+void panels_render_tate(uint32_t *out, const uint32_t *wide, const uint32_t *game)
+{
+    static int map_x[TW];
+    static int map_y[T_GAME];
+    static int maps = -1;
+    static const int in_cut[] = {38, 58, 230, 248};
+    const int X[3] = {25, 376, 727};
+    int x;
+    int y;
+    const PBox *b;
+    const PBox *nd;
+    const PBox *md;
+
+    if (maps != g_panels_43) {
+        int fh = g_panels_43 ? T_GAME : 400 * TW / GAME_W;
+        int top = (T_GAME - fh) / 2;
+
+        for (x = 0; x < TW; x++) map_x[x] = GAME_X0 + x * GAME_W / TW;
+        for (y = 0; y < T_GAME; y++) {
+            map_y[y] = y < top || y >= top + fh ? -1 : (y - top) * 400 / fh;
+        }
+        maps = g_panels_43;
+    }
+    for (y = 0; y < TH; y++) {
+        if (y >= T_TOP && y < T_TOP + T_GAME) {
+            int my = map_y[y - T_TOP];
+            uint32_t *dst = out + y * TW;
+
+            for (x = 0; x < TW; x++) {
+                dst[x] = my < 0 ? 0x000000FFu : game[my * 640 + map_x[x]];
+            }
+            continue;
+        }
+        for (x = 0; x < TW; x++) {
+            out[y * TW + x] = tate_back(x, y >= T_TOP + T_GAME ? y - T_TOP - T_GAME : y);
+        }
+    }
+    tate_logo(out, (TW - 916) / 2, 19, 916, 280);
+    /* Top row y 318: SCORE, LOADOUT, NO DEATH over SPEED. */
+    tate_box(out, wide, find_box("SCORE"), X[0], 318, NULL, 0);
+    tate_box(out, wide, find_box("LOADOUT"), X[1], 318, NULL, 0);
+    nd = find_box("NO DEATH");
+    tate_box(out, wide, nd, X[2], 318, NULL, 0);
+    tate_box(out, wide, find_box("SPEED"), X[2], nd ? 318 + tsc(nd->h) + 12 : 318, NULL, 0);
+    /* Bottom bar: RANK, three rows of pairs, MEDALS over INPUT. */
+    {
+        int ch = tsc(392);
+        int cy = T_TOP + T_GAME + (T_BOT - ch) / 2;
+        int sw = tsc(190);
+        int x1 = X[1] + tsc(388) - sw;
+        int hs[3] = {tsc(120), tsc(64), tsc(120)};
+        int g2 = (ch - hs[0] - hs[1] - hs[2]) / 2;
+        int ih;
+
+        tate_box(out, wide, find_box("RANK"), X[0], cy, NULL, 0);
+        tate_box(out, wide, find_box("HIT RATIO"), X[1], cy, NULL, 0);
+        tate_box(out, wide, find_box("HIT COUNT"), x1, cy, NULL, 0);
+        tate_box(out, wide, find_box("LEVEL"), X[1], cy + hs[0] + g2, NULL, 0);
+        tate_box(out, wide, find_box("TIME"), x1, cy + hs[0] + g2, NULL, 0);
+        tate_box(out, wide, find_box("EXTENDS"), X[1], cy + ch - hs[2], NULL, 0);
+        tate_box(out, wide, find_box("I-FRAMES"), x1, cy + ch - hs[2], NULL, 0);
+        md = find_box("MEDALS");
+        b = find_box("INPUT");
+        ih = b ? tsc(b->h - (in_cut[1] - in_cut[0]) - (in_cut[3] - in_cut[2])) : 0;
+        tate_box(out, wide, md, X[2], cy, NULL, 0);
+        tate_box(out, wide, b, X[2], cy + ch - ih, in_cut, 2);
     }
 }

@@ -11,6 +11,9 @@
 #include "assets.h"
 #include "exepath.h"
 #include "vm.h"
+#include "cfilter.h"
+#include "crt.h"
+#include "demo.h"
 #include "gfx.h"
 #include "panels.h"
 
@@ -36,9 +39,11 @@ static int          g_modern = 1;
 static int          g_training;
 static int          g_rank_on = 1;
 /* RANK MODE: 0 CLASSIC, 1 ADVANCED (hidden 0..1000 rank). */
-static int          g_rank_mode = 0;
+static int          g_rank_mode = 1;
 /* Side panels for 16:9 windows (host option, saved). */
 static int          g_panels_on = 1;
+/* ORIENTATION: output turned 0/90/180/270 degrees clockwise (0..3). */
+static int          g_orient = 0;
 static int          g_bullet_c;     /* 0 ORIGINAL, 1 PINK, 2 LILAC, 3 BLUE, 4 GREEN */
 static const char *const k_bullet_name[5] = {"ORIGINAL", "PINK", "LILAC", "BLUE", "GREEN"};
 static int          g_cfg_9r;      /* settings file has the pr9r defaults */
@@ -59,6 +64,30 @@ static const char *const k_hit_cfg[HIT_N] = {
 static int          g_fullscreen;   /* FULLSCREEN option / F11 */
 static int          g_scaling = 3;  /* SCALING: 0 SMOOTH, 1 SHARP, 2 INTEGER, 3 AUTO */
 static int          g_aspect43 = 1; /* ASPECT: 1 = 4:3, 0 = 1:1 */
+static int          g_ship_aggr;    /* SHIP SPEED: 0 STANDARD, 1 AGGRESSIVE */
+static int          g_cfilter;      /* COLOR FILTER, CF_* */
+static unsigned     g_crt;          /* CRT effects, 1 << CRT_* */
+/* Attract mode. g_demo is the stage being shown (0 = none). While it
+ * runs, nothing is saved: no cfg, no RBRANK.DAT, no hi-score. */
+static int          g_demo;
+static unsigned     g_demo_f;
+static int          g_demo_next = 1;
+static uint32_t     g_idle;
+static int          g_demo_lives = -1;
+static int          g_demo_keep[3];
+static uint32_t     g_demo_hi;
+static int          g_attract_on = 1;  /* ATTRACT MODE option, saved */
+static unsigned     g_rank_seen;       /* frames the boot ranking has been up */
+static uint32_t     g_demo_t0;         /* demo start, wall clock ms */
+#define DEMO_MS 30000u
+/* Pause menu over a paused match: 0 none, 1 RESUME/CONFIG/EXIT list,
+ * 2 the config pages opened from it. The text page under it is kept
+ * and put back on RESUME. */
+static int          g_pmenu;
+static int          g_pcur;
+static uint16_t     g_pprev;
+static uint16_t     g_pad_prev;
+static uint8_t      g_ptext[RB_VM_TEXT_SIZE];
 static int          g_sndx = 1;         /* SOUND CHANNELS: 0 ORIGINAL, 1 EXTRA */
 static int          g_cfg_9zf;      /* settings file has the pr9zf defaults */
 /* 1CC on record (saved) and whether this run still counts. */
@@ -133,8 +162,9 @@ static void load_cfg(const RbGame *g)
     g_modern = 1;
     g_training = 0;
     g_rank_on = 1;
-    g_rank_mode = 0;
+    g_rank_mode = 1;  /* new installs: ADVANCED */
     g_panels_on = 1;
+    g_orient = 0;
     g_bullet_c = 1;
     g_cfg_9r = 0;
     g_onecc = 0;
@@ -142,6 +172,9 @@ static void load_cfg(const RbGame *g)
     g_sndx = 1;
     g_scaling = 3;
     g_aspect43 = 1;
+    g_ship_aggr = 0;
+    g_cfilter = CF_ORIGINAL;
+    g_crt = 0;
     g_cfg_9zf = 0;
     g_hitbox = 0;
     g_fullscreen = 0;
@@ -153,6 +186,8 @@ static void load_cfg(const RbGame *g)
         g_cfg_v9p = -1;
         return;
     }
+    /* A save from before rank_mode= was written plays CLASSIC, as it did. */
+    g_rank_mode = 0;
     while (fgets(line, sizeof line, fp)) {
         if (strncmp(line, "palette=modern", 14) == 0) {
             g_modern = 1;
@@ -170,6 +205,14 @@ static void load_cfg(const RbGame *g)
             g_rank_mode = 1;
         } else if (strncmp(line, "rank_mode=classic", 17) == 0) {
             g_rank_mode = 0;
+        } else if (strncmp(line, "panels=tate", 11) == 0) {
+            /* Old TATE setting: panels on, turned 90 degrees. */
+            g_panels_on = 1;
+            g_orient = 1;
+        } else if (strncmp(line, "orientation=", 12) == 0) {
+            int a = atoi(line + 12);
+
+            g_orient = a == 90 ? 1 : a == 180 ? 2 : a == 270 ? 3 : 0;
         } else if (strncmp(line, "panels=on", 9) == 0) {
             g_panels_on = 1;
         } else if (strncmp(line, "panels=off", 10) == 0) {
@@ -214,6 +257,30 @@ static void load_cfg(const RbGame *g)
             g_scaling = 2;
         } else if (strncmp(line, "scaling=auto", 12) == 0) {
             g_scaling = 3;
+        } else if (strncmp(line, "crt_", 4) == 0) {
+            int k;
+
+            for (k = 0; k < CRT_COUNT; k++) {
+                size_t m = strlen(crt_key(k));
+
+                if (strncmp(line, crt_key(k), m) == 0 && line[m] == '=') {
+                    if (strncmp(line + m + 1, "on", 2) == 0) {
+                        g_crt |= 1u << k;
+                    } else {
+                        g_crt &= ~(1u << k);
+                    }
+                }
+            }
+        } else if (strncmp(line, "color_filter=", 13) == 0) {
+            int k = cfilter_from_key(line + 13);
+
+            if (k >= 0) {
+                g_cfilter = k;
+            }
+        } else if (strncmp(line, "ship_speed=aggressive", 21) == 0) {
+            g_ship_aggr = 1;
+        } else if (strncmp(line, "ship_speed=standard", 19) == 0) {
+            g_ship_aggr = 0;
         } else if (strncmp(line, "aspect=1:1", 10) == 0) {
             g_aspect43 = 0;
         } else if (strncmp(line, "aspect=4:3", 10) == 0) {
@@ -224,6 +291,10 @@ static void load_cfg(const RbGame *g)
             g_sndx = 0;
         } else if (strncmp(line, "defaults9zf=1", 13) == 0) {
             g_cfg_9zf = 1;
+        } else if (strncmp(line, "attract=on", 10) == 0) {
+            g_attract_on = 1;
+        } else if (strncmp(line, "attract=off", 11) == 0) {
+            g_attract_on = 0;
         } else if (strncmp(line, "loop=on", 7) == 0) {
             g_loop_on = 1;
         } else if (strncmp(line, "loop=off", 8) == 0) {
@@ -290,6 +361,7 @@ static void title_prewarm(void);
 static uint8_t base_c9(void);
 static uint8_t base_b2(void);
 static int loop_mul(void);
+static void suicide_force(int on);
 
 static void live_park(void)
 {
@@ -301,6 +373,7 @@ static void live_park(void)
     if (g_loop > 1) {
         vm_set_global_u8(g_vm, 0xB2, g_live_b2);
     }
+    suicide_force(0);
     g_live_parked = 1;
 }
 
@@ -374,7 +447,7 @@ static void rank_flush(const RbGame *g)
     FILE *fp;
     size_t n = 0;
 
-    if (!g || !g_vm || g_training) {
+    if (!g || !g_vm || g_training || g_demo) {
         return;
     }
     live_park();
@@ -435,7 +508,7 @@ static void rank_sync(const RbGame *g)
 {
     int commit = g_vm && vm_take_rank_commit(g_vm);
 
-    if (!g_vm || g_training) {
+    if (!g_vm || g_training || g_demo) {
         return;
     }
     if (commit) {
@@ -455,6 +528,9 @@ static void save_cfg(const RbGame *g)
     char path[600];
     FILE *fp;
 
+    if (g_demo) {
+        return;
+    }
     cfg_path(g, path, sizeof path);
     fp = fopen(path, "w");
     if (!fp) {
@@ -471,9 +547,20 @@ static void save_cfg(const RbGame *g)
     fprintf(fp, "loop=%s\nsound_channels=%s\ndefaults9zf=1\n", g_loop_on ? "on" : "off",
             g_sndx ? "extra" : "original");
     fprintf(fp, "rank_mode=%s\n", g_rank_mode ? "advanced" : "classic");
+    fprintf(fp, "attract=%s\n", g_attract_on ? "on" : "off");
+    fprintf(fp, "ship_speed=%s\n", g_ship_aggr ? "aggressive" : "standard");
     fprintf(fp, "scaling=%s\naspect=%s\n",
             g_scaling == 0 ? "smooth" : g_scaling == 1 ? "sharp" : g_scaling == 2 ? "integer" : "auto",
             g_aspect43 ? "4:3" : "1:1");
+    fprintf(fp, "color_filter=%s\n", cfilter_key(g_cfilter));
+    fprintf(fp, "orientation=%d\n", g_orient * 90);
+    {
+        int k;
+
+        for (k = 0; k < CRT_COUNT; k++) {
+            fprintf(fp, "%s=%s\n", crt_key(k), (g_crt >> k) & 1u ? "on" : "off");
+        }
+    }
     fprintf(fp, "hitbox=%s\nfullscreen=%s\n", k_hit_cfg[g_hitbox],
             g_fullscreen ? "on" : "off");
     sys_bind_write(fp);
@@ -590,8 +677,57 @@ enum {
     PAGE_GAME,
     PAGE_CTRL,
     PAGE_KEYS,
-    PAGE_SOUND
+    PAGE_SOUND,
+    PAGE_GFX,
+    PAGE_SNDOPT
 };
+
+/* GAMEPLAY / GRAPHICS / SOUND list option ids; the setting code below
+ * works on the id, so cfg keys and behaviour do not depend on the page. */
+enum {
+    OPT_DIFF = 0, OPT_SUICIDE, OPT_SHIP, OPT_SPEED, OPT_PALETTE, OPT_TRAINING,
+    OPT_PACING, OPT_RANK, OPT_PANELS, OPT_BULLET, OPT_HITBOX, OPT_LOOP,
+    OPT_SNDX, OPT_FULLSCREEN, OPT_SCALING, OPT_ASPECT, OPT_CFILTER, OPT_ORIENT,
+    OPT_CRT0, /* + CRT_COUNT effects */
+    OPT_ATTRACT = 30,
+    OPT_SNDTEST = 40, OPT_BACK = 41
+};
+static const int k_view_game[] = {OPT_DIFF, OPT_RANK, OPT_SUICIDE, OPT_SHIP, OPT_SPEED,
+                                  OPT_TRAINING, OPT_LOOP, OPT_ATTRACT, OPT_BACK};
+static const int k_view_gfx[] = {OPT_FULLSCREEN, OPT_SCALING, OPT_ASPECT, OPT_ORIENT,
+                                 OPT_PANELS, OPT_PALETTE, OPT_BULLET, OPT_HITBOX,
+                                 OPT_CFILTER, OPT_CRT0 + 0, OPT_CRT0 + 1, OPT_CRT0 + 2,
+                                 OPT_CRT0 + 3, OPT_CRT0 + 4, OPT_CRT0 + 5, OPT_PACING,
+                                 OPT_BACK};
+static const int k_view_snd[] = {OPT_SNDX, OPT_SNDTEST, OPT_BACK};
+/* From the pause menu the Sound Test is left out: it would stop the
+ * stage music under the paused match. */
+static const int k_view_snd_p[] = {OPT_SNDX, OPT_BACK};
+
+static const int *opt_view(int page, int *n)
+{
+    if (page == PAGE_GAME) {
+        *n = (int)(sizeof k_view_game / sizeof k_view_game[0]);
+        return k_view_game;
+    }
+    if (page == PAGE_GFX) {
+        *n = (int)(sizeof k_view_gfx / sizeof k_view_gfx[0]);
+        return k_view_gfx;
+    }
+    if (page == PAGE_SNDOPT && g_pmenu) {
+        *n = (int)(sizeof k_view_snd_p / sizeof k_view_snd_p[0]);
+        return k_view_snd_p;
+    }
+    if (page == PAGE_SNDOPT) {
+        *n = (int)(sizeof k_view_snd / sizeof k_view_snd[0]);
+        return k_view_snd;
+    }
+    *n = 0;
+    return NULL;
+}
+
+static int opt_page(void);
+static int opt_id(void);
 
 static uint16_t flag_word(void)
 {
@@ -692,6 +828,46 @@ static int suicide_on(void)
     return (flag_word() & 0x0008u) != 0;
 }
 
+/* From loop 2 (not Training) SUICIDE BULLETS is forced ON. The player's
+ * own setting is kept in g_sui_user and put back whenever the match is
+ * parked (settings export) or left, so the option still decides loop 1
+ * and the saved value never changes by itself. */
+/* Loop 2+ boss HP: stage bosses +50 % per extra loop, the final boss
+ * +100 % per extra loop (loop capped at LOOP_MUL_MAX, HP at 0xFFFF). */
+static void boss_hp_update(RbGame *g)
+{
+    unsigned m = (unsigned)loop_mul();
+    unsigned pb = 100u, pf = 100u;
+
+    if (!g_vm) {
+        return;
+    }
+    if (m > 1u && !g_training && !g_demo) {
+        pb = 100u + 50u * (m - 1u);   /* stage bosses: +50% per extra loop */
+        pf = 100u * m;                /* final boss: +100% per extra loop */
+    }
+    vm_scale_hp(g_vm, pb, pf, g->stage >= 5, NULL);
+}
+
+static int g_sui_forced;
+static int g_sui_user;
+
+static void suicide_force(int on)
+{
+    if (!g_vm) {
+        return;
+    }
+    if (on && !g_sui_forced) {
+        g_sui_user = suicide_on();
+        g_sui_forced = 1;
+        set_flag_word((uint16_t)(flag_word() | 0x0008u));
+    } else if (!on && g_sui_forced) {
+        g_sui_forced = 0;
+        set_flag_word((uint16_t)((flag_word() & (uint16_t)~0x0008u) |
+                                 (g_sui_user ? 0x0008u : 0u)));
+    }
+}
+
 /* SHIP SELECT. Bit 0x0080 set skips the scene (the OFF label). */
 static int ship_on(void)
 {
@@ -784,12 +960,32 @@ static void joy_auto(void)
 static int page_count(void)
 {
     switch (g_page) {
-    case PAGE_GAME:  return 17;
+    case PAGE_GAME:
+    case PAGE_GFX:
+    case PAGE_SNDOPT: {
+        int n;
+
+        opt_view(g_page, &n);
+        return n;
+    }
     case PAGE_CTRL:  return 3;
     case PAGE_KEYS:  return 11;
     case PAGE_SOUND: return 7;
-    default:         return 6;
+    default:         return g_pmenu ? 5 : 7;
     }
+}
+
+static int opt_page(void)
+{
+    return g_page == PAGE_GAME || g_page == PAGE_GFX || g_page == PAGE_SNDOPT;
+}
+
+static int opt_id(void)
+{
+    int n;
+    const int *v = opt_view(g_page, &n);
+
+    return v && g_cursor >= 0 && g_cursor < n ? v[g_cursor] : -1;
 }
 
 static void enter_page(int page)
@@ -815,30 +1011,36 @@ static void change_value(RbGame *g, int dir)
     int changed = 0;
 
     (void)g;
-    if (g_page == PAGE_GAME) {
-        if (g_cursor == 0) {
+    if (opt_page()) {
+        int opt = opt_id();
+
+        if (opt == 0) {
             set_diff(diff_index() + dir);
             changed = 1;
-        } else if (g_cursor == 1) {
-            set_flag_word((uint16_t)(flag_word() ^ 0x0008u));
+        } else if (opt == 1) {
+            if (g_sui_forced) {
+                g_sui_user = !g_sui_user;   /* loop 2+: kept ON for now */
+            } else {
+                set_flag_word((uint16_t)(flag_word() ^ 0x0008u));
+            }
             changed = 1;
-        } else if (g_cursor == 2) {
+        } else if (opt == 2) {
             set_flag_word((uint16_t)(flag_word() ^ 0x0080u));
             changed = 1;
-        } else if (g_cursor == 3) {
-            set_speed(speed_index() + dir);
+        } else if (opt == 3) {
+            g_ship_aggr = !g_ship_aggr;
             changed = 1;
-        } else if (g_cursor == 4) {
+        } else if (opt == 4) {
             g_modern = !g_modern;
             changed = 1;
-        } else if (g_cursor == 5) {
+        } else if (opt == 5) {
             g_training = !g_training;
             changed = 1;
-        } else if (g_cursor == 6) {
+        } else if (opt == 6) {
             /* Host only, saved to rudebreaker.ini, not RBRANK.DAT. */
             sys_pace_set_pref_exact(!sys_pace_pref_exact());
             changed = 1;
-        } else if (g_cursor == 7) {
+        } else if (opt == 7) {
             /* Host only, saved to the settings file. */
             /* OFF -> CLASSIC -> ADVANCED -> OFF. */
             if (!g_rank_on) {
@@ -851,43 +1053,61 @@ static void change_value(RbGame *g, int dir)
                 g_rank_mode = 0;
             }
             changed = 1;
-        } else if (g_cursor == 8) {
+        } else if (opt == 8) {
             /* Host only, saved to the settings file. */
             g_panels_on = !g_panels_on;
             changed = 1;
-        } else if (g_cursor == 9) {
+        } else if (opt == 9) {
             /* Host only: recolours enemy bullets, saved to the settings file. */
             g_bullet_c = (g_bullet_c + (dir < 0 ? 4 : 1)) % 5;
             gfx_set_bullet_color(g_bullet_c);
             hit_fix();
             changed = 1;
-        } else if (g_cursor == 10) {
+        } else if (opt == 10) {
             /* Host only: never the bullet colour, saved. */
             g_hitbox = hit_step(g_hitbox, dir);
             changed = 1;
-        } else if (g_cursor == 11) {
+        } else if (opt == 11) {
             /* Host only, saved to the settings file. */
             g_loop_on = !g_loop_on;
             changed = 1;
-        } else if (g_cursor == 12) {
+        } else if (opt == 12) {
             /* Host only: EXTRA plays effects on a second chip. Saved. */
             g_sndx = !g_sndx;
             sys_audio_extra(g_sndx);
             changed = 1;
-        } else if (g_cursor == 13) {
+        } else if (opt == 13) {
             /* Host only, saved to the settings file. F11 does the same. */
             fullscreen_apply(!g_fullscreen);
             changed = 1;
-        } else if (g_cursor == 14) {
+        } else if (opt == 14) {
             /* Host only: SMOOTH / SHARP / INTEGER, saved. */
             g_scaling = (g_scaling + (dir < 0 ? 3 : 1)) % 4;
             sys_set_scaling(g_scaling);
             changed = 1;
-        } else if (g_cursor == 15) {
+        } else if (opt == 15) {
             /* Host only: 4:3 (PC-98 monitor) or 1:1 square pixels. */
             g_aspect43 = !g_aspect43;
             sys_set_aspect(g_aspect43);
             panels_set_aspect(g_aspect43);
+            changed = 1;
+        } else if (opt == 16) {
+            /* Host only: recolours the output frame, saved. */
+            g_cfilter = (g_cfilter + (dir < 0 ? CF_COUNT - 1 : 1)) % CF_COUNT;
+            changed = 1;
+        } else if (opt == 17) {
+            /* Host only: 0 / 90 / 180 / 270 degrees clockwise, saved.
+             * 90 and 270 use the vertical (TATE) panel layout. */
+            g_orient = (g_orient + (dir < 0 ? 3 : 1)) % 4;
+            sys_set_orientation(g_orient);
+            changed = 1;
+        } else if (opt == OPT_ATTRACT) {
+            /* Host only: demo play after the ranking, saved. */
+            g_attract_on = !g_attract_on;
+            changed = 1;
+        } else if (opt >= OPT_CRT0 && opt < OPT_CRT0 + CRT_COUNT) {
+            /* Host only: playfield CRT effects, each saved. */
+            g_crt ^= 1u << (opt - OPT_CRT0);
             changed = 1;
         }
     } else if (g_page == PAGE_CTRL && g_cursor == 0) {
@@ -936,18 +1156,42 @@ static void change_value(RbGame *g, int dir)
     }
 }
 
+/* Config opened from the pause menu: its root BACK returns to the
+ * pause list, with the match's text page put back under it. */
+static void pause_back_to_list(void)
+{
+    if (g_page == PAGE_SOUND) {
+        player_stop();
+    }
+    g_menu_latched = 0;
+    g_page = PAGE_ROOT;
+    g_cursor = 0;
+    g_capture = 0;
+    g_pmenu = 1;
+    g_pcur = 1;
+    g_pprev = 0xFFFFu;
+    vm_text_restore(g_vm, g_ptext);
+}
+
 static void activate_row(RbGame *g)
 {
+    if (g_page == PAGE_ROOT && g_pmenu && g_cursor >= 4) {
+        pause_back_to_list();
+        menu_ok();
+        return;
+    }
     if (g_page == PAGE_ROOT) {
         if (g_cursor == 0) {
             enter_page(PAGE_GAME);
         } else if (g_cursor == 1) {
-            enter_page(PAGE_CTRL);
+            enter_page(PAGE_GFX);
         } else if (g_cursor == 2) {
-            enter_page(PAGE_SOUND);
+            enter_page(PAGE_SNDOPT);
         } else if (g_cursor == 3) {
-            handoff(3);
+            enter_page(PAGE_CTRL);
         } else if (g_cursor == 4) {
+            handoff(3);
+        } else if (g_cursor == 5) {
             handoff(4);
         } else {
             handoff(2);
@@ -955,8 +1199,16 @@ static void activate_row(RbGame *g)
         menu_ok();
         return;
     }
-    if (g_page == PAGE_GAME && g_cursor == 16) {
+    if (opt_page() && opt_id() == OPT_BACK) {
+        int from = g_page;
+
         enter_page(PAGE_ROOT);
+        g_cursor = from == PAGE_GFX ? 1 : from == PAGE_SNDOPT ? 2 : 0;
+        menu_ok();
+        return;
+    }
+    if (opt_page() && opt_id() == OPT_SNDTEST) {
+        enter_page(PAGE_SOUND);
         menu_ok();
         return;
     }
@@ -966,6 +1218,7 @@ static void activate_row(RbGame *g)
             menu_ok();
         } else if (g_cursor == 2) {
             enter_page(PAGE_ROOT);
+            g_cursor = 3;
             menu_ok();
         }
         return;
@@ -1000,7 +1253,8 @@ static void activate_row(RbGame *g)
         } else if (g_cursor == 5) {
             player_stop();
         } else if (g_cursor == 6) {
-            enter_page(PAGE_ROOT);
+            enter_page(PAGE_SNDOPT);
+            g_cursor = 1;
         }
         menu_ok();
     }
@@ -1027,16 +1281,28 @@ static void go_back(void)
     case PAGE_GAME:
         enter_page(PAGE_ROOT);
         break;
-    case PAGE_CTRL:
+    case PAGE_GFX:
         enter_page(PAGE_ROOT);
         g_cursor = 1;
         break;
-    case PAGE_SOUND:
+    case PAGE_SNDOPT:
         enter_page(PAGE_ROOT);
         g_cursor = 2;
         break;
+    case PAGE_CTRL:
+        enter_page(PAGE_ROOT);
+        g_cursor = 3;
+        break;
+    case PAGE_SOUND:
+        enter_page(PAGE_SNDOPT);
+        g_cursor = 1;
+        break;
     default:
-        handoff(2);
+        if (g_pmenu) {
+            pause_back_to_list();
+        } else {
+            handoff(2);
+        }
         break;
     }
     menu_ok();
@@ -1193,15 +1459,6 @@ static void paint_option_row(int col, int value_col, int row,
     }
 }
 
-static const char *speed_name(void)
-{
-    switch (speed_index()) {
-    case 0:  return "LOW";
-    case 2:  return "MAX";
-    default: return "MID";
-    }
-}
-
 static const char *joy_value(void)
 {
     if (!joy_flag()) {
@@ -1233,7 +1490,7 @@ static int menu_row(int first, int index)
     return first + index * 2;
 }
 
-/* GAMEPLAY has 17 rows, so they sit on consecutive lines. */
+/* GAMEPLAY has 19 rows, so they sit on consecutive lines. */
 static int game_row(int index)
 {
     return 4 + index;
@@ -1378,14 +1635,29 @@ static void host_menu_paint(void)
     char num[8];
     char track[24];
     const char *title = "CONFIG";
-    static const char *root_name[6] = {
-        "GAMEPLAY", "CONTROLS", "SOUND TEST", "RANKING", "PASSWORD", "BACK"
+    static const char *root_name[7] = {
+        "GAMEPLAY", "GRAPHICS", "SOUND", "CONTROLS", "RANKING", "PASSWORD", "BACK"
     };
     static const char *key_name[11] = {
         "UP", "DOWN", "LEFT", "RIGHT", "FIRE", "MODE", "SHIFT", "PAUSE",
         "SPEED", "RESTORE DEFAULTS", "BACK"
     };
 
+    if (g_pmenu == 1 && g_vm) {
+        static const char *pitem[3] = {"RESUME", "CONFIG", "EXIT"};
+
+        /* Dark box in the middle of the playfield, the match's text
+         * (HUD) left as it is around it. */
+        gfx_set_panel(1, 208, 136, 432, 264);
+        for (row = 8; row <= 16; row++) {
+            vm_text_write(g_vm, 26, row, "", 14, 0);
+        }
+        vm_text_write(g_vm, 35, 9, "PAUSE", 0, 0xE1u);
+        for (i = 0; i < 3; i++) {
+            paint_option_row(34, 0, 11 + i * 2, pitem[i], NULL, 0, i == g_pcur, 0);
+        }
+        return;
+    }
     if (!menu_visible() || !g_vm) {
         gfx_set_panel(0, 0, 0, 0, 0);
         return;
@@ -1398,6 +1670,10 @@ static void host_menu_paint(void)
     }
     if (g_page == PAGE_GAME) {
         title = "GAMEPLAY";
+    } else if (g_page == PAGE_GFX) {
+        title = "GRAPHICS";
+    } else if (g_page == PAGE_SNDOPT) {
+        title = "SOUND";
     } else if (g_page == PAGE_CTRL) {
         title = "CONTROLS";
     } else if (g_page == PAGE_KEYS) {
@@ -1406,46 +1682,55 @@ static void host_menu_paint(void)
         title = "SOUND TEST";
     }
     vm_text_write(g_vm, MENU_LABEL_COL, 1, title, 0, 0xE1u);
-    if (g_page == PAGE_ROOT) {
-        for (i = 0; i < 6; i++) {
+    if (g_page == PAGE_ROOT && g_pmenu) {
+        static const char *proot[5] = {"GAMEPLAY", "GRAPHICS", "SOUND", "CONTROLS", "BACK"};
+
+        for (i = 0; i < 5; i++) {
+            paint_line(i, menu_row(4, i), proot[i], NULL, 0);
+        }
+    } else if (g_page == PAGE_ROOT) {
+        for (i = 0; i < 7; i++) {
             paint_line(i, menu_row(4, i), root_name[i], NULL, 0);
         }
-    } else if (g_page == PAGE_GAME) {
-        paint_line(0, game_row(0), "DIFFICULTY", k_diff[diff_index()],
-                   diff_index() != 2);
-        paint_line(1, game_row(1), "SUICIDE BULLETS",
-                   suicide_on() ? "ON" : "OFF", suicide_on());
-        paint_line(2, game_row(2), "SHIP SELECT", ship_on() ? "ON" : "OFF",
-                   ship_on());
-        paint_line(3, game_row(3), "DEFAULT SPEED", speed_name(),
-                   speed_index() != 1);
-        paint_line(4, game_row(4), "PALETTE",
-                   g_modern ? "MODERN" : "ORIGINAL", g_modern);
-        paint_line(5, game_row(5), "TRAINING", g_training ? "ON" : "OFF",
-                   g_training);
-        paint_line(6, game_row(6), "FRAME PACING",
-                   sys_pace_pref_exact() ? "EXACT" : "SMOOTH",
-                   sys_pace_pref_exact());
-        paint_line(7, game_row(7), "RANK",
-                   !g_rank_on ? "OFF" : g_rank_mode ? "ADVANCED" : "CLASSIC",
-                   g_rank_on);
-        paint_line(8, game_row(8), "SIDE PANELS", g_panels_on ? "ON" : "OFF",
-                   g_panels_on);
-        paint_line(9, game_row(9), "BULLET COLOR", k_bullet_name[g_bullet_c],
-                   g_bullet_c != 0);
-        paint_line(10, game_row(10), "HITBOX", k_hit_name[g_hitbox],
-                   g_hitbox != 0);
-        paint_line(11, game_row(11), "LOOP", g_loop_on ? "ON" : "OFF", g_loop_on);
-        paint_line(12, game_row(12), "SOUND CHANNELS", g_sndx ? "EXTRA" : "ORIGINAL",
-                   g_sndx);
-        paint_line(13, game_row(13), "FULLSCREEN", g_fullscreen ? "ON" : "OFF",
-                   g_fullscreen);
-        paint_line(14, game_row(14), "SCALING",
-                   g_scaling == 0 ? "SMOOTH" : g_scaling == 1 ? "SHARP" :
-                   g_scaling == 2 ? "INTEGER" : "AUTO",
-                   g_scaling != 3);
-        paint_line(15, game_row(15), "ASPECT", g_aspect43 ? "4X3" : "1X1", !g_aspect43);
-        paint_line(16, game_row(16), "BACK", NULL, 0);
+    } else if (opt_page()) {
+        int nv;
+        const int *v = opt_view(g_page, &nv);
+        static const char *k_orient[4] = {"0", "90", "180", "270"};
+
+        for (i = 0; i < nv; i++) {
+            int r = game_row(i) + (g_page != PAGE_GFX ? i : 0);
+
+            switch (v[i]) {
+            case 0: paint_line(i, r, "DIFFICULTY", k_diff[diff_index()], diff_index() != 2); break;
+            case 1: paint_line(i, r, "SUICIDE BULLETS", suicide_on() ? "ON" : "OFF", suicide_on()); break;
+            case 2: paint_line(i, r, "SHIP SELECT", ship_on() ? "ON" : "OFF", ship_on()); break;
+            case 3: paint_line(i, r, "SHIP SPEED", g_ship_aggr ? "AGGRESSIVE" : "STANDARD", g_ship_aggr); break;
+            case 4: paint_line(i, r, "PALETTE", g_modern ? "MODERN" : "ORIGINAL", g_modern); break;
+            case 5: paint_line(i, r, "TRAINING", g_training ? "ON" : "OFF", g_training); break;
+            case 6: paint_line(i, r, "FRAME PACING", sys_pace_pref_exact() ? "EXACT" : "SMOOTH", sys_pace_pref_exact()); break;
+            case 7: paint_line(i, r, "RANK", !g_rank_on ? "OFF" : g_rank_mode ? "ADVANCED" : "CLASSIC", g_rank_on); break;
+            case 8: paint_line(i, r, "SIDE PANELS", g_panels_on ? "ON" : "OFF", g_panels_on); break;
+            case 9: paint_line(i, r, "BULLET COLOR", k_bullet_name[g_bullet_c], g_bullet_c != 0); break;
+            case 10: paint_line(i, r, "HITBOX", k_hit_name[g_hitbox], g_hitbox != 0); break;
+            case 11: paint_line(i, r, "LOOP", g_loop_on ? "ON" : "OFF", g_loop_on); break;
+            case 12: paint_line(i, r, "SOUND CHANNELS", g_sndx ? "EXTRA" : "ORIGINAL", g_sndx); break;
+            case 13: paint_line(i, r, "FULLSCREEN", g_fullscreen ? "ON" : "OFF", g_fullscreen); break;
+            case 14: paint_line(i, r, "SCALING", g_scaling == 0 ? "SMOOTH" : g_scaling == 1 ? "SHARP" : g_scaling == 2 ? "INTEGER" : "AUTO", g_scaling != 3); break;
+            case 15: paint_line(i, r, "ASPECT", g_aspect43 ? "4X3" : "1X1", !g_aspect43); break;
+            case 16: paint_line(i, r, "COLOR FILTER", cfilter_name(g_cfilter), g_cfilter != CF_ORIGINAL); break;
+            case OPT_ATTRACT: paint_line(i, r, "ATTRACT MODE", g_attract_on ? "ON" : "OFF", !g_attract_on); break;
+            case OPT_ORIENT: paint_line(i, r, "ORIENTATION", k_orient[g_orient & 3], g_orient != 0); break;
+            case OPT_SNDTEST: paint_line(i, r, "SOUND TEST", NULL, 0); break;
+            case OPT_BACK: paint_line(i, r, "BACK", NULL, 0); break;
+            default:
+                if (v[i] >= OPT_CRT0 && v[i] < OPT_CRT0 + CRT_COUNT) {
+                    int on = (g_crt >> (v[i] - OPT_CRT0)) & 1;
+
+                    paint_line(i, r, crt_name(v[i] - OPT_CRT0), on ? "ON" : "OFF", on);
+                }
+                break;
+            }
+        }
     } else if (g_page == PAGE_CTRL) {
         paint_line(0, menu_row(4, 0), "JOYSTICK", joy_value(), joy_flag());
         paint_line(1, menu_row(4, 1), "DEFINE KEYS", NULL, 0);
@@ -1503,14 +1788,14 @@ static void host_menu_paint(void)
     }
 }
 
-static int env_on(const char *name)
+static __attribute__((unused)) int env_on(const char *name)
 {
     const char *v = getenv(name);
 
     return v && v[0] && strcmp(v, "0") != 0;
 }
 
-static int env_is(const char *name, const char *want)
+static __attribute__((unused)) int env_is(const char *name, const char *want)
 {
     const char *v = getenv(name);
 
@@ -1531,7 +1816,7 @@ static const char *state_name(RbGameState st)
 
 static void smoke_trace(const RbGame *g, const char *why)
 {
-    if (!env_on("RUDEBR_TRACE")) {
+    if (!0) {
         return;
     }
     if (g_vm && (g->state == RB_STATE_PLAY || g->state == RB_STATE_RANKING)) {
@@ -1584,7 +1869,7 @@ static void report_missing(const RbDisk *disk)
 
 static void watch_smoke(RbGame *g)
 {
-    const char *frames = getenv("RUDEBR_FRAMES");
+    const char *frames = ((char *)0);
 
     if (g_vm && g->state == RB_STATE_PLAY) {
         RbVmInfo info;
@@ -1599,7 +1884,7 @@ static void watch_smoke(RbGame *g)
             g_saw_move = 1;
             fprintf(stderr, "smoke: stage1 x=%d from %d frame=%u\n",
                     (int)info.ship_x, (int)g_ship_base_x, (unsigned)g->frame);
-            if (env_is("RUDEBR_STOP", "stage1")) {
+            if (0) {
                 g_smoke_stop = 1;
                 g->state = RB_STATE_QUIT;
             }
@@ -1609,7 +1894,7 @@ static void watch_smoke(RbGame *g)
             fprintf(stderr, "smoke: stage-clear c5=%u chunk=%u frame=%u\n",
                     (unsigned)vm_global_u8(g_vm, 0xC5), (unsigned)info.chunk,
                     (unsigned)g->frame);
-            if (env_is("RUDEBR_STOP", "clear")) {
+            if (0) {
                 g_smoke_stop = 1;
                 g->state = RB_STATE_QUIT;
             }
@@ -1619,13 +1904,13 @@ static void watch_smoke(RbGame *g)
             g_saw_over = 1;
             fprintf(stderr, "smoke: game-over frame=%u score=%u\n",
                     (unsigned)g->frame, (unsigned)info.score);
-            if (env_is("RUDEBR_STOP", "over")) {
+            if (0) {
                 g_smoke_stop = 1;
                 g->state = RB_STATE_QUIT;
             }
         }
     }
-    if (env_is("RUDEBR_STOP", "title") && g->frame >= 1 &&
+    if (0 && g->frame >= 1 &&
         g->state == RB_STATE_TITLE) {
         g_smoke_stop = 1;
         g->state = RB_STATE_QUIT;
@@ -1679,7 +1964,7 @@ static void begin_stage(RbGame *g, uint16_t stage, int fresh_ship)
 
 void game_init(RbGame *g, const RbDisk *disk)
 {
-    int scaffold = env_on("RUDEBR_SCAFFOLD");
+    int scaffold = 0;
     int have = disk && disk->ok;
 
     memset(g, 0, sizeof(*g));
@@ -1698,7 +1983,7 @@ void game_init(RbGame *g, const RbDisk *disk)
 
     if (!have) {
         if (scaffold) {
-            fprintf(stderr, "rudebreaker: scaffold mode (RUDEBR_SCAFFOLD)\n");
+            fprintf(stderr, "rudebreaker: scaffold mode (test hook)\n");
             g->state = RB_STATE_TITLE;
             return;
         }
@@ -1732,8 +2017,8 @@ void game_init(RbGame *g, const RbDisk *disk)
 
     vm_reset_boot(g_vm);
     rank_load(g);
-    if (getenv("RUDEBR_STAGE")) {
-        vm_reset_play(g_vm, (uint16_t)atoi(getenv("RUDEBR_STAGE")));
+    if (((char *)0)) {
+        vm_reset_play(g_vm, (uint16_t)atoi(((char *)0)));
     }
     {
         RbVmInfo info;
@@ -1759,7 +2044,11 @@ void game_init(RbGame *g, const RbDisk *disk)
     sys_audio_extra(g_sndx);
     sys_set_scaling(g_scaling);
     sys_set_aspect(g_aspect43);
+    sys_set_orientation(g_orient);
     panels_set_aspect(g_aspect43);
+    /* SHIP SPEED replaced DEFAULT SPEED: every game starts at MID (the
+     * in-game SPEED button still cycles LOW / MID / MAX). */
+    set_speed(1);
     if (g_fullscreen) {
         fullscreen_apply(1);
     }
@@ -1778,13 +2067,13 @@ void game_init(RbGame *g, const RbDisk *disk)
         rank_flush(g);
     }
     apply_host_options();
-    if (!getenv("RUDEBR_STAGE") && !env_on("RUDEBR_NOCARD")) {
+    if (!((char *)0) && !0) {
         /* The card shows the real logo, so decode it first. */
         title_prewarm();
         g_card = CARD_FRAMES;
     }
     g->state = RB_STATE_TITLE;
-    if (env_on("RUDEBR_TRACE") || getenv("RUDEBR_STOP")) {
+    if (0 || ((char *)0)) {
         fprintf(stderr, "smoke: title\n");
     }
     smoke_trace(g, "boot");
@@ -1832,16 +2121,16 @@ static void step_script(RbGame *g)
     RbInput in = g->input;
     RbVmInfo info;
 
-    /* RUDEBR_HOLD latches fire from frame 1. The title prompt looks for
+    /* test hook latches fire from frame 1. The title prompt looks for
      * a later edge, so drop fire for one frame every 30 while the boot
      * chunk is still up. Real keyboards already produce that edge. */
-    if (env_on("RUDEBR_HOLD")) {
+    if (0) {
         vm_info(g_vm, &info);
         if (info.chunk < 2 && (g->frame % 30u) == 0u) {
             in.buttons = (uint16_t)(in.buttons & (uint16_t)~RB_BTN_A);
         }
     }
-    if (env_on("RUDEBR_SUSTAIN")) {
+    if (0) {
         vm_sustain_ship(g_vm);
     }
     vm_set_input(g_vm, &in);
@@ -1880,8 +2169,8 @@ static void step_script(RbGame *g)
     }
 }
 
-/* RUDEBR_SCRIPT=120:DOWN,140:A,200-208:RIGHT
- * One frame, or a range, of extra buttons. Tokens match RUDEBR_HOLD
+/* test hook=120:DOWN,140:A,200-208:RIGHT
+ * One frame, or a range, of extra buttons. Tokens match test hook
  * and are joined with '+'. Headless menu shots use this. */
 static uint16_t script_token(const char *s, size_t n)
 {
@@ -1942,7 +2231,7 @@ static uint16_t script_token(const char *s, size_t n)
     return 0;
 }
 
-static uint16_t script_buttons_env(const char *env, uint32_t frame)
+static __attribute__((unused)) uint16_t script_buttons_env(const char *env, uint32_t frame)
 {
     const char *s = getenv(env);
     uint16_t bits = 0;
@@ -2068,6 +2357,30 @@ static int loop_mul(void)
     return g_loop > LOOP_MUL_MAX ? LOOP_MUL_MAX : g_loop;
 }
 
+/* Loop 2+: enemy bullet speed by rank inside the loop's interval. Each
+ * tenth of the way from the interval's floor to its ceiling adds 5 % per
+ * extra loop (loop 2: up to +50 %, loop 3: up to +100 %, ...), on top of
+ * the loop's own difficulty step. The VM's bullet speed bonus is one
+ * byte and is capped at LOOP_SHOT_MAX (+100 %) in total. */
+#define LOOP_SHOT_MAX 100u
+static unsigned loop_shot_step(double lo, double hi, double r)
+{
+    int st;
+
+    if (g_training || g_loop < 2 || hi <= lo) {
+        return 0;
+    }
+    st = (int)(10.0 * (r - lo) / (hi - lo));
+    return st < 0 ? 0u : st > 10 ? 10u : (unsigned)st;
+}
+
+static unsigned loop_shot_pct(unsigned base, unsigned step)
+{
+    unsigned v = base + 5u * step * (unsigned)(loop_mul() - 1);
+
+    return v > LOOP_SHOT_MAX ? LOOP_SHOT_MAX : v;
+}
+
 /* Rank -> difficulty progression (normal games only). The level in
  * effect, g_eff, starts on the chosen one; rank reaching that level's
  * cap moves it up one level with rank back at the new level's start,
@@ -2082,6 +2395,7 @@ static int g_eff = 2;
 /* 20 s at the 92/3 Hz logic rate: frames * 3 >= 20 * 92. */
 #define VH_PCT_FRAMES3 1840u
 static unsigned g_vh_pct, g_vh_t;
+static unsigned g_loop_step;     /* loop 2+ bullet speed step, 0..10 */
 
 static int eff_ceiling(void)
 {
@@ -2091,7 +2405,7 @@ static int eff_ceiling(void)
 
 static void vh_reset(const char *why, unsigned frame)
 {
-    if (g_vh_pct && env_on("RUDEBR_RANKLOG")) {
+    if (g_vh_pct && 0) {
         fprintf(stderr, "rank vh-reset f=%u %s +%u%% -> 0\n", frame, why, g_vh_pct);
     }
     g_vh_pct = 0;
@@ -2165,7 +2479,7 @@ static void pt_update(const RbGame *g, int died, uint16_t flags)
         g_pt_buttons = (uint16_t)(g_pt_buttons | g->input.pad_buttons);
     }
     if (g_pt_stage != (int)g->stage) {
-        if (getenv("RUDEBR_FOELOG")) {
+        if (((char *)0)) {
             uint32_t seen;
             uint32_t hit;
 
@@ -2207,7 +2521,7 @@ static int panels_active(const RbGame *g)
 {
     return g_vm && g_panels_on && g_live && g->state == RB_STATE_PLAY &&
            !menu_visible() && vm_gfx_active(g_vm) &&
-           (sys_window_wide() || getenv("RUDEBR_PANELSHOT"));
+           ((g_orient & 1) || sys_window_wide() || ((char *)0));
 }
 
 /* The panel logo and side art come from the game's own title screen.
@@ -2452,13 +2766,18 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
     d.loop = g_loop;
     d.loop_on = g_loop_on;
     d.level_pct = g_live && g_rank_on && !g_training && !g_rank_mode ? (int)g_vh_pct : 0;
-    if (getenv("RUDEBR_DBG_LVPCT")) {
+    if (((char *)0)) {
         /* Test hook: panel layout of the LEVEL extra. */
-        d.level_pct = atoi(getenv("RUDEBR_DBG_LVPCT"));
+        d.level_pct = atoi(((char *)0));
     }
     d.time_cs = g_pt_frames * 300u / 92u;
     d.buttons = g_pt_buttons;
     panels_render(wide, frame, &d);
+    if ((g_orient & 1) && sys_tate_pixels()) {
+        panels_render_tate(sys_tate_pixels(), wide, frame);
+        sys_set_wide(2);
+        return;
+    }
     sys_set_wide(1);
 }
 
@@ -2542,7 +2861,7 @@ static void adv_update(RbGame *g, uint16_t flags, int lives, const RbVmInfo *inf
     int d6 = vm_global_u8(g_vm, 0xD6);
     int d1 = vm_global_u8(g_vm, 0xD1);
     double gain = 0.0;
-    double lmul = 1.0 + 0.25 * (g_loop > 1 ? g_loop - 1 : 0);
+    double lmul = (double)loop_mul();
     unsigned c9, pct;
     int band;
 
@@ -2558,7 +2877,7 @@ static void adv_update(RbGame *g, uint16_t flags, int lives, const RbVmInfo *inf
 
             g_ar -= cut;
             g_ar_t = 0;
-            if (env_on("RUDEBR_RANKLOG")) {
+            if (0) {
                 fprintf(stderr, "arank death f=%u cut=%.1f now=%.1f\n", (unsigned)g->frame, cut, g_ar);
             }
         } else {
@@ -2596,7 +2915,7 @@ static void adv_update(RbGame *g, uint16_t flags, int lives, const RbVmInfo *inf
             if (g_run_deaths == 0) {
                 gain *= 1.10;      /* NO DEATH */
             }
-            if (gain >= 1.0 && env_on("RUDEBR_RANKLOG")) {
+            if (gain >= 1.0 && 0) {
                 fprintf(stderr, "arank event f=%u +%.1f d9 %d->%d sub %d/%d->%d/%d medals %d->%d\n",
                         (unsigned)g->frame, gain * lmul, g_ar_d9, d9, g_ar_d5, g_ar_d6, d5, d6,
                         g_ar_d1, d1);
@@ -2662,12 +2981,13 @@ static void adv_update(RbGame *g, uint16_t flags, int lives, const RbVmInfo *inf
     pct = g_ar > 850.0 ? (unsigned)((g_ar - 850.0) * 15.0 / 150.0 * lmul + 0.5) : 0u;
     if (pct > 30u) pct = 30u;
     g_vh_pct = pct;
-    vm_set_shot_pct(g_vm, pct);
+    g_loop_step = loop_shot_step(g_ar_floor, g_ar_ceil, g_ar);
+    vm_set_shot_pct(g_vm, loop_shot_pct(pct, g_loop_step));
     vm_set_return_fire(g_vm, g_ar >= 700.0);
     g_live_c9_now = (uint8_t)c9;
     vm_set_global_u8(g_vm, 0xC9, base_c9());
     vm_set_shot_c9(g_vm, g_live_c9_now != base_c9() ? g_live_c9_now : 0u);
-    if (env_on("RUDEBR_RANKLOG") && (g->frame % 60u) == 0u) {
+    if (0 && (g->frame % 60u) == 0u) {
         fprintf(stderr, "arank f=%u r=%.1f [%.0f,%.0f] band=%d c9=%u pct=%u rf=%d hits=%u lives=%d d9=%d score=%u\n",
                 (unsigned)g->frame, g_ar, g_ar_floor, g_ar_ceil, band, c9, pct,
                 g_ar >= 700.0, vm_shot_c9_hits(g_vm), lives, d9,
@@ -2688,10 +3008,10 @@ static void live_update(RbGame *g)
         return;
     }
     /* Smoke test: hold the debug ending flag (NEKOCO key 4). */
-    if (env_on("RUDEBR_ENDING")) {
+    if (0) {
         vm_set_global_u8(g_vm, 0xCC, 1);
     }
-    on = live_match() && !menu_visible();
+    on = live_match() && (!menu_visible() || g_pmenu);
     vm_info(g_vm, &info);
     lives = vm_global_u8(g_vm, 0xD2);
     if (vm_take_loop(g_vm)) {
@@ -2708,7 +3028,7 @@ static void live_update(RbGame *g)
             vh_reset("loop", (unsigned)g->frame);
             g_lv_flash = 61;
         }
-        if (env_on("RUDEBR_RANKLOG")) {
+        if (0) {
             fprintf(stderr, "loop %d f=%u base=%d c9=%u b2=%u mul=%d score=%u lives=%d d9=%u d5=%u d6=%u\n",
                     g_loop, (unsigned)g->frame, base_diff(),
                     (unsigned)vm_global_u8(g_vm, 0xC9), (unsigned)vm_global_u8(g_vm, 0xB2),
@@ -2721,9 +3041,9 @@ static void live_update(RbGame *g)
         if (info.score == 0u) {
             g_loop = 1;
         }
-        if (getenv("RUDEBR_DBG_DIFF")) {
+        if (((char *)0)) {
             /* Test hook: play as if this difficulty (0..4) was chosen. */
-            int n = atoi(getenv("RUDEBR_DBG_DIFF"));
+            int n = atoi(((char *)0));
             vm_set_global_u8(g_vm, 0xC9, k_c9[n < 0 ? 0 : n > 4 ? 4 : n]);
         }
         if (g_loop <= 1) {
@@ -2741,13 +3061,14 @@ static void live_update(RbGame *g)
             pt_reset();
             g_run_deaths = 0;
             /* A run from the start, without Training or stage select. */
-            g_run_ok = !g_training && !getenv("RUDEBR_STAGE") && g->stage <= 1;
+            g_run_ok = !g_training && !g_demo && !((char *)0) && g->stage <= 1;
         }
         g_live = 1;
         g_live_prev_score = info.score;
         g_live_prev_lives = lives;
         g_live_prev_btn = 0xFFFFu;
     } else if (!on && g_live) {
+        suicide_force(0);
         set_speed(g_live_menu_speed);
         vm_set_global_u8(g_vm, 0xC9, g_live_c9);
         if (g_loop > 1) {
@@ -2780,7 +3101,7 @@ static void live_update(RbGame *g)
         }
         g_last_clear = armed && cc != 0;
     }
-    if (g_run_ok && !g_onecc && g_last_clear && !env_on("RUDEBR_ENDING")) {
+    if (g_run_ok && !g_onecc && g_last_clear && !0) {
         g_onecc = 1;
         save_cfg(g);
     }
@@ -2823,10 +3144,13 @@ static void live_update(RbGame *g)
         g_run_deaths++;
     }
     pt_update(g, (flags & 0x8000u) == 0u && lives < g_live_prev_lives, flags);
-    if (getenv("RUDEBR_DBG_ARANK") && g->frame == 30u) {
+    if (((char *)0) && g->frame == 30u) {
         /* Test hook (debug env): preset the ADVANCED rank. */
-        g_ar = atof(getenv("RUDEBR_DBG_ARANK"));
+        g_ar = atof(((char *)0));
     }
+    suicide_force(g_live && !g_live_parked && g_loop > 1 && !g_training && !g_demo);
+    boss_hp_update(g);
+    flags = flag_word();
     if (adv_active()) {
         adv_update(g, flags, lives, &info);
     } else {
@@ -2861,7 +3185,7 @@ static void live_update(RbGame *g)
                     g_rank -= cut;
                     g_rk_subcut += cut;
                     vh_reset("hit", (unsigned)g->frame);
-                    if (env_on("RUDEBR_RANKLOG")) {
+                    if (0) {
                         fprintf(stderr, "rank sub-lost f=%u cut=%u.%02u now=%u.%02u\n",
                                 (unsigned)g->frame, (unsigned)(cut >> 8),
                                 (unsigned)((cut & 0xFFu) * 100u / 256u),
@@ -2874,7 +3198,7 @@ static void live_update(RbGame *g)
                     if (g_rank > cap) {
                         g_rank = cap;
                     }
-                    if (env_on("RUDEBR_RANKLOG")) {
+                    if (0) {
                         fprintf(stderr, "rank sub-back f=%u add=%u.%02u now=%u.%02u\n",
                                 (unsigned)g->frame, (unsigned)(g_rk_subcut >> 8),
                                 (unsigned)((g_rk_subcut & 0xFFu) * 100u / 256u),
@@ -2891,7 +3215,7 @@ static void live_update(RbGame *g)
         }
         if (lives < g_live_prev_lives && prog) {
             /* A death: back to the chosen level and its starting rank. */
-            if (env_on("RUDEBR_RANKLOG")) {
+            if (0) {
                 fprintf(stderr, "rank reset f=%u level %d -> %d rank %u -> %u\n",
                         (unsigned)g->frame, g_eff, base_diff(), (unsigned)(g_rank >> 8),
                         (unsigned)(rank_start(base_diff()) >> 8));
@@ -2910,9 +3234,9 @@ static void live_update(RbGame *g)
             if (info.score != g_live_prev_score) {
                 rise += RANK_PER_SCORE;
             }
-            if (getenv("RUDEBR_DBG_RANKX")) {
+            if (((char *)0)) {
                 /* Test hook: a faster rank climb, to force step-ups. */
-                rise *= (uint32_t)atoi(getenv("RUDEBR_DBG_RANKX"));
+                rise *= (uint32_t)atoi(((char *)0));
             }
             rise *= (uint32_t)loop_mul();
             g_rank_acc += rise * (uint32_t)rank_mul_pct();
@@ -2923,7 +3247,7 @@ static void live_update(RbGame *g)
             g_rank = cap;
         }
         if (prog && g_rank >= cap && g_eff < eff_ceiling()) {
-            if (env_on("RUDEBR_RANKLOG")) {
+            if (0) {
                 fprintf(stderr, "rank step-up f=%u level %d -> %d rank %u -> %u\n",
                         (unsigned)g->frame, g_eff, g_eff + 1, (unsigned)(g_rank >> 8),
                         (unsigned)(rank_start(g_eff + 1) >> 8));
@@ -2935,7 +3259,7 @@ static void live_update(RbGame *g)
             {
                 int rc = vm_bonus_1000(g_vm, -24);
 
-                if (env_on("RUDEBR_RANKLOG")) {
+                if (0) {
                     fprintf(stderr, "rank step-bonus f=%u 1000 %s\n", (unsigned)g->frame,
                             rc == 0 ? "ok" : "skipped");
                 }
@@ -2958,7 +3282,7 @@ static void live_update(RbGame *g)
                 if (g_vh_pct > vmax) {
                     g_vh_pct = vmax;
                 }
-                if (env_on("RUDEBR_RANKLOG")) {
+                if (0) {
                     fprintf(stderr, "rank vh-up f=%u +%u%%\n", (unsigned)g->frame, g_vh_pct);
                 }
             }
@@ -2971,7 +3295,9 @@ static void live_update(RbGame *g)
         g_live_prev_score = info.score;
         g_live_prev_lives = lives;
     }
-    vm_set_shot_pct(g_vm, g_vh_pct);
+    g_loop_step = loop_shot_step((double)rank_start(g_eff), (double)rank_cap(g_eff),
+                                 (double)g_rank);
+    vm_set_shot_pct(g_vm, loop_shot_pct(g_vh_pct, g_loop_step));
     g_live_c9_now = base_c9();
     if (g_rank_on && !g_training) {
         unsigned add = (unsigned)((g_rank >> 8) * RANK_SPAN + 0x4Fu) / 0x9Fu *
@@ -2990,11 +3316,11 @@ static void live_update(RbGame *g)
     vm_set_shot_c9(g_vm, g_live_c9_now != base_c9() ? g_live_c9_now : 0u);
     }
     gfx_set_hud_speed(g_live_speed + 1);
-    if (getenv("RUDEBR_DBG_DE") && g->frame == 900u) {
+    if (((char *)0) && g->frame == 900u) {
         /* Test hook: preset the power-up item count once. */
-        vm_set_global_u8(g_vm, 0xDE, (uint8_t)atoi(getenv("RUDEBR_DBG_DE")));
+        vm_set_global_u8(g_vm, 0xDE, (uint8_t)atoi(((char *)0)));
     }
-    if (env_on("RUDEBR_RANKLOG") && (g->frame % 60u) == 0u) {
+    if (0 && (g->frame % 60u) == 0u) {
         fprintf(stderr, "wpn f=%u d5=%u d6=%u d9=%u de=%u w=%c\n", (unsigned)g->frame,
                 (unsigned)vm_global_u8(g_vm, 0xD5), (unsigned)vm_global_u8(g_vm, 0xD6),
                 (unsigned)vm_global_u8(g_vm, 0xD9), (unsigned)vm_global_u8(g_vm, 0xDE),
@@ -3008,6 +3334,242 @@ static void live_update(RbGame *g)
     }
 }
 
+/* ---- attract mode ------------------------------------------------------
+ *
+ * The original's own attract is the boot script: Compile logo, the
+ * intro flight, the title with PUSH TRIGGER and the ranking, in a loop.
+ * That loop is kept. After ATTRACT_IDLE frames of it with no input the
+ * host plays DEMO_FRAMES (about 30 s) of one stage from its recording,
+ * then goes back to the boot script (Compile logo), so the rotation is
+ * logo/title, stage 1, logo/title, stage 2, ... stage 5, and again.
+ * Any key or button ends a demo and returns to the title sequence. */
+/* The demo starts as the boot loop's ranking page goes away (where the
+ * Compile logo would come next). ATTRACT_IDLE is only a fallback in case
+ * the ranking is never seen: about two full passes with no input. */
+#define ATTRACT_IDLE 3600u
+#define RANK_MIN     45u     /* ranking up at least this many frames */
+
+static int user_active(const RbGame *g)
+{
+    return ((g->input.buttons | g->input.pad_buttons) & 0x0FFFu) != 0 || sys_any_press();
+}
+
+static void demo_text(int on)
+{
+    /* Arcade joke: free play, but the cabinet still asks. 1 Hz blink. */
+    vm_text_write(g_vm, 29, 12,
+                  (on && ((g_demo_f / 15u) & 1u) == 0u) ? "INSERT COIN" : "",
+                  11, 0xC1u);
+}
+
+static void demo_start(RbGame *g)
+{
+    g_demo = g_demo_next;
+    g_demo_next = g_demo_next % 5 + 1;
+    g_demo_f = 0;
+    g_demo_lives = -1;
+    g_demo_hi = g->hiscore;
+    /* The recordings were made with these host rules; the menu values
+     * come back from the cfg globals kept here when the demo ends. */
+    g_demo_keep[0] = g_training;
+    g_demo_keep[1] = g_rank_on;
+    g_demo_keep[2] = g_rank_mode;
+    g_demo_t0 = sys_ticks_ms();
+    g_rank_seen = 0;
+    /* No music in the demo, the game's effects only. */
+    sys_mute_music(1);
+    g_training = 0;
+    g_rank_on = 1;
+    g_rank_mode = 0;
+    apply_host_options();
+    begin_stage(g, (uint16_t)g_demo, 1);
+    g->score = 0;
+    g->state = RB_STATE_PLAY;
+}
+
+static void demo_end(RbGame *g)
+{
+    demo_text(0);
+    sys_mute_music(0);
+    g_training = g_demo_keep[0];
+    g_rank_on = g_demo_keep[1];
+    g_rank_mode = g_demo_keep[2];
+    /* Same as RETURN on the title menu, without the save: the boot
+     * script restarts and RBRANK.DAT (scores and settings) is read back. */
+    vm_reset_boot(g_vm);
+    rank_load(g);
+    apply_host_options();
+    g->hiscore = g_demo_hi;
+    g->score = 0;
+    g->state = RB_STATE_TITLE;
+    g_idle = 0;
+    g_demo = 0;
+}
+
+/* Pause. The match's own pause is the PC-98 Escape bit (flags 0x8000),
+ * from the keyboard PAUSE key. Pad START (SDL controller mapping, or
+ * button 7 / 9 / a learned one on plain joysticks) presses the same
+ * key. While the bit is set the host shows RESUME / CONFIG / EXIT. */
+static void pause_exit(RbGame *g)
+{
+    suicide_force(0);
+    g_pmenu = 0;
+    g_menu_latched = 0;
+    set_flag_word((uint16_t)(flag_word() & 0x7FFFu));
+    sys_stop_music();
+    rank_flush(g);
+    vm_reset_boot(g_vm);
+    rank_load(g);
+    apply_host_options();
+    g->score = 0;
+    g->state = RB_STATE_TITLE;
+    g_idle = 0;
+    g_rank_seen = 0;
+}
+
+static void pause_input(RbGame *g)
+{
+    uint16_t kb = g->input.buttons;
+    uint16_t pd = g->input.pad_buttons;
+    uint16_t pad_edge = (uint16_t)(pd & (uint16_t)~g_pad_prev);
+    int paused;
+
+    g_pad_prev = pd;
+    if (!g_vm || g_demo || g->state != RB_STATE_PLAY) {
+        g_pmenu = 0;
+        return;
+    }
+    paused = (flag_word() & 0x8000u) != 0;
+    if (!paused) {
+        if (g_pmenu) {
+            g_pmenu = 0;
+            g_menu_latched = 0;
+        }
+        if ((pad_edge & RB_BTN_START) && !menu_visible()) {
+            /* Pad START = the PAUSE key for this frame's edge. */
+            g->input.buttons = (uint16_t)(g->input.buttons | RB_BTN_START);
+        }
+        return;
+    }
+    if (g_pmenu == 0) {
+        vm_text_save(g_vm, g_ptext);
+        g_pmenu = 1;
+        g_pcur = 0;
+        g_pprev = 0xFFFFu;
+    }
+    if (g_pmenu == 1) {
+        uint16_t now = (uint16_t)((kb | pd) & (RB_BTN_UP | RB_BTN_DOWN));
+        uint16_t edge;
+
+        if ((kb & (RB_BTN_A | RB_BTN_B)) || (pd & RB_BTN_A)) {
+            now = (uint16_t)(now | 0x1000u);
+        }
+        if ((kb & RB_BTN_START) || (pd & (RB_BTN_START | RB_BTN_B))) {
+            now = (uint16_t)(now | 0x2000u);
+        }
+        edge = (uint16_t)(now & (uint16_t)~g_pprev);
+        g_pprev = now;
+        if (edge & RB_BTN_UP) {
+            g_pcur = (g_pcur + 2) % 3;
+            menu_beep();
+        } else if (edge & RB_BTN_DOWN) {
+            g_pcur = (g_pcur + 1) % 3;
+            menu_beep();
+        } else if ((edge & 0x2000u) || ((edge & 0x1000u) && g_pcur == 0)) {
+            /* RESUME (also START / Esc / pad B). */
+            vm_text_restore(g_vm, g_ptext);
+            set_flag_word((uint16_t)(flag_word() & 0x7FFFu));
+            g_pmenu = 0;
+            menu_ok();
+        } else if ((edge & 0x1000u) && g_pcur == 1) {
+            g_pmenu = 2;
+            g_menu_latched = 1;
+            g_page = PAGE_ROOT;
+            g_cursor = 0;
+            g_capture = 0;
+            g_menu_prev = 0xFFFFu;
+            menu_ok();
+        } else if ((edge & 0x1000u) && g_pcur == 2) {
+            menu_ok();
+            pause_exit(g);
+        }
+    }
+    if (g->state == RB_STATE_PLAY && g_pmenu != 2) {
+        /* Nothing reaches the paused match but the quit bit. */
+        g->input.buttons = (uint16_t)(g->input.buttons & RB_BTN_QUIT);
+        g->input.pad_buttons = 0;
+    }
+}
+
+/* Ship movement scale, applied on top of what the game moved this frame
+ * (sub-pixel remainders kept in 1/100 px). SHIP SPEED AGGRESSIVE: LOW
+ * x0.85, MID x1, MAX x1.15. ASPECT 1:1: vertical x1.2, so the ship
+ * crosses the square-pixel playfield in the same time as on 4:3. Never
+ * in the attract demo, which replays the original moves. */
+#define SHIP_MIN_X 96
+#define SHIP_MAX_X 544
+#define SHIP_MIN_Y 56
+#define SHIP_MAX_Y 360
+static int g_sp_have, g_sp_px, g_sp_py, g_sp_ax, g_sp_ay;
+
+static int sp_axis(int d, int held, int mul, int *acc)
+{
+    int e;
+
+    if (d == 0 || !held || mul == 100 || d > 16 || d < -16) {
+        *acc = 0;
+        return 0;
+    }
+    *acc += d * (mul - 100);
+    e = *acc / 100;
+    *acc -= e * 100;
+    return e;
+}
+
+static void ship_move_adjust(RbGame *g)
+{
+    int x, y, ex, ey, mx = 100, my = 100;
+    uint16_t btn;
+
+    if (!g_vm || !g_live || g_live_parked || g_demo ||
+        (flag_word() & 0x8000u) || !vm_ship_pos(g_vm, &x, &y)) {
+        g_sp_have = 0;
+        g_sp_ax = g_sp_ay = 0;
+        return;
+    }
+    if (!g_sp_have) {
+        g_sp_have = 1;
+        g_sp_px = x;
+        g_sp_py = y;
+        return;
+    }
+    if (g_ship_aggr) {
+        int sp = speed_index();
+
+        mx = my = sp == 0 ? 85 : sp == 2 ? 115 : 100;
+    }
+    if (!g_aspect43) {
+        my = my * 120 / 100;
+    }
+    btn = g->input.buttons;
+    if (flag_word() & 0x0400u) {
+        btn = (uint16_t)(btn | g->input.pad_buttons);
+    }
+    ex = sp_axis(x - g_sp_px, (btn & (RB_BTN_LEFT | RB_BTN_RIGHT)) != 0, mx, &g_sp_ax);
+    ey = sp_axis(y - g_sp_py, (btn & (RB_BTN_UP | RB_BTN_DOWN)) != 0, my, &g_sp_ay);
+    /* Stay inside the box the game itself keeps the ship in. */
+    if (x + ex < SHIP_MIN_X) ex = SHIP_MIN_X - x;
+    if (x + ex > SHIP_MAX_X) ex = SHIP_MAX_X - x;
+    if (y + ey < SHIP_MIN_Y) ey = SHIP_MIN_Y - y;
+    if (y + ey > SHIP_MAX_Y) ey = SHIP_MAX_Y - y;
+    /* Never turn a move around (a slowdown only shortens it). */
+    if ((x - g_sp_px > 0 && x - g_sp_px + ex < 0) || (x - g_sp_px < 0 && x - g_sp_px + ex > 0)) ex = 0;
+    if ((y - g_sp_py > 0 && y - g_sp_py + ey < 0) || (y - g_sp_py < 0 && y - g_sp_py + ey > 0)) ey = 0;
+    vm_ship_shift(g_vm, ex, ey);
+    g_sp_px = x + ex;
+    g_sp_py = y + ey;
+}
+
 void game_update(RbGame *g)
 {
     uint16_t user_buttons;
@@ -3016,18 +3578,32 @@ void game_update(RbGame *g)
     g->frame++;
     if (sys_take_fullscreen_key()) {
         /* F11 any time: same as the FULLSCREEN option, and saved. */
+        if (g_demo) {
+            demo_end(g);
+        }
         fullscreen_apply(!g_fullscreen);
         save_cfg(g);
     }
     g->input.buttons = (uint16_t)(g->input.buttons |
-                                  script_buttons_env("RUDEBR_SCRIPT", g->frame));
+                                  0);
     /* Same syntax, pressed on the gamepad side (pad_buttons). */
     g->input.pad_buttons = (uint16_t)(g->input.pad_buttons |
-                                      script_buttons_env("RUDEBR_PADSCRIPT",
-                                                         g->frame));
+                                      0);
+    if (g_demo && (user_active(g) || g_demo_f >= DEMO_FRAMES ||
+                   sys_ticks_ms() - g_demo_t0 >= DEMO_MS ||
+                   g->state != RB_STATE_PLAY)) {
+        /* The key that ends the demo is held into the boot script,
+         * which takes it as the skip past the Compile logo. */
+        demo_end(g);
+    }
     user_buttons = g->input.buttons;
     gfx_set_clock(g->frame);
+    pause_input(g);
     host_menu_input(g, &swallowed);
+    if (g_demo) {
+        g->input.buttons = demo_buttons(g_demo, g_demo_f);
+        g->input.pad_buttons = 0;
+    }
     apply_host_options();
 
     switch (g->state) {
@@ -3037,14 +3613,14 @@ void game_update(RbGame *g)
 
     case RB_STATE_TITLE:
         if (g_vm && g_card > 0) {
-            if (g_card == CARD_FRAMES && getenv("RUDEBR_AUDIOLOG")) {
+            if (g_card == CARD_FRAMES && ((char *)0)) {
                 fprintf(stderr, "card: start at frame %u\n", (unsigned)g->frame);
             }
             /* Anniversary card; any key or button skips it straight to
              * the Compile logo. The VM waits until the button is let go,
              * so the same press does not also skip the Compile logo.
-             * RUDEBR_SKIPCARD=N fakes an unbound key press at frame N. */
-            const char *sk = getenv("RUDEBR_SKIPCARD");
+             * test hook=N fakes an unbound key press at frame N. */
+            const char *sk = ((char *)0);
             int any = sys_any_press();
 
             if (sk && (unsigned)atoi(sk) == (unsigned)g->frame) {
@@ -3052,7 +3628,7 @@ void game_update(RbGame *g)
             }
             if (any || btn_pressed(g, 0x0FFFu) ||
                 ((g->input.pad_buttons & ~g->input_prev.pad_buttons) & 0x0FFFu)) {
-                if (getenv("RUDEBR_AUDIOLOG")) {
+                if (((char *)0)) {
                     fprintf(stderr, "card: skipped at frame %u\n",
                             (unsigned)g->frame);
                 }
@@ -3070,10 +3646,29 @@ void game_update(RbGame *g)
         } else if (g_vm) {
             static int card_logged;
 
-            if (!card_logged && getenv("RUDEBR_AUDIOLOG")) {
+            if (!card_logged && ((char *)0)) {
                 card_logged = 1;
                 fprintf(stderr, "card: done at frame %u, Compile logo starts\n",
                         (unsigned)g->frame);
+            }
+            int busy = user_active(g) || menu_visible() || script_settings();
+
+            g_idle = busy ? 0 : g_idle + 1;
+            if (busy) {
+                g_rank_seen = 0;
+            } else if (gfx_rank_frame()) {
+                g_rank_seen++;
+            } else if (g_rank_seen >= RANK_MIN && g_attract_on) {
+                /* Ranking just ended: demo instead of the Compile logo. */
+                demo_start(g);
+                break;
+            } else {
+                g_rank_seen = 0;
+            }
+            if (g_attract_on && g_idle >= ATTRACT_IDLE) {
+                /* The demo's first scripted frame is the next update. */
+                demo_start(g);
+                break;
             }
             step_script(g);
         } else if (btn_pressed(g, RB_BTN_START) || btn_pressed(g, RB_BTN_A)) {
@@ -3087,10 +3682,23 @@ void game_update(RbGame *g)
     case RB_STATE_PLAY:
         if (g_vm) {
             /* One forward scan. A child spawned this frame runs only if
-             * its slot is still ahead of the parent. RUDEBR_SUSTAIN is a
+             * its slot is still ahead of the parent. test hook is a
              * smoke-test switch; the frame loop itself never calls it.
              * Lives and the escape bit stay inside the script. */
             step_script(g);
+            if (g_demo) {
+                int lives = vm_global_u8(g_vm, 0xD2);
+
+                if (g_demo_f == 60u) {
+                    g_demo_lives = lives;
+                }
+                /* A demo that loses a life ends there. */
+                if (g_demo_lives >= 0 && lives < g_demo_lives) {
+                    g_demo_f = DEMO_FRAMES;
+                }
+                demo_text(1);
+                g_demo_f++;
+            }
         } else {
             /* Scaffold path used only when SGM1 failed to load. */
             player_update(&g->player, &g->input);
@@ -3158,6 +3766,7 @@ void game_update(RbGame *g)
     g->input.buttons = user_buttons;
     host_menu_commit(g, swallowed);
     live_update(g);
+    ship_move_adjust(g);
     rank_sync(g);
     if (g_vm) {
         if (vm_frame_shown(g_vm)) {
@@ -3171,7 +3780,7 @@ void game_update(RbGame *g)
     }
     g->input_prev = g->input;
     watch_smoke(g);
-    if (env_on("RUDEBR_TRACE") && (g->frame == 1 || (g->frame % 120u) == 0)) {
+    if (0 && (g->frame == 1 || (g->frame % 120u) == 0)) {
         smoke_trace(g, "frame");
     }
 }
@@ -3289,6 +3898,49 @@ void game_render(const RbGame *g)
     default:
         break;
     }
+    if (g_vm && g_live && g->state == RB_STATE_PLAY && vm_gfx_active(g_vm) &&
+        sys_frame_pixels()) {
+        /* COLOR FILTER and CRT: gameplay only (attract demo included),
+         * playfield only. Title, menus, ranking and the side panels stay
+         * as drawn; the panels copy the playfield after this. While the
+         * match is paused the last filtered frame stays under the pause
+         * menu and its config pages, which are drawn over it. */
+        static uint32_t snap_raw[RB_NATIVE_W * RB_NATIVE_H];
+        static uint32_t snap_f[RB_NATIVE_W * RB_NATIVE_H];
+        static int snap_ok;
+        uint32_t *px = sys_frame_pixels();
+        size_t i, n = (size_t)RB_NATIVE_W * RB_NATIVE_H;
+
+        if (!g_pmenu && !menu_visible()) {
+            memcpy(snap_raw, px, n * 4u);
+            cfilter_set_layer(gfx_layer_mask());
+            cfilter_apply(px, RB_NATIVE_W, RB_NATIVE_H, g_cfilter);
+            crt_apply(px, RB_NATIVE_W, 80, 0, 480, RB_NATIVE_H, g_crt, g->frame);
+            memcpy(snap_f, px, n * 4u);
+            snap_ok = 1;
+        } else if (g_pmenu && snap_ok) {
+            for (i = 0; i < n; i++) {
+                uint32_t r0 = snap_raw[i], p = px[i];
+                uint32_t dr = (((r0 >> 24) & 0xFFu) * 46u) >> 8;
+                uint32_t dg = (((r0 >> 16) & 0xFFu) * 46u) >> 8;
+                uint32_t db = ((((r0 >> 8) & 0xFFu) * 46u) >> 8) + 6u;
+                uint32_t dim0 = (dr << 24) | (dg << 16) | (db << 8) | 0xFFu;
+
+                if (p == r0) {
+                    px[i] = snap_f[i];
+                } else if (p == dim0) {
+                    /* Under the menu box: the filtered frame, dimmed
+                     * less than the box so the game shows through. */
+                    uint32_t f = snap_f[i];
+                    uint32_t fr = (((f >> 24) & 0xFFu) * 80u) >> 8;
+                    uint32_t fg = (((f >> 16) & 0xFFu) * 80u) >> 8;
+                    uint32_t fb = ((((f >> 8) & 0xFFu) * 80u) >> 8) + 6u;
+
+                    px[i] = (fr << 24) | (fg << 16) | (fb << 8) | 0xFFu;
+                }
+            }
+        }
+    }
     gfx_set_hud_inset(panels_active(g));
     if (panels_active(g)) {
         panels_draw(g, sys_frame_pixels());
@@ -3299,10 +3951,10 @@ void game_render(const RbGame *g)
         }
     }
     {
-        /* Headless check of the wide layout: RUDEBR_PANELSHOT=path dumps
-         * the 1920x1080 frame at RUDEBR_SHOT_FRAME. */
-        const char *ps = getenv("RUDEBR_PANELSHOT");
-        const char *at = getenv("RUDEBR_SHOT_FRAME");
+        /* Headless check of the wide layout: test hook=path dumps
+         * the 1920x1080 frame at test hook. */
+        const char *ps = ((char *)0);
+        const char *at = ((char *)0);
         static int psaved;
 
         if (ps && ps[0] && !psaved && at && g->frame >= strtoul(at, NULL, 10) &&
@@ -3310,24 +3962,28 @@ void game_render(const RbGame *g)
             FILE *fp = fopen(ps, "wb");
 
             if (fp) {
-                fwrite(sys_wide_pixels(), 4, (size_t)RB_WIDE_W * RB_WIDE_H, fp);
+                if ((g_orient & 1)) {
+                    fwrite(sys_tate_pixels(), 4, (size_t)RB_TATE_FW * RB_TATE_FH, fp);
+                } else {
+                    fwrite(sys_wide_pixels(), 4, (size_t)RB_WIDE_W * RB_WIDE_H, fp);
+                }
                 fclose(fp);
                 fprintf(stderr, "panelshot %s\n", ps);
                 psaved = 1;
             }
         }
     }
-    if (menu_visible() || getenv("RUDEBR_SHOT_FRAME")) {
-        const char *shot = getenv("RUDEBR_SHOT");
+    if (menu_visible() || ((char *)0)) {
+        const char *shot = ((char *)0);
         static int saved;
         uint32_t *px;
         FILE *fp;
 
-        /* RUDEBR_SHOT_FRAME waits until that logic frame. The settings
+        /* test hook waits until that logic frame. The settings
          * page draws its lower rows only after the cursor has visited
          * them, so a headless shot can land on the finished list. */
         if (shot && shot[0] && !saved) {
-            const char *at = getenv("RUDEBR_SHOT_FRAME");
+            const char *at = ((char *)0);
             unsigned long want = at && at[0] ? strtoul(at, NULL, 10) : 0;
 
             if (want > 0 && g->frame < want) {

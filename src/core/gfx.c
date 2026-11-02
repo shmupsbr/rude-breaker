@@ -17,6 +17,12 @@
 #define SCROLL_TAIL 32
 
 static int g_title_frame;
+static int g_rank_frame;
+/* Sprite layer of the last stage frame: 1 where the shown index is not
+ * the background page's (gfx_draw_entities paints sprites over a copy
+ * of bg). Output filters read it; the art itself is not changed. */
+static uint8_t g_layer[RB_GFX_W * RB_GFX_H];
+static int g_layer_ok;
 /* Enemy bullet colour: 0 original, then PINK, LILAC, HOT PINK. Row 0
  * replaces index 11 (the bright red), row 1 index 8 (the dark red). */
 static int g_bullet;
@@ -705,7 +711,7 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
     memset(gfx->tint, 0, sizeof gfx->tint);
     gfx->paint_bg = 0;
     if (g_bulletlog < 0) {
-        g_bulletlog = getenv("RUDEBR_BULLETLOG") ? atoi(getenv("RUDEBR_BULLETLOG")) : 0;
+        g_bulletlog = ((char *)0) ? atoi(((char *)0)) : 0;
     }
     if (g_bulletlog) {
         bulletlog_frame();
@@ -788,8 +794,8 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
                                    scroll76, scroll_speed, blank_sides);
             }
         }
-        if (g_bulletlog && getenv("RUDEBR_ENTDUMP") &&
-            g_bl_frames >= (unsigned)atoi(getenv("RUDEBR_ENTDUMP"))) {
+        if (g_bulletlog && ((char *)0) &&
+            g_bl_frames >= (unsigned)atoi(((char *)0))) {
             fprintf(stderr, "ent f=%u i=%d type=%04X seg=%u pat=%u x=%d y=%d w=%d h=%d tint=%d\n", g_bl_frames, i,
                     type, seg, pat, x, y, wcells, hcells, gfx->tint_cur);
         }
@@ -1112,7 +1118,7 @@ void gfx_palette_step(RbGfx *gfx, uint8_t shift)
     for (idx = 0; idx < 16; idx++) {
         for (c = 0; c < 3; c++) {
             gfx->pal[idx][c] = (int16_t)(gfx->pal[idx][c] +
-                                        (gfx->dpal[idx][c] << shift));
+                                        (int)((unsigned)(int)gfx->dpal[idx][c] << shift));
         }
     }
 }
@@ -2993,6 +2999,16 @@ static void dim_panel(uint32_t *rgba, int w)
     }
 }
 
+const uint8_t *gfx_layer_mask(void)
+{
+    return g_layer_ok ? g_layer : NULL;
+}
+
+int gfx_rank_frame(void)
+{
+    return g_rank_frame;
+}
+
 int gfx_title_frame(void)
 {
     return g_title_frame;
@@ -3119,10 +3135,13 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
              * so the blanking stays off there. Text is painted after. */
             if (blank_sides && (x < 80 || x >= 560)) {
                 rgba[(size_t)y * (size_t)w + (size_t)x] = 0x000000FFu;
+                g_layer[(size_t)y * RB_GFX_W + (size_t)x] = 0;
                 continue;
             }
             at = (size_t)src * RB_GFX_W + (size_t)x;
             idx = gfx->pix[at];
+            g_layer[(size_t)y * RB_GFX_W + (size_t)x] =
+                (uint8_t)(!tail && idx != gfx->bg[at]);
             if (tail && idx == gfx->bg[at]) {
                 idx = gfx->hold[at];
             }
@@ -3155,6 +3174,7 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
         }
     }
     }
+    g_layer_ok = blank_sides;
     if (blank_sides) {
         int row;
 
@@ -3169,6 +3189,12 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
     /* The ranking table is text drawn over the same title art; it keeps
      * the original look, so the 30th AE credits are left off there. */
     g_title_frame = 0;
+    {
+        uint32_t ink_r = 0;
+
+        /* Ranking page: the title art at rest with the table over it. */
+        g_rank_frame = text_besides_push(text) && brand_at(rgba, w, 0, &ink_r);
+    }
     if (!text_besides_push(text)) {
         title_brand(gfx, rgba, w, 0);
     }

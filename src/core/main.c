@@ -3,7 +3,8 @@
  *
  * Data comes from loose files (SGM1.DAT, FPLAY.COM, SONG.DAT) or from a
  * PC-98 disk image. Search order: the command argument, RUDEBR_ASSETS,
- * the executable's directory, <exe>/RUDEBR, then assets/raw/RUDEBR.
+ * the executable's directory, <exe>/RUDEBR, <exe>/../Resources (macOS
+ * .app bundle), then assets/raw/RUDEBR.
  * An image may be a raw .hdm, .fdi, .d88, .hdi, .nhd, or a zip of one.
  */
 #include "diskimg.h"
@@ -101,6 +102,14 @@ static void choose_source(int argc, char **argv, char *out, size_t n)
             snprintf(out, n, "%s", nested);
             return;
         }
+#if defined(__APPLE__)
+        /* Inside a .app bundle the data sits in Contents/Resources. */
+        snprintf(nested, sizeof(nested), "%s/../Resources", exe);
+        if (dir_usable(nested)) {
+            snprintf(out, n, "%s", nested);
+            return;
+        }
+#endif
     }
     if (loose_sgm1("assets/raw/RUDEBR")) {
         snprintf(out, n, "%s", "assets/raw/RUDEBR");
@@ -180,7 +189,7 @@ int main(int argc, char **argv)
     if (game_data_missing()) {
         rc = 1;
     }
-    stop = getenv("RUDEBR_STOP");
+    stop = ((char *)0);
     if (stop && stop[0] && !game_data_missing() && !game_smoke_done()) {
         fprintf(stderr, "smoke: stop condition not reached (%s)\n", stop);
         rc = 3;
