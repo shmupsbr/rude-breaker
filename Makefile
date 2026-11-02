@@ -27,7 +27,10 @@ CORE_SRCS := \
 	src/core/inflate.c \
 	src/core/vm.c \
 	src/core/gfx.c \
-	src/core/pace.c
+	src/core/pace.c \
+	src/core/cfilter.c \
+	src/core/crt.c \
+	src/core/demo.c
 
 ifeq ($(PLATFORM),sdl2)
   HAL_SRCS := \
