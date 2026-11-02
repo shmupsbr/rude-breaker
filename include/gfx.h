@@ -53,6 +53,10 @@ void gfx_set_bullet_color(int preset);
 int gfx_sprite_rgba(const RbGfx *gfx, uint8_t slot, int index, uint32_t out[256]);
 /* 1 when the last present showed the settled title screen. */
 int gfx_title_frame(void);
+/* 1 while the boot loop's ranking table is on the title art. */
+int gfx_rank_frame(void);
+/* RB_GFX_W x RB_GFX_H, 1 = sprite pixel, of the last stage frame (else NULL). */
+const uint8_t *gfx_layer_mask(void);
 /* Host intro card before the Compile logo, t frames from its start
  * (t < 0: black). Particles gather into the logo, it holds, the two
  * credit lines slide up from below, it holds, then fades. */

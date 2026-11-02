@@ -66,4 +66,10 @@ const uint32_t *panels_title_pixels(void);
 void panels_set_aspect(int a43);
 void panels_render(uint32_t *out, const uint32_t *game640, const RbPanelData *d);
 
+/* TATE: recompose the 1920x1080 frame panels_render just drew (and the
+ * game frame) into a 1080x1920 portrait frame. */
+#define RB_TATE_W 1080
+#define RB_TATE_H 1920
+void panels_render_tate(uint32_t *out, const uint32_t *wide, const uint32_t *game640);
+
 #endif

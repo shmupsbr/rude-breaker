@@ -80,6 +80,9 @@ void vm_rank_export(const RbVm *vm, uint8_t *out);
 int  vm_take_rank_commit(RbVm *vm);
 /* Highest live entity hit-point word. */
 uint16_t vm_peak_hp(const RbVm *vm);
+int vm_music(const RbVm *vm);
+int vm_scale_hp(RbVm *vm, unsigned pct_boss, unsigned pct_final, int final_stage,
+                uint16_t info[4]);
 void vm_set_input(RbVm *vm, const RbInput *in);
 /* Host options. Training skips player-body damage and blocks the
  * ranking insert. The grade is the modern palette at present time.
@@ -114,6 +117,9 @@ void vm_text_settle_row(RbVm *vm, int row);
 /* Raw text VRAM cell (code word) and attribute byte. */
 uint16_t vm_text_cell(const RbVm *vm, int col, int row);
 uint8_t vm_text_attr(const RbVm *vm, int col, int row);
+#define RB_VM_TEXT_SIZE 0x4000u
+void vm_text_save(const RbVm *vm, uint8_t *out);
+void vm_text_restore(RbVm *vm, const uint8_t *in);
 /* 1 when two JIS characters sit next to each other in the text layer. */
 int  vm_text_has_jis(const RbVm *vm, uint16_t a, uint16_t b);
 void vm_frame(RbVm *vm);
@@ -138,6 +144,8 @@ int  vm_collect_sprites(const RbVm *vm, RbVmSprite *out, int max);
 int  vm_quit_requested(const RbVm *vm);
 /* Ship collision box in screen pixels; 0 when no ship is shown. */
 int  vm_ship_box(const RbVm *vm, int *x0, int *y0, int *x1, int *y1);
+int  vm_ship_pos(const RbVm *vm, int *x, int *y);
+void vm_ship_shift(RbVm *vm, int dx, int dy);
 int  vm_boot_requested(const RbVm *vm);
 /* Title menu RETURN: the original restarts from the boot script. */
 int  vm_restart_requested(const RbVm *vm);

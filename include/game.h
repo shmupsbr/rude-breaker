@@ -46,7 +46,7 @@ unsigned game_vsyncs(const RbGame *g);
 int  game_wants_quit(const RbGame *g);
 /* 1 when required disk files were missing and scaffold mode is off. */
 int  game_data_missing(void);
-/* 1 after RUDEBR_STOP's event was reached. Players never set that variable. */
+/* 1 after test hook's event was reached. Players never set that variable. */
 int  game_smoke_done(void);
 
 #ifdef __cplusplus

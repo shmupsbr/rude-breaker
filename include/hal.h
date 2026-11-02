@@ -226,7 +226,7 @@ void sys_present(void);
 void sys_pace_startup(void);
 void sys_pace_shutdown(void);
 /* Sleep until at least one logic frame is due. Returns how many frames
- * to run now, from 1 to RB_PACE_CATCH_MAX. RUDEBR_FAST returns 1 and
+ * to run now, from 1 to RB_PACE_CATCH_MAX. test hook returns 1 and
  * does not sleep. */
 int sys_pace_frame_start(void);
 /* Next periods use wait count N as N/2 * 3/92 s. skip_wait is the
@@ -242,7 +242,7 @@ int sys_pace_fast(void);
  * mode on a verified-vsync 60/120/240 Hz display, otherwise 1. */
 int sys_pace_present_count(void);
 /* Player choice, saved to rudebreaker.ini beside the program.
- * RUDEBR_PACING=smooth|exact overrides it. */
+ * test hook=smooth|exact overrides it. */
 int sys_pace_pref_exact(void);
 void sys_pace_set_pref_exact(int exact);
 const char *sys_pace_mode_name(void);
@@ -258,6 +258,13 @@ uint32_t *sys_frame_pixels(void);
 int       sys_window_wide(void);
 uint32_t *sys_wide_pixels(void);
 void      sys_set_wide(int on);
+/* TATE: mode 2 of sys_set_wide presents the 1080x1920 vertical frame
+ * from sys_tate_pixels() (ORIENTATION 90 / 270). */
+#define RB_TATE_FW 1080
+#define RB_TATE_FH 1920
+uint32_t *sys_tate_pixels(void);
+/* ORIENTATION: the whole output turned o * 90 degrees clockwise (0..3). */
+void      sys_set_orientation(int o);
 /* Borderless fullscreen on the current display (aspect kept by the
  * renderer's logical size), mouse cursor hidden while it is on. */
 void sys_set_fullscreen(int on);
@@ -314,6 +321,7 @@ int  sys_joy_present(void);
 int  sys_play_sound(uint16_t id, uint8_t vol);
 int  sys_play_music(uint16_t track_id);
 void sys_stop_music(void);
+void sys_mute_music(int on);
 /* Open FPLAY.COM and SONG.DAT from a RUDEBR directory. 0 on success. */
 int  sys_audio_bind(const char *dir);
 /* Same player, from buffers already read out of a directory or a disk image. */
