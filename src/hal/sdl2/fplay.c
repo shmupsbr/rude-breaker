@@ -65,6 +65,7 @@ static int bgm_track = -1;
  * Music (AH=0) keeps running. */
 static int extend_guard;
 
+#ifndef FPLAY_SECOND
 static void note_log_open(void)
 {
     const char *path = getenv("RUDEBR_NOTELOG");
@@ -74,6 +75,7 @@ static void note_log_open(void)
     }
     note_log = fopen(path, "w");
 }
+#endif
 
 /* FM key-on is register 0x28 with any operator bit set. SSG has no key
  * gate, so a nonzero volume write (0x08-0x0A) is the note edge. */
@@ -1675,7 +1677,9 @@ int fplay_bind_mem(const uint8_t *com, size_t com_n,
     opna_reset();
     sample_pos = 0;
     bgm_track = -1;
+#ifndef FPLAY_SECOND
     note_log_open();
+#endif
     enter_near(0x0BD0);
     ready = (unknown_op == 0 && mem[0x280] != 0) ? 1 : 0;
     timer_left = timer_samples();

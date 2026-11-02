@@ -17,4 +17,12 @@ void fplay_command(uint8_t ah, uint8_t al);
 /* Interleaved stereo S16. Silent when the driver is not bound. */
 void fplay_render(int16_t *stereo, int frames);
 
+/* Second instance (fplay_sfx.c) for SOUND CHANNELS: EXTRA. */
+int fplay2_bind(const char *dir);
+int fplay2_bind_mem(const uint8_t *com, size_t com_n,
+                    const uint8_t *song, size_t song_n,
+                    const char *data_dir);
+void fplay2_command(uint8_t ah, uint8_t al);
+void fplay2_render(int16_t *stereo, int frames);
+
 #endif

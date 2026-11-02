@@ -145,6 +145,23 @@ int sys_audio_bands(float *out, int n)
     return n;
 }
 
+/* SOUND CHANNELS: 0 ORIGINAL (effects share the music's chip, as on
+ * the PC-98), 1 EXTRA (effects go to a second chip, music is never cut). */
+static int g_sfx_extra;
+static int g_sfx2_ok;
+static int16_t g_mixbuf[2 * 4096];
+
+void sys_audio_extra(int on)
+{
+    if (g_dev) {
+        SDL_LockAudioDevice(g_dev);
+    }
+    g_sfx_extra = on && g_sfx2_ok;
+    if (g_dev) {
+        SDL_UnlockAudioDevice(g_dev);
+    }
+}
+
 static void audio_cb(void *userdata, Uint8 *stream, int len)
 {
     int frames = len / (int)(2 * sizeof(int16_t));
@@ -154,6 +171,24 @@ static void audio_cb(void *userdata, Uint8 *stream, int len)
         return;
     }
     fplay_render((int16_t *)stream, frames);
+    if (g_sfx2_ok) {
+        /* The effects chip always runs so a switch mid-song is clean. */
+        int16_t *o = (int16_t *)stream;
+        int done = 0;
+
+        while (done < frames) {
+            int n = frames - done > 4096 ? 4096 : frames - done;
+            int k;
+
+            fplay2_render(g_mixbuf, n);
+            for (k = 0; k < 2 * n; k++) {
+                int v = o[2 * done + k] + g_mixbuf[k];
+
+                o[2 * done + k] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v);
+            }
+            done += n;
+        }
+    }
     note_level((const int16_t *)stream, frames);
     vu_feed((const int16_t *)stream, frames);
 }
@@ -197,6 +232,8 @@ int sys_audio_bind(const char *dir)
 {
     int rc = fplay_bind(dir);
 
+    g_sfx2_ok = rc == 0 && fplay2_bind(dir) == 0;
+
     open_device();
     return rc;
 }
@@ -206,6 +243,8 @@ int sys_audio_bind_mem(const uint8_t *com, size_t com_n,
                        const char *data_dir)
 {
     int rc = fplay_bind_mem(com, com_n, song, song_n, data_dir);
+
+    g_sfx2_ok = rc == 0 && fplay2_bind_mem(com, com_n, song, song_n, data_dir) == 0;
 
     open_device();
     return rc;
@@ -235,7 +274,11 @@ int sys_play_sound(uint16_t id, uint8_t vol)
     if (g_dev) {
         SDL_LockAudioDevice(g_dev);
     }
-    fplay_command(1, (uint8_t)id);
+    if (g_sfx_extra) {
+        fplay2_command(1, (uint8_t)id);
+    } else {
+        fplay_command(1, (uint8_t)id);
+    }
     if (g_dev) {
         SDL_UnlockAudioDevice(g_dev);
     }

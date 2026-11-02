@@ -24,6 +24,7 @@ SDL_Renderer *g_rb_renderer = NULL;
 SDL_Texture  *g_rb_texture  = NULL;
 /* 1920x1080 frame for the wide layout with side panels. */
 static SDL_Texture *g_wide_texture;
+static void scaling_apply(void);
 static uint32_t    *g_wide_pixels;
 static int          g_wide_on;
 uint32_t     *g_rb_pixels   = NULL; /* RGBA8888, native resolution */
@@ -105,7 +106,7 @@ int sys_init(const char *title)
             fprintf(stderr, "renderer: %s\n", info.name);
         }
     }
-    SDL_RenderSetLogicalSize(g_rb_renderer, RB_NATIVE_W, RB_NATIVE_H);
+    /* No logical size: sys_present places the image itself. */
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
 
     g_rb_texture = SDL_CreateTexture(g_rb_renderer,
@@ -117,6 +118,7 @@ int sys_init(const char *title)
         return -1;
     }
 
+    scaling_apply();
     g_rb_pixels = (uint32_t *)calloc((size_t)RB_NATIVE_W * (size_t)RB_NATIVE_H,
                                      sizeof(uint32_t));
     if (!g_rb_pixels) {
@@ -200,6 +202,111 @@ uint32_t *sys_wide_pixels(void)
     return g_wide_pixels;
 }
 
+/* SCALING: 0 SMOOTH (bilinear), 1 SHARP (nearest, fills the screen
+ * with the aspect kept), 2 INTEGER (nearest, whole multiples only). */
+/* 3 AUTO (default): INTEGER when it covers >= 80% of the output height,
+ * else SHARP. */
+static int g_scaling = 3;
+
+static void scaling_apply(void)
+{
+    SDL_ScaleMode m = g_scaling == 0 ? SDL_ScaleModeLinear : SDL_ScaleModeNearest;
+
+    if (!g_rb_renderer) {
+        return;
+    }
+    if (g_rb_texture) {
+        SDL_SetTextureScaleMode(g_rb_texture, m);
+    }
+    if (g_wide_texture) {
+        SDL_SetTextureScaleMode(g_wide_texture, m);
+    }
+}
+
+/* ASPECT: 1 = 4:3 (PC-98 monitor, pixels 5:6), 0 = 1:1 (square). */
+static int g_aspect43 = 1;
+
+void sys_set_aspect(int a43)
+{
+    g_aspect43 = a43 ? 1 : 0;
+}
+
+/* Largest rect of aw:ah inside ow x oh, centred. */
+static SDL_Rect fit_rect(int ow, int oh, int aw, int ah)
+{
+    SDL_Rect r;
+
+    if ((long)ow * ah > (long)oh * aw) {
+        r.h = oh;
+        r.w = (int)(((long)oh * aw * 2 + ah) / (2L * ah));
+    } else {
+        r.w = ow;
+        r.h = (int)(((long)ow * ah * 2 + aw) / (2L * aw));
+    }
+    r.x = (ow - r.w) / 2;
+    r.y = (oh - r.h) / 2;
+    return r;
+}
+
+/* Where the picture goes on the output (real pixels). The 16:9 panel
+ * canvas always fills its largest 16:9 rect (it is already composed at
+ * 1920x1080 with the chosen ASPECT). The plain 640x400 image:
+ *   1:1  SMOOTH/SHARP fill 16:10; INTEGER whole multiples n x n.
+ *   4:3  SMOOTH/SHARP fill 4:3; INTEGER height 400n (n = H/400),
+ *        width round(400n*4/3).
+ * INTEGER with no room for n >= 1 acts as SHARP. */
+static SDL_Rect dest_rect(int wide)
+{
+    int ow = 0, oh = 0;
+    SDL_Rect r = {0, 0, 0, 0};
+
+    SDL_GetRendererOutputSize(g_rb_renderer, &ow, &oh);
+    if (ow <= 0 || oh <= 0) {
+        return r;
+    }
+    if (wide) {
+        return fit_rect(ow, oh, 16, 9);
+    }
+    if (g_scaling >= 2) {
+        int n;
+
+        if (g_aspect43) {
+            n = oh / RB_NATIVE_H;
+            while (n >= 1 && (RB_NATIVE_H * n * 4 + 1) / 3 > ow) {
+                n--;
+            }
+            if (n >= 1) {
+                r.h = RB_NATIVE_H * n;
+                r.w = (RB_NATIVE_H * n * 8 + 3) / 6;  /* round(400n*4/3) */
+            }
+        } else {
+            n = oh / RB_NATIVE_H < ow / RB_NATIVE_W ? oh / RB_NATIVE_H : ow / RB_NATIVE_W;
+            if (n >= 1) {
+                r.h = RB_NATIVE_H * n;
+                r.w = RB_NATIVE_W * n;
+            }
+        }
+        /* AUTO: 1080p (800/1080 = 74%) and 720p fill instead; 1440p
+         * (1200/1440 = 83%), 4K (2000/2160 = 93%) and 800x480 (83%)
+         * stay integer. */
+        if (n >= 1 && g_scaling == 3 && (long)r.h * 100 < (long)oh * 80) {
+            n = 0;
+        }
+        if (n >= 1) {
+            r.x = (ow - r.w) / 2;
+            r.y = (oh - r.h) / 2;
+            return r;
+        }
+    }
+    return g_aspect43 ? fit_rect(ow, oh, 4, 3) : fit_rect(ow, oh, 16, 10);
+}
+
+void sys_set_scaling(int mode)
+{
+    g_scaling = mode < 0 ? 0 : mode > 3 ? 3 : mode;
+    scaling_apply();
+}
+
 void sys_set_wide(int on)
 {
     on = on && g_rb_renderer && sys_wide_pixels();
@@ -211,14 +318,8 @@ void sys_set_wide(int on)
             on = 0;
         }
     }
-    if (on != g_wide_on && g_rb_renderer) {
-        if (on) {
-            SDL_RenderSetLogicalSize(g_rb_renderer, RB_WIDE_W, RB_WIDE_H);
-        } else {
-            SDL_RenderSetLogicalSize(g_rb_renderer, RB_NATIVE_W, RB_NATIVE_H);
-        }
-    }
     g_wide_on = on;
+    scaling_apply();
 }
 
 void sys_clear(uint8_t r, uint8_t g, uint8_t b)
@@ -1019,6 +1120,7 @@ void sys_idle(unsigned ms)
 
 void sys_present(void)
 {
+    scaling_apply();
     if (!g_rb_texture || !g_rb_renderer || !g_rb_pixels) {
         return;
     }
@@ -1027,11 +1129,15 @@ void sys_present(void)
     if (g_wide_on && g_wide_texture) {
         SDL_UpdateTexture(g_wide_texture, NULL, g_wide_pixels,
                           RB_WIDE_W * (int)sizeof(uint32_t));
-        SDL_RenderCopy(g_rb_renderer, g_wide_texture, NULL, NULL);
+        SDL_Rect d = dest_rect(1);
+
+        SDL_RenderCopy(g_rb_renderer, g_wide_texture, NULL, &d);
     } else {
         SDL_UpdateTexture(g_rb_texture, NULL, g_rb_pixels,
                           RB_NATIVE_W * (int)sizeof(uint32_t));
-        SDL_RenderCopy(g_rb_renderer, g_rb_texture, NULL, NULL);
+        SDL_Rect d = dest_rect(0);
+
+        SDL_RenderCopy(g_rb_renderer, g_rb_texture, NULL, &d);
     }
     SDL_RenderPresent(g_rb_renderer);
     pace_note_present();
