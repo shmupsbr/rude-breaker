@@ -154,6 +154,7 @@ static int          g_suspend;
 static int          g_suspend_closed;
 static int          g_page;
 static int          g_cursor;
+static int          g_confirm;   /* RESTORE DEFAULTS asked once */
 static int          g_capture;
 static int          g_handoff;
 static int          g_bgm_no;
@@ -326,7 +327,9 @@ static void load_cfg(const RbGame *g)
             g_ship_aggr = 1;
         } else if (strncmp(line, "ship_speed=standard", 19) == 0) {
             g_ship_aggr = 0;
-        } else if (strncmp(line, "aspect=1:1", 10) == 0) {
+        } else if (strncmp(line, "aspect=8:5", 10) == 0 ||
+                   strncmp(line, "aspect=1:1", 10) == 0) {
+            /* 8:5 (16:10, square pixels); 1:1 is the older name. */
             g_aspect43 = 0;
         } else if (strncmp(line, "aspect=4:3", 10) == 0) {
             g_aspect43 = 1;
@@ -600,7 +603,7 @@ static void save_cfg(const RbGame *g)
     fprintf(fp, "ship_speed=%s\n", g_ship_aggr ? "aggressive" : "standard");
     fprintf(fp, "scaling=%s\naspect=%s\n",
             g_scaling == 0 ? "smooth" : g_scaling == 1 ? "sharp" : g_scaling == 2 ? "integer" : "auto",
-            g_aspect43 ? "4:3" : "1:1");
+            g_aspect43 ? "4:3" : "8:5");
     fprintf(fp, "orientation=%d\n", g_orient * 90);
     {
         int k;
@@ -1061,7 +1064,7 @@ static int page_count(void)
     case PAGE_CTRL:  return 3;
     case PAGE_KEYS:  return 11;
     case PAGE_SOUND: return 7;
-    default:         return g_pmenu ? 5 : 8;
+    default:         return g_pmenu ? 5 : 9;
     }
 }
 
@@ -1087,6 +1090,7 @@ static void enter_page(int page)
     g_page = page;
     g_cursor = 0;
     g_capture = 0;
+    g_confirm = 0;
 }
 
 static void handoff(int e0)
@@ -1177,7 +1181,7 @@ static void change_value(RbGame *g, int dir)
             sys_set_scaling(g_scaling);
             changed = 1;
         } else if (opt == 15) {
-            /* Host only: 4:3 (PC-98 monitor) or 1:1 square pixels. */
+            /* Host only: 4:3 screen (PC-98 monitor) or 8:5 (640x400, square pixels). */
             g_aspect43 = !g_aspect43;
             sys_set_aspect(g_aspect43);
             panels_set_aspect(g_aspect43);
@@ -1286,6 +1290,51 @@ static void pause_back_to_list(void)
     vm_text_restore(g_vm, g_ptext);
 }
 
+/* RESTORE DEFAULTS (CONFIG): every option back to what a new install
+ * has. High scores, the ranking and passwords are not touched; the
+ * joystick ON/OFF stays as the connected pad needs it. */
+static void restore_defaults(RbGame *g)
+{
+    g_modern = 1;
+    g_training = 0;
+    g_rank_on = 1;
+    g_rank_mode = 1;
+    g_panels_on = 1;
+    g_orient = 0;
+    g_bullet_c = 1;
+    g_loop_on = 1;
+    g_sndx = 1;
+    g_mchip = 0;
+    g_schip = 0;
+    g_custom = 0;
+    g_scaling = 3;
+    g_aspect43 = 1;
+    g_ship_aggr = 1;
+    g_cfilter = CF_ORIGINAL;
+    g_crt = 0;
+    g_hitbox = 0;
+    g_attract_on = 1;
+    sys_bind_restore();
+    sys_pace_set_pref_exact(0);
+    if (g_vm) {
+        set_diff(2);
+        set_flag_word((uint16_t)((flag_word() & (uint16_t)~0x0008u) | 0x0080u));
+        set_speed(1);
+    }
+    gfx_set_bullet_color(g_bullet_c);
+    hit_fix();
+    sys_audio_extra(g_sndx);
+    sys_audio_chips(g_mchip, g_schip);
+    sys_set_scaling(g_scaling);
+    sys_set_aspect(g_aspect43);
+    sys_set_orientation(g_orient);
+    panels_set_aspect(g_aspect43);
+    fullscreen_apply(0);
+    apply_host_options();
+    save_cfg(g);
+    rank_flush(g);
+}
+
 static void activate_row(RbGame *g)
 {
     if (g_page == PAGE_ROOT && g_pmenu && g_cursor >= 4) {
@@ -1308,6 +1357,14 @@ static void activate_row(RbGame *g)
             handoff(3);
         } else if (g_cursor == 6) {
             handoff(4);
+        } else if (g_cursor == 7) {
+            /* RESTORE DEFAULTS: the first press asks, the second does it. */
+            if (!g_confirm) {
+                g_confirm = 1;
+            } else {
+                g_confirm = 0;
+                restore_defaults(g);
+            }
         } else {
             handoff(2);
         }
@@ -1536,6 +1593,9 @@ static void host_menu_input(RbGame *g, uint16_t *swallowed)
         back = (edge & 0x2000u) != 0;
     }
     n = page_count();
+    if (up || down || back) {
+        g_confirm = 0;
+    }
     if (up) {
         g_cursor--;
         if (g_cursor < 0) {
@@ -1759,8 +1819,9 @@ static void host_menu_paint(void)
     char num[8];
     char track[24];
     const char *title = "CONFIG";
-    static const char *root_name[8] = {
-        "GAMEPLAY", "GRAPHICS", "SOUND", "ALTERNATE VERSIONS", "CONTROLS", "RANKING", "PASSWORD", "BACK"
+    static const char *root_name[9] = {
+        "GAMEPLAY", "GRAPHICS", "SOUND", "ALTERNATE VERSIONS", "CONTROLS", "RANKING", "PASSWORD",
+        "RESTORE DEFAULTS", "BACK"
     };
     static const char *key_name[11] = {
         "UP", "DOWN", "LEFT", "RIGHT", "FIRE", "MODE", "SHIFT", "PAUSE",
@@ -1815,8 +1876,9 @@ static void host_menu_paint(void)
             paint_line(i, menu_row(4, i), proot[i], NULL, 0);
         }
     } else if (g_page == PAGE_ROOT) {
-        for (i = 0; i < 8; i++) {
-            paint_line(i, menu_row(4, i), root_name[i], NULL, 0);
+        for (i = 0; i < 9; i++) {
+            paint_line(i, menu_row(4, i), root_name[i],
+                       i == 7 && g_confirm ? "PRESS AGAIN" : NULL, i == 7 && g_confirm);
         }
     } else if (opt_page()) {
         int nv;
@@ -1842,7 +1904,7 @@ static void host_menu_paint(void)
             case 12: paint_line(i, r, "SOUND CHANNELS", g_sndx ? "EXTRA" : "ORIGINAL", g_sndx); break;
             case 13: paint_line(i, r, "FULLSCREEN", g_fullscreen ? "ON" : "OFF", g_fullscreen); break;
             case 14: paint_line(i, r, "SCALING", g_scaling == 0 ? "SMOOTH" : g_scaling == 1 ? "SHARP" : g_scaling == 2 ? "INTEGER" : "AUTO", g_scaling != 3); break;
-            case 15: paint_line(i, r, "ASPECT", g_aspect43 ? "4X3" : "1X1", !g_aspect43); break;
+            case 15: paint_line(i, r, "ASPECT", g_aspect43 ? "4:3" : "8:5", !g_aspect43); break;
             case 16: paint_line(i, r, "COLOR FILTER", cfilter_name(g_cfilter), g_cfilter != CF_ORIGINAL); break;
             case OPT_PU0: case OPT_PU0 + 1: case OPT_PU0 + 2: case OPT_PU0 + 3:
             case OPT_PU0 + 4: case OPT_PU0 + 5: case OPT_PU0 + 6: case OPT_PU0 + 7: case OPT_PU0 + 8:

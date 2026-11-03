@@ -1551,8 +1551,8 @@ static void pad_check(uint32_t *out)
     }
 }
 
-/* ASPECT: 1 = 4:3 (the 480 visible game columns fill FIELD_W x PH,
- * pixels 5:6 like a PC-98 monitor), 0 = 1:1 (square: 2.25 x 2.25,
+/* ASPECT: 1 = 4:3 screen (the 480 visible game columns fill FIELD_W x PH,
+ * pixels 5:6 like a PC-98 monitor), 0 = 8:5 (square pixels: 2.25 x 2.25,
  * FIELD_W x 900, centred with black above and below). */
 static int g_panels_43 = 1;
 

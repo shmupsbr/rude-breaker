@@ -1647,6 +1647,68 @@ static void paint_en(const RbGfx *gfx, uint32_t *rgba, int w, int x, int y,
             x += 16;
             continue;
         }
+        if (ch == ':') {
+            /* The game font has no colon: two square dots, as thick as
+             * the side strokes of its '8', spaced to its height. */
+            id = 0x7629u - 0x7600u;
+            if (gfx->glyph_on[id]) {
+                int r0 = -1;
+                int r1 = -1;
+                int c0 = 16;
+                int c1 = -1;
+                int t = 0;
+                int r;
+                int c;
+
+                for (r = 0; r < 16; r++) {
+                    unsigned line = ((unsigned)gfx->glyph[id][r * 2] << 8) | gfx->glyph[id][r * 2 + 1];
+
+                    for (c = 0; c < 16; c++) {
+                        if (line & (0x8000u >> c)) {
+                            if (r0 < 0) r0 = r;
+                            r1 = r;
+                            if (c < c0) c0 = c;
+                            if (c > c1) c1 = c;
+                        }
+                    }
+                }
+                if (r0 >= 0) {
+                    int rs = r0 + (r1 - r0 + 1) / 4;
+                    unsigned mid = ((unsigned)gfx->glyph[id][rs * 2] << 8) |
+                                   gfx->glyph[id][rs * 2 + 1];
+
+                    for (c = c0; c <= c1 && (mid & (0x8000u >> c)); c++) {
+                        t++;
+                    }
+                    if (t < 1 || t > 4) t = 2;
+                    {
+                        int h = r1 - r0 + 1;
+                        int cx = (c0 + c1 + 1) / 2 - t / 2;
+                        int ya = r0 + h / 4 - t / 2 + 1;
+                        int yb = r1 - h / 4 - t / 2;
+                        int dy;
+                        int dx;
+
+                        for (dy = 0; dy < t; dy++) {
+                            for (dx = 0; dx < t; dx++) {
+                                int px = x + cx + dx;
+                                int pa = y + ya + dy;
+                                int pb = y + yb + dy;
+
+                                if ((unsigned)px < (unsigned)w && (unsigned)pa < (unsigned)RB_GFX_H) {
+                                    rgba[(size_t)pa * (size_t)w + (size_t)px] = rgb;
+                                }
+                                if ((unsigned)px < (unsigned)w && (unsigned)pb < (unsigned)RB_GFX_H) {
+                                    rgba[(size_t)pb * (size_t)w + (size_t)px] = rgb;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            x += 16;
+            continue;
+        }
         if (ch >= '0' && ch <= '9') {
             code = (uint16_t)(0x7621u + (unsigned)(ch - '0'));
         } else if (ch >= 'A' && ch <= 'Z') {
