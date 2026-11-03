@@ -292,7 +292,7 @@ demo segue o trajeto de um jogador de verdade; é uma gravação de
 comandos nossa, não dado do jogo.
 
 O CONFIG tem estas páginas: GAMEPLAY, GRAPHICS, SOUND, ALTERNATE VERSIONS, CONTROLS,
-RANKING, PASSWORD e BACK. As opções mantêm os nomes antigos no
+RANKING, PASSWORD, RESTORE DEFAULTS e BACK. As opções mantêm os nomes antigos no
 rudebreaker.cfg, então saves de versões anteriores carregam sem mudança.
 
 GAMEPLAY
@@ -375,7 +375,7 @@ GRAPHICS
                    1440p, 4K e 800x480.
                    INTEGER: cada linha do jogo vira o mesmo número
                    inteiro de linhas da tela, com bordas pretas em
-                   volta. Com ASPECT 1:1 os pixels são quadrados e
+                   volta. Com ASPECT 8:5 os pixels são quadrados e
                    todos do mesmo tamanho. Com ASPECT 4:3 a altura é
                    um múltiplo inteiro (2x = 800 linhas, 3x = 1200) e
                    a largura é ajustada pra fechar o formato 4:3.
@@ -384,17 +384,22 @@ GRAPHICS
                    de tela maiores). SMOOTH: ocupa do mesmo jeito, com
                    filtro suave (bilinear). Se a janela for pequena
                    demais para o INTEGER, ele funciona como SHARP. Com
-                   as SIDE PANELS a imagem 16:9 sempre ocupa a tela.
+                   as SIDE PANELS a imagem 16:9 (com os painéis) ocupa
+                   a tela; com INTEGER (ou AUTO escolhendo INTEGER) a
+                   área de jogo dentro dela é desenhada num múltiplo
+                   inteiro das linhas, centralizada com preto em volta.
                    Salvo no rudebreaker.cfg.
 
-  ASPECT           4:3 (padrão): a imagem 640x400 aparece no formato
+  ASPECT           Formato da imagem inteira na tela.
+                   4:3 (padrão): a imagem 640x400 aparece no formato
                    de um monitor PC-98, com cada pixel 1,2 vez mais
                    alto que largo (5:6), como a arte foi desenhada pra
                    ser vista. Numa tela 1080p fica 1440x1080 com
-                   SHARP. 1:1: pixels quadrados; o jogo fica um pouco
-                   mais achatado que no original. Com as SIDE PANELS a
-                   área de jogo segue a mesma escolha (1:1 deixa
-                   faixas pretas em cima e embaixo). Com 1:1 o
+                   SHARP. 8:5: a imagem 640x400 como ela é (16:10,
+                   pixels quadrados); o jogo fica um pouco mais
+                   achatado que no original. Com as SIDE PANELS a
+                   área de jogo segue a mesma escolha (8:5 deixa
+                   faixas pretas em cima e embaixo). Com 8:5 o
                    movimento vertical da nave fica 1,2 vez mais
                    rápido, pra ela atravessar a área de jogo mais
                    achatada no mesmo tempo que no 4:3 (o demo mantém
@@ -460,7 +465,7 @@ GRAPHICS
                    lado é o multiplicador atual de subida do rank.
                    A área de jogo segue o ASPECT: 4:3 (padrão) mostra
                    no formato de um monitor PC-98 (pixels 1,2 vez mais
-                   altos que largos); 1:1 usa pixels quadrados.
+                   altos que largos); 8:5 usa pixels quadrados.
                    HIT COUNT mostra os inimigos da fase que você
                    destruiu / o número fixo de inimigos da fase (369,
                    315, 128, 205 e 46 nas fases 1 a 5: os inimigos
@@ -653,6 +658,12 @@ SOUND TEST (aberto pelo SOUND)
 RANKING            Abre a tabela de recordes original.
 
 PASSWORD           Abre a tela de senha original.
+
+RESTORE DEFAULTS   Volta todas as opções do CONFIG ao padrão de uma
+                   instalação nova (teclas incluídas). Aperte Fire uma
+                   vez: aparece PRESS AGAIN; aperte Fire de novo para
+                   confirmar (mudar de linha cancela). Recordes, ranking
+                   e senhas são mantidos; JOYSTICK fica como está.
 
 BACK               Volta ao título.
 

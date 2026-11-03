@@ -286,7 +286,7 @@ no ranking entry, no settings. The demo ship's movement follows a
 real player's path; it is our own input recording, not game data.
 
 CONFIG has these pages: GAMEPLAY, GRAPHICS, SOUND, ALTERNATE VERSIONS, CONTROLS, RANKING,
-PASSWORD and BACK. Settings keep their old names in rudebreaker.cfg,
+PASSWORD, RESTORE DEFAULTS and BACK. Settings keep their old names in rudebreaker.cfg,
 so saves from earlier builds load unchanged.
 
 GAMEPLAY
@@ -365,7 +365,7 @@ GRAPHICS
                    800x480.
                    INTEGER: every game line becomes the same whole
                    number of screen lines, with black borders around.
-                   With ASPECT 1:1 the pixels are square and all the
+                   With ASPECT 8:5 the pixels are square and all the
                    same size. With ASPECT 4:3 the height is a whole
                    multiple (2x = 800 lines, 3x = 1200) and the width
                    is set to close the 4:3 shape.
@@ -374,17 +374,22 @@ GRAPHICS
                    come out one screen pixel bigger). SMOOTH: fills
                    the same way with soft (bilinear) filtering. If the
                    window is too small for INTEGER, it acts as SHARP.
-                   With SIDE PANELS shown the 16:9 picture always
-                   fills the screen. Saved in rudebreaker.cfg.
+                   With SIDE PANELS shown the 16:9 picture (panels
+                   included) fills the screen; with INTEGER (or AUTO
+                   choosing it) the playfield inside it is drawn at a
+                   whole multiple of its lines, centred in its area
+                   with black around it. Saved in rudebreaker.cfg.
 
-  ASPECT           4:3 (default): the 640x400 picture is shown with
+  ASPECT           Shape of the whole picture on screen.
+                   4:3 (default): the 640x400 picture is shown with
                    the shape of a PC-98 monitor, each pixel 1.2 times
                    taller than wide (5:6), as the art was drawn to be
                    seen. On a 1080p screen that is 1440x1080 with
-                   SHARP. 1:1: square pixels; the picture looks a
-                   little flatter than on the original. With SIDE
-                   PANELS the playfield follows the same choice (1:1
-                   leaves black bars above and below it). With 1:1 the
+                   SHARP. 8:5: the 640x400 picture as it is (16:10,
+                   square pixels); it looks a little flatter than on
+                   the original. With SIDE PANELS the playfield follows
+                   the same choice (8:5 leaves black bars above and
+                   below it). With 8:5 the
                    ship's vertical movement is 1.2 times faster, so it
                    crosses the flatter playfield in the same time as
                    on 4:3 (the attract demo keeps the original moves).
@@ -447,7 +452,7 @@ GRAPHICS
                    to it is the current rank rise multiplier.
                    The playfield follows ASPECT: 4:3 (default) shows it
                    with the shape of a PC-98 monitor (pixels 1.2 times
-                   taller than wide); 1:1 uses square pixels.
+                   taller than wide); 8:5 uses square pixels.
                    HIT COUNT shows the stage's
                    enemies you destroyed / the
                    stage's fixed number of enemies
@@ -645,6 +650,12 @@ SOUND TEST (opened from SOUND)
 RANKING            Opens the original hi-score table.
 
 PASSWORD           Opens the original password screen.
+
+RESTORE DEFAULTS   Puts every CONFIG option back as on a new install
+                   (keys included). Press Fire once: PRESS AGAIN
+                   appears; press Fire again to confirm (moving away
+                   cancels). Hi-scores, the ranking and passwords are
+                   kept; JOYSTICK stays as it is.
 
 BACK               Returns to the title.
 
