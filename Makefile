@@ -45,7 +45,8 @@ ifeq ($(PLATFORM),sdl2)
 	third_party/ymfm/ymfm_ssg.cpp \
 	third_party/ymfm/ymfm_adpcm.cpp \
 	src/hal/sdl2/opna_ymfm.cpp \
-	src/hal/sdl2/opna_sfx.cpp
+	src/hal/sdl2/opna_sfx.cpp \
+	src/hal/sdl2/md_fm.cpp
   SDL2_CFLAGS ?= $(shell pkg-config --cflags sdl2)
   SDL2_LIBS   ?= $(shell pkg-config --libs sdl2)
   CFLAGS  += $(SDL2_CFLAGS) -DSDL_MAIN_HANDLED
