@@ -57,6 +57,11 @@ int gfx_title_frame(void);
 int gfx_rank_frame(void);
 /* RB_GFX_W x RB_GFX_H, 1 = sprite pixel, of the last stage frame (else NULL). */
 const uint8_t *gfx_layer_mask(void);
+const uint8_t *gfx_kind_mask(void);
+int gfx_world(const uint16_t **sid, const uint8_t **bgi);
+int gfx_text_mask(const uint8_t **mask, const uint32_t **pre);
+/* Background luma under sprite pixels (valid where the mask is 1). */
+const uint8_t *gfx_bg_luma(void);
 /* Host intro card before the Compile logo, t frames from its start
  * (t < 0: black). Particles gather into the logo, it holds, the two
  * credit lines slide up from below, it holds, then fades. */

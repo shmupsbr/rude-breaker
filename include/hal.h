@@ -342,6 +342,9 @@ void sys_audio_pause(int on);
 void sys_audio_suppress(int on);
 /* SOUND CHANNELS: 1 EXTRA puts effects on a second chip. */
 void sys_audio_extra(int on);
+/* MUSIC CHIP / SFX CHIP: 0 ORIGINAL, 1 SID, 2 GAME BOY, 3 PSG, 4 PC ENGINE,
+ * 5 VIRTUAL BOY, 6 ZX SPECTRUM (AY-3-8912). */
+void sys_audio_chips(int music, int sfx);
 
 /* Milliseconds since sys_init (debug / Phase 1 only; core must not rely). */
 uint32_t sys_ticks_ms(void);
