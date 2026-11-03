@@ -162,6 +162,18 @@ void sys_audio_extra(int on)
     }
 }
 
+void sys_audio_chips(int music, int sfx)
+{
+    if (g_dev) {
+        SDL_LockAudioDevice(g_dev);
+    }
+    chipx_set_mode(0, music);
+    chipx_set_mode(1, sfx);
+    if (g_dev) {
+        SDL_UnlockAudioDevice(g_dev);
+    }
+}
+
 static void audio_cb(void *userdata, Uint8 *stream, int len)
 {
     int frames = len / (int)(2 * sizeof(int16_t));

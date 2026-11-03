@@ -17,7 +17,12 @@
 class OpnIfc : public ymfm::ymfm_interface {
 };
 
+#ifndef OPNA_INST
+#define OPNA_INST 0
+#endif
+
 static OpnIfc g_ifc;
+static uint8_t g_addr;
 static ymfm::ym2203 g_chip(g_ifc);
 
 static const uint32_t OPN_CLOCK = 3993600u;
@@ -91,8 +96,10 @@ extern "C" void opna_write(uint16_t port, uint8_t value)
      * YM2608 extension, which FPLAY.COM never uses. */
     if (port == 0x188u) {
         g_chip.write(0, value);
+        g_addr = value;
     } else if (port == 0x18Au) {
         g_chip.write(1, value);
+        chipx_write(OPNA_INST, g_addr, value);
     }
 }
 
@@ -109,6 +116,13 @@ extern "C" void opna_sample(int16_t *stereo)
         stereo[1] = 0;
         return;
     }
+    if (chipx_mode(OPNA_INST) != CHIPX_ORIGINAL) {
+        /* MUSIC/SFX CHIP: the mirrored registers drive chipsynth.c. */
+        left = chipx_next(OPNA_INST);
+        g_hold_l = left;
+        g_hold_r = left;
+        right = left;
+    } else {
     g_accum += g_chip_rate;
     left = g_hold_l;
     right = g_hold_r;
@@ -132,6 +146,7 @@ extern "C" void opna_sample(int16_t *stereo)
     }
     g_hold_l = left;
     g_hold_r = right;
+    }
     /* The hold stays raw so a repeated output sample is not filtered twice. */
     {
         float xl = (float)left;

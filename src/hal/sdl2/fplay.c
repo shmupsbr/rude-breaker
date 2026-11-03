@@ -1742,6 +1742,11 @@ void fplay_command(uint8_t ah, uint8_t al)
     if (ah == 1) {
         if (al == 0x0C) {
             extend_guard = 90;
+#ifdef FPLAY_SECOND
+            chipx_jingle(1);
+#else
+            chipx_jingle(0);
+#endif
         } else if (extend_guard > 0) {
             return;
         }
