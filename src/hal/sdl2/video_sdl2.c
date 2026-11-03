@@ -1259,6 +1259,50 @@ static void present_copy(SDL_Texture *t, const uint32_t *px, int w, int h, SDL_R
     }
 }
 
+/* SIDE PANELS + INTEGER: the 1920x1080 canvas is scaled to the window
+ * as a whole, so its playfield (480 x 400 game pixels in 1080 x 1080)
+ * can never land on whole multiples. When INTEGER applies, the
+ * playfield is drawn again straight from the 640x400 frame at a whole
+ * multiple of its lines, centred in the field area (black around it). */
+static void wide_field_integer(void)
+{
+    SDL_Rect d;
+    SDL_Rect f;
+    SDL_Rect r;
+    SDL_Rect src = {80, 0, 480, RB_NATIVE_H};
+    int n;
+
+    if (g_scaling < 2 || g_orient) {
+        return;
+    }
+    d = dest_rect(1);
+    if (d.w <= 0 || d.h <= 0) {
+        return;
+    }
+    f.x = d.x + (420 * d.w + RB_WIDE_W / 2) / RB_WIDE_W;
+    f.w = d.x + (1500 * d.w + RB_WIDE_W / 2) / RB_WIDE_W - f.x;
+    f.y = d.y;
+    f.h = d.h;
+    if (g_aspect43) {
+        n = f.h / RB_NATIVE_H < f.w / RB_NATIVE_H ? f.h / RB_NATIVE_H : f.w / RB_NATIVE_H;
+        r.w = RB_NATIVE_H * n;
+    } else {
+        n = f.h / RB_NATIVE_H < f.w / 480 ? f.h / RB_NATIVE_H : f.w / 480;
+        r.w = 480 * n;
+    }
+    r.h = RB_NATIVE_H * n;
+    /* AUTO keeps the filled field below 80% of its width, as above. */
+    if (n < 1 || (g_scaling == 3 && (long)r.w * 100 < (long)f.w * 80)) {
+        return;
+    }
+    r.x = f.x + (f.w - r.w) / 2;
+    r.y = f.y + (f.h - r.h) / 2;
+    SDL_SetRenderDrawColor(g_rb_renderer, 0, 0, 0, 255);
+    SDL_RenderFillRect(g_rb_renderer, &f);
+    SDL_UpdateTexture(g_rb_texture, NULL, g_rb_pixels, RB_NATIVE_W * (int)sizeof(uint32_t));
+    SDL_RenderCopy(g_rb_renderer, g_rb_texture, &src, &r);
+}
+
 void sys_present(void)
 {
     scaling_apply();
@@ -1275,6 +1319,7 @@ void sys_present(void)
         SDL_UpdateTexture(g_wide_texture, NULL, g_wide_pixels,
                           RB_WIDE_W * (int)sizeof(uint32_t));
         present_copy(g_wide_texture, g_wide_pixels, RB_WIDE_W, RB_WIDE_H, dest_rect(1));
+        wide_field_integer();
     } else {
         SDL_UpdateTexture(g_rb_texture, NULL, g_rb_pixels,
                           RB_NATIVE_W * (int)sizeof(uint32_t));
