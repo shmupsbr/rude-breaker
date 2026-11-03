@@ -2055,13 +2055,11 @@ typedef struct {
 } MdPatch;
 static const MdPatch k_md_brass = {4, {1, 1, 2, 1}, {1.3f, 0, 0.9f, 0}, 0.6f, 1.0021f};
 static const MdPatch k_md_bass = {4, {1, 1, 1, 0.5f}, {1.7f, 0, 0.7f, 0}, 0.9f, 1.0f};
-/* Thunder Force III/IV-style lead guitar, our own patch: a four-op
- * chain driven hard (op1 feedback near level 6, deep indexes) so the
- * carrier folds into a buzzing near-saw, played an octave up in unison
- * on two channels detuned +-6 cents (DT1-style), a fifth channel under
- * it, a short pitch scoop into each note and late vibrato */
-static const MdPatch k_md_gtr = {0, {1, 1, 1, 1}, {2.2f, 2.6f, 1.6f, 0}, 2.3f, 1.0f};
-static float g_md_st[2][MAXV + 6][6];
+/* the guitar runs on a YM2612 core: md_fm.cpp */
+static float g_md_st[2][MAXV][6];
+#ifndef MDFM_LV
+#define MDFM_LV 5.4f
+#endif
 static float g_md_lp[2];
 
 static float md_f(float f)
@@ -2193,25 +2191,16 @@ static float md_sample(Chip *c)
 /* guitar: a distorted YM2612 patch (four-op chain, heavy op1
  * feedback) on the root and the fifth, two FM channels, the 9-bit
  * DAC; PSG noise for the pick */
+float mdfm_gtr(int idx, float f, float e, int fr, int keyed, float rate);
+
 static float md_gtr(Chip *c, struct SidGtr *g, float f, float e, int fr)
 {
     int gi = (int)(g - c->sg), ci = (int)(c - g_c);
-    float br = fr < 3 ? 0.9f - 0.3f * (float)fr : 0.0f, x, bend = 1.0f;
-    float *st = g_md_st[ci][MAXV + gi * 2], *st2 = g_md_st[ci][MAXV + gi * 2 + 1];
+    float x;
 
-    if (fr < 3) {
-        bend = 1.0f - 0.03f * (float)(3 - fr);          /* scoop up into the note */
-    } else if (fr > 14) {
-        bend = 1.0f + 0.006f * sinf(0.55f * (float)fr);   /* late vibrato */
-    }
-    f *= 2.0f * bend;
-    x = md_ch(st, &k_md_gtr, f * 1.0035f, e, br);
-    x += md_ch(st2, &k_md_gtr, f * 0.9965f, e, br);
-    x += 0.45f * md_ch(g_md_st[ci][MAXV + 4 + gi], &k_md_brass, f * 0.7492f, e * 0.8f, br);
-    x = tanhf(1.6f * x) * 0.69f;
-    x = md_dac(x) * 2.0f;
-    if (fr < 2) {
-        x += noise_step(&c->v[MAXV - 1], 14000.0f, 0) * db_amp(fr ? 8.0f : 2.0f) * 0.5f;
+    x = mdfm_gtr(ci * 2 + gi, f, e, fr < 0 ? 0 : fr, c->fm[g->src].keyed, RATE) * MDFM_LV;
+    if (fr < 2) {   /* pick */
+        x += noise_step(&c->v[MAXV - 1], 14000.0f, 0) * db_amp(fr ? 8.0f : 2.0f) * 0.25f;
     }
     return x;
 }
@@ -2490,7 +2479,13 @@ int16_t chipx_next(int inst)
         static const float lev[CHIPX_COUNT] = {0, 0, GTR_GB, GTR_PSG, GTR_PCE, GTR_VB, GTR_ZX, GTR_MSX2, MD_GTR};
         float gs = cg_sample(c, &c->sg[0]) + cg_sample(c, &c->sg[1]);
 
-        s += lev[c->mode] * gtr_ampz(c->sg[0].cab, 0.35f * gtr_hp(c, gs), drive[c->mode]);
+        if (c->mode == CHIPX_MD) {
+            /* MEGA DRIVE: the distortion is all in the FM patch, straight
+             * out of the YM2612 with no amp or cabinet */
+            s += lev[c->mode] * gtr_hp(c, gs);
+        } else {
+            s += lev[c->mode] * gtr_ampz(c->sg[0].cab, 0.35f * gtr_hp(c, gs), drive[c->mode]);
+        }
     }
     {
         /* presence: a first-order high shelf for the FM "bite" */
