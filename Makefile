@@ -38,6 +38,7 @@ ifeq ($(PLATFORM),sdl2)
 	src/hal/sdl2/audio_sdl2.c \
 	src/hal/sdl2/fplay.c \
 	src/hal/sdl2/fplay_sfx.c \
+	src/hal/sdl2/chipsynth.c \
 	src/hal/sdl2/input_sdl2.c
   YMFM_SRCS := \
 	third_party/ymfm/ymfm_opn.cpp \
