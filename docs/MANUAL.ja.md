@@ -234,16 +234,12 @@ SPEEDボタン：押すたびにプレイ中の自機の速度が、上がって
 START は自動検出されます。SDLが認識するパッド（Xbox、PlayStation、
 Switch など）では START/OPTIONS/+ ボタン、単純なジョイスティックでは
 ボタン8か10、またはプレイ中に最初に押した10番より上のボタンです。
-ポーズ中は RESUME、CONFIG、EXIT のメニューが出ます。RESUME（または
-Esc/START/B）でゲームに戻ります。CONFIG では GAMEPLAY、GRAPHICS、
-SOUND、CONTROLS を変更でき、すぐに反映されます。BACK でポーズメニュー
-に戻ります。EXIT はゲームを終えてタイトル（コンパイルのロゴから）に
+ポーズ中は RESUME と MAIN MENU のメニューが出ます。RESUME（または
+Esc/START/B）でゲームに戻ります。MAIN MENU はゲームを終えてタイトル（コンパイルのロゴから）に
 戻ります。タイトル、デモ、メニューではポーズしません。メニューではEsc（キーボード）または
 Bボタン（パッド）で1ページ戻ります。
 ポーズメニューは止まったゲーム画面の上に重ねて表示され、COLOR FILTER
-とCRT効果はそのまま有効です。ポーズメニューとCONFIGの全ページはパッド
-でも操作できます：十字キーかスティックで移動、Aで決定、Bで1ページ戻る、
-STARTで再開。
+とCRT効果はそのまま有効です。ポーズメニューはパッドでも操作できます：十字キーかスティックで移動、Aで決定、BかSTARTで再開。
 
 ウィンドウの大きさは変更できます。画面はオリジナルの640x400の比率を
 保ちます。
@@ -285,7 +281,7 @@ STARTで再開。
 の軌跡に基づく、このポート独自の入力記録で、ゲームのデータではあり
 ません。
 
-CONFIGには GAMEPLAY、GRAPHICS、SOUND、CONTROLS、RANKING、PASSWORD、
+CONFIGには GAMEPLAY、GRAPHICS、SOUND、ALTERNATE VERSIONS、CONTROLS、RANKING、PASSWORD、
 BACK のページがあります。rudebreaker.cfg の設定名は以前と同じなので、
 以前の版の設定もそのまま読み込めます。
 
@@ -321,7 +317,7 @@ GAMEPLAY
                    の3種類が出て、別の文字のカプセルを取るとプレイ中に
                    武器が変わります。
 
-  SHIP SPEED       STANDARD（初期設定）または AGGRESSIVE。STANDARD：
+  SHIP SPEED       STANDARD または AGGRESSIVE（初期設定）。STANDARD：
                    オリジナルと同じ LOW / MID / MAX の速さ。AGGRESSIVE：
                    LOW は15%遅く、MID は同じ、MAX は15%速くなります。
                    各ゲームは MID で始まり、ゲーム中の速度ボタンで
@@ -348,7 +344,7 @@ GAMEPLAY
 GRAPHICS
 
   項目の順番：FULLSCREEN、SCALING、ASPECT、ORIENTATION、SIDE PANELS、
-  PALETTE、BULLET COLOR、HITBOX、COLOR FILTER、6つのCRT効果、FRAME
+  PALETTE、BULLET COLOR、HITBOX、6つのCRT効果、FRAME
   PACING、BACK。
 
   FULLSCREEN       OFF（初期設定）または ON。ゲームの縦横比を保った
@@ -474,9 +470,10 @@ GRAPHICS
                    まま。弾を撃ち落としたあとに残る無害な火の玉も同じです。
                    ORIGINALはすべての弾をゲームのままにします。
 
-  HITBOX           OFF（初期設定）、PINK、LILAC、BLUE、GREEN、RED、
-                   WHITE。自機の上に、実際の当たり判定（12×18ピクセル）
-                   と同じ大きさの点を表示します。点の色は敵弾の色と
+  HITBOX           OFF（初期設定）、PINK、LILAC、BLUE、GREEN、RED
+                   （以前の WHITE は PINK になります）。自機の上に、実際の当たり判定（12×18ピクセル）
+                   を閉じた細い枠と40％の半透明の塗りで表示します
+                   （機体は見えたままです）。枠の色は敵弾の色と
                    同じにはなりません：その色は飛ばされ、BULLET COLOR
                    を当たり判定の色に変えると、当たり判定は次の色に
                    進みます。BULLET COLOR が ORIGINAL のとき RED は
@@ -484,7 +481,8 @@ GRAPHICS
                    rudebreaker.cfg に保存されます。
 
   COLOR FILTER     ORIGINAL（初期設定）、GAME BOY、VIRTUAL BOY、
-                   COMMODORE 64、GAME GEAR、PC ENGINE。ゲーム画面の色だ
+                   COMMODORE 64、GAME GEAR、PC ENGINE、ZX SPECTRUM、MSX2、MEGA DRIVE（ALTERNATE VERSIONS > CUSTOM で設定）。
+                   ゲーム画面の色だ
                    けを、プレイ中（デモを含む）だけ変えます。タイトル、
                    メニュー、ランキング、名前入力、サイドパネルは常に本
                    来の色のままです。ゲームの絵やパレットは変わらず、
@@ -493,19 +491,12 @@ GRAPHICS
                    初代ゲームボーイの緑に。反応の遅い液晶（動くものに残
                    像）とドットの格子が見えます。VIRTUAL BOY：黒地に赤
                    の濃淡。LEDの短い残光とLED列のすき間。COMMODORE 64：
-                   C64の16色（Pepto）、横長ドット、背景はセルごとに黒と
-                   3色、スプライト・弾・アイテムは元の色、PALの色混ざり
+                   C64の16色（Pepto）、2:1の横長ドットのマルチカラーモード（160x200）、背景は4x8セルごとに共通の黒と3色、スプライト・弾・アイテムはVIC-IIのスプライト規則（全スプライト共通の2色＋各自の1色）、PALの色混ざり
                    （各ラインが上のラインと混ざります）。GAME GEAR：
                    GAME BOY風の見た目のカラー版。4096色（各4ビット）か
-                   ら毎フレーム選んだ最大32色（背景16＋スプライト16）、
-                   大きくくっきりしたドット（約160x144相当）、残像の出
-                   る液晶、うっすらしたドット格子、バックライト液晶らし
-                   い少し淡い色。PC ENGINE：強く鮮やかで明るい色（9ビッ
-                   ト、512色）、タイルごとに16色、ディザなし、コンポジ
-                   ットのにじみはわずか。rudebreaker.cfg に
-                   color_filter として保存されます（削除されたフィルタ
-                   ーの古い値 spectrum、msx1、msx2、nes、mastersystem、
-                   megadrive は ORIGINAL として読み込まれます）。
+                   ら毎フレーム選んだ最大31色（背景16＋スプライト15、スプライトの0番は透明）、
+                   大きくくっきりしたドット（約240x200相当）、液晶の残像なし、くっきりした輪郭、はっきり見える液晶のドット格子、スプライトや弾が背景から浮き出るよう強めたコントラストと彩度。PC ENGINE：強く鮮やかで明るい色（HuC6260 VCE：各3ビット、512色、レベルは v×255/7）、背景は8x8タイルごとに16色、スプライトは16x16ごとに15色＋透明、ディザなし、コンポジ
+                   ットのにじみはわずか。解像度は実機並みに低く（約256x224、大きな正方形ドット、縦横比はそのまま）。ZX SPECTRUM：カラークラッシュも含めた実機の制約。スペクトラムの192ライン相当の大きな正方形ドットで、8x8セルごとに使える色は基本8色からINKとPAPERの2色だけ、BRIGHTビットは2色で共通です。各ドットはそのどちらかになります。多くのスペクトラムのゲームと同じく黒いPAPERを優先し、輪郭や細部は残します。背景のセルは背景そのものに固定されて一緒にスクロールするため、色がずれたりちらついたりしません。スプライトは種類ごとに変わらない専用のINK色を持ち、その色と黒で描かれます。パワーアップのカプセルは武器の色になります（VULCAN は赤、LASER は青、MISSILE は白）。画面上の文字（上部のスコア行、ステージ間の表示）はセルの制約を無視し、低解像度・単色・不透明で背景の上に描くので消えません。MSX2：SCREEN 5風。212ライン、MSX2の512色（赤・緑・青各3ビット）からシーンに合わせて選んだ16色。色の組はちらつかないようにゆっくり変わり、各ドットは16色のうち最も近い色になります。カラークラッシュはありません。MEGA DRIVE：実機のH40解像度320x224（ゲーム画面の横320ドット）、メガドライブの512色（各3ビット、実機のDACレベル）を15色×4ライン＋黒の背景色で。2ラインは背景、2ラインはスプライト用で、8x8タイルごとに1ラインを使い、ちらつかないようラインはゆっくり変わります。保存されません。起動するたび、またゲームが終わるたびに ORIGINAL に戻ります（rudebreaker.cfg の古い color_filter は無視され、削除されます）。
 
   CRT効果：6つの独立した ON / OFF で、初期設定はすべて OFF です。
   COLOR FILTER と同じく、プレイ中（デモを含む）のゲーム画面だけに
@@ -544,6 +535,53 @@ SOUND
                    効果音が音楽とFM音源を共有するため、効果音で音楽の
                    パートが一瞬途切れることがあります。
                    rudebreaker.cfg に保存されます。
+
+  MUSIC CHIP       ORIGINAL（初期設定）、SID、GAME BOY、PSG、PC ENGINE、
+                   VIRTUAL BOY、ZX SPECTRUM、MSX2、MEGA DRIVE（ALTERNATE VERSIONS > CUSTOM で設定）。
+                   お遊び機能で、BGMをPC-98のFM音源の代わりに、ほかの機
+                   種の音源を簡単にまねたものから鳴らします。ゲームがFM
+                   音源に送る音（音程、キーオン／オフ、音量）を読み取り、
+                   重要なものからその音源の持つチャンネルに割り当てるの
+                   で、パートが欠けたり、わざと粗い音になったりします。
+                   正確な移植ではありません。SID（コモドール64）：のこ
+                   ぎり波、パルス波（幅が揺れます）、三角波、ノイズの3
+                   音とレゾナンス付きフィルター。GAME BOY：パルス2ch、
+                   ベース用の4ビット波形メモリ1ch、ノイズ1ch、4ビット
+                   DAC。PSG（ゲームギアのSN76489）：矩形波3chとノイズ、
+                   音量は2dB刻み、約110Hzより低い音は出ません。PC
+                   ENGINE：32ステップ5ビットの波形メモリ6ch。VIRTUAL
+                   BOY（VSU）：32ステップ6ビットの波形メモリ5ch（5ch目は
+                   スイープとモジュレーション付き）とノイズ1ch、約76Hz
+                   より低い音は出ません。ZX SPECTRUM（128KのAY-3-8912、1.7734MHz、モノラル）：矩形波3chと共有ノイズ1つ、ハードウェアエンベロープ、16段階の対数音量。MSX2（PSGとコナミのSCCカートリッジ、FMなし）：PSGの矩形波3chとノイズ、SCCの32ステップ波形メモリ5ch（最後の2chは波形を共有）。ギターは根音と5度のSCCのこぎり波2つに1オクターブ下のPSG矩形波を重ね、ベースなどはSCC、ドラムはPSGの矩形波とノイズです。MEGA DRIVE（メガドライブ1：YM2612のFM 4オペレーター6chとSN76489 PSG）：ブラス、ベース、ギターのFM音色（ギターはサンダーフォースIII/IV風の、強く歪ませデチューンした1オクターブ上のFMリード。音色は自作）、YM2612の粗い音量段階と9ビットDACの音。ドラムはPSGの矩形波とノイズで、サンプルは使いません。SOUND TEST
+                   も選んだ MUSIC CHIP で鳴ります。COLOR FILTER とは独
+                   立しています。保存されません（起動するたび、ゲームが終わるたびに ORIGINAL に戻ります）。
+                   歪んだギターにチップを1つまるごと使い（VIRTUAL BOY と SID はギターのパートごとに1つ）、
+                   全ボイスで1本のギターを鳴らします（SID：シンク／リ
+                   ングとフィルター、GAME BOY：パルス2つと歪んだ波形と
+                   ノイズのピッキング、PSG：矩形波3つとノイズのピッキン
+                   グ、PC ENGINE と VIRTUAL BOY：波形メモリとノイズのピッ
+                   キング、ZX SPECTRUM：エンベロープによるうなるのこぎり波、パワーコードの5度とオクターブ、ノイズのピッキング。MSX2：根音と5度のSCCのこぎり波2つ、1オクターブ下のPSG矩形波、PSGノイズのピッキング。MEGA DRIVE：根音と5度の歪ませたFMとノイズのピッキング）。そ
+                   の後アンプとキャビネットの音作り。残りのパートは別の
+                   チップが演奏し、ベースとドラムは原曲のバランスを保ちます。2本目のギターもそのチップで鳴り、チップは合計2つです（VIRTUAL BOY と SID は最大3つ）。
+
+  SFX CHIP         効果音について同じ選択肢を選べます（MUSIC CHIP とは
+                   独立）。SOUND CHANNELS: EXTRA の2つ目の音源に効きま
+                   す。ORIGINAL のときは効果音もBGMの音源で鳴るので
+                   MUSIC CHIP に従います。保存されません。
+
+  ALTERNATE VERSIONS（CONFIG の独立したページ、SOUND の次）
+                   「もしこのゲームが別の機種で出ていたら」の切り替え：
+                   ORIGINAL PC-98（すべて ORIGINAL）、COMMODORE 64（フィルター
+                   COMMODORE 64、音源 SID）、GAME BOY（GAME BOY、GAME BOY）、
+                   GAME GEAR（GAME GEAR、PSG）、PC ENGINE（PC ENGINE、PC
+                   ENGINE）、VIRTUAL BOY（VIRTUAL BOY、VIRTUAL BOY）、ZX
+                   SPECTRUM 128K（ZX SPECTRUM、ZX SPECTRUM）、MSX2（MSX2、
+                   MSX2）、MEGA DRIVE（MEGA DRIVE、MEGA DRIVE）。選択中のもの
+                   に ON。CUSTOM を選ぶと COLOR FILTER、MUSIC CHIP、SFX CHIP
+                   の3行が現れ、それぞれ左右で個別に選べます。どれも保存さ
+                   れません。起動するたび、またゲームが終わるたび（ゲームオー
+                   バー、エンディング、タイトルへ戻る）に ORIGINAL PC-98 に
+                   戻ります。
 
   SOUND TEST       SOUND TEST ページ（下記）を開きます。
 

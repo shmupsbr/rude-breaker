@@ -240,16 +240,13 @@ jogando. O START é detectado sozinho: em controles conhecidos pelo SDL
 (Xbox, PlayStation, Switch e a maioria) é o START/OPTIONS/+; em
 joysticks simples é o botão 8 ou 10, ou o primeiro outro botão acima
 de 10 que você apertar durante o jogo. Pausado, aparece um menu com
-RESUME, CONFIG e EXIT. RESUME (ou Esc/START/B de novo) volta ao jogo.
-CONFIG abre GAMEPLAY, GRAPHICS, SOUND e CONTROLS; as mudanças valem na
-hora e BACK volta ao menu de pausa. EXIT encerra a partida e volta à
+RESUME e MAIN MENU. RESUME (ou Esc/START/B de novo) volta ao jogo. MAIN MENU encerra a partida e volta à
 sequência do título (começando pelo logo da Compile). No
 título, na demo e nos menus ele não pausa. Nos menus, o Esc (teclado)
 ou o botão B (controle) volta uma página.
 O menu de pausa é desenhado por cima da imagem congelada do jogo, que
-mantém o COLOR FILTER e os efeitos CRT ligados. O menu de pausa e
-todas as páginas do CONFIG funcionam também no controle: direcional ou
-analógico para mover, A confirma, B volta uma página, START retoma.
+mantém o COLOR FILTER e os efeitos CRT ligados. O menu de pausa funciona também no controle: direcional ou
+analógico para mover, A confirma, B ou START retoma.
 
 A janela pode ser redimensionada. A imagem mantém a proporção
 original de 640x400.
@@ -294,7 +291,7 @@ nem recorde, nem ranking, nem configurações. O movimento da nave na
 demo segue o trajeto de um jogador de verdade; é uma gravação de
 comandos nossa, não dado do jogo.
 
-O CONFIG tem estas páginas: GAMEPLAY, GRAPHICS, SOUND, CONTROLS,
+O CONFIG tem estas páginas: GAMEPLAY, GRAPHICS, SOUND, ALTERNATE VERSIONS, CONTROLS,
 RANKING, PASSWORD e BACK. As opções mantêm os nomes antigos no
 rudebreaker.cfg, então saves de versões anteriores carregam sem mudança.
 
@@ -334,7 +331,7 @@ GAMEPLAY
                    V, L e M, e você troca de arma durante a partida
                    pegando uma cápsula de outra letra.
 
-  SHIP SPEED       STANDARD (padrão) ou AGGRESSIVE. STANDARD: LOW, MID
+  SHIP SPEED       STANDARD ou AGGRESSIVE (padrão). STANDARD: LOW, MID
                    e MAX movem a nave como no original. AGGRESSIVE:
                    LOW fica 15% mais lento, MID igual e MAX 15% mais
                    rápido. Toda partida começa em MID; o botão de
@@ -362,7 +359,7 @@ GAMEPLAY
 GRAPHICS
 
   Opções, nesta ordem: FULLSCREEN, SCALING, ASPECT, ORIENTATION, SIDE
-  PANELS, PALETTE, BULLET COLOR, HITBOX, COLOR FILTER, os seis efeitos
+  PANELS, PALETTE, BULLET COLOR, HITBOX, os seis efeitos
   de CRT, FRAME PACING e BACK.
 
   FULLSCREEN       OFF (padrão) ou ON. Ocupa o monitor inteiro,
@@ -510,11 +507,12 @@ GRAPHICS
                    um tiro. ORIGINAL deixa todos os tiros como no
                    jogo.
 
-  HITBOX           OFF (padrão), PINK, LILAC, BLUE, GREEN, RED ou
-                   WHITE. Desenha uma bolinha na nave com o tamanho
-                   exato da sua caixa de colisão real (12 x 18
-                   pixels), para você ver o que pode ser atingido. A
-                   bolinha nunca usa a mesma cor dos tiros inimigos:
+  HITBOX           OFF (padrão), PINK, LILAC, BLUE, GREEN ou RED
+                   (um WHITE antigo vira PINK). Desenha a caixa de colisão real da nave (12 x
+                   18 pixels) como um contorno fino fechado com
+                   preenchimento 40 % transparente, para a nave
+                   continuar visível e você ver o que pode ser
+                   atingido. A caixa nunca usa a mesma cor dos tiros inimigos:
                    essa cor é pulada, e se você mudar o BULLET COLOR
                    para a cor da hitbox, a hitbox passa para a
                    próxima. RED é pulado com BULLET COLOR ORIGINAL (os
@@ -522,7 +520,8 @@ GRAPHICS
                    rudebreaker.cfg.
 
   COLOR FILTER     ORIGINAL (padrão), GAME BOY, VIRTUAL BOY, COMMODORE 64,
-                   GAME GEAR, PC ENGINE. Muda as cores só do playfield, e só
+                   GAME GEAR, PC ENGINE, ZX SPECTRUM, MSX2, MEGA DRIVE (em ALTERNATE VERSIONS > CUSTOM). Muda as cores só do
+                   playfield, e só
                    durante uma partida (ou o demo): título, menus, ranking,
                    entrada de nome e os painéis laterais ficam sempre com as
                    cores reais. A arte e a paleta do jogo não mudam, e o
@@ -532,21 +531,12 @@ GRAPHICS
                    move deixa rastro) e a grade de pontos visível. VIRTUAL
                    BOY: tons de vermelho no preto, com o brilho curto dos
                    LEDs e as faixas escuras entre as colunas de LED.
-                   COMMODORE 64: as 16 cores do C64 (Pepto), pixels largos,
-                   3 cores mais preto por célula no cenário; sprites, tiros
-                   e itens mantêm as próprias cores, e a mistura PAL (cada
+                   COMMODORE 64: as 16 cores do C64 (Pepto), modo multicolor com pixels largos 2:1 (160x200), 3 cores mais o preto comum por célula 4x8 no cenário; sprites, tiros e itens seguem a regra de sprites do VIC-II (duas cores comuns a todos os sprites mais uma própria), e a mistura PAL (cada
                    linha se mistura com a de cima). GAME GEAR: a versão
                    colorida do visual GAME BOY: paleta de 4096 cores (4 bits
-                   por canal) com no máximo 32 na tela (16 de fundo + 16 de
-                   sprite), escolhidas a cada quadro, pixels grandes e
-                   nítidos (detalhe de cerca de 160x144), LCD lento com
-                   rastro, grade de pixels discreta e cores um pouco lavadas
-                   de tela retroiluminada. PC ENGINE: cores fortes,
-                   saturadas e claras (9 bits, 512), 16 cores por tile, sem
-                   dithering, só uma leve suavidade de composto. Salvo no
-                   rudebreaker.cfg como color_filter (valores antigos de
-                   filtros removidos, como spectrum, msx1, msx2, nes,
-                   mastersystem ou megadrive, agora carregam como ORIGINAL).
+                   por canal) com no máximo 31 na tela (16 de fundo + 15 de sprite, a cor 0 dos sprites é transparente), escolhidas a cada quadro, pixels grandes e
+                   nítidos (detalhe de cerca de 240x200), sem rastro de LCD, bordas nítidas, grade de pontos do LCD bem visível e contraste e saturação reforçados para sprites e tiros se destacarem do cenário. PC ENGINE: cores fortes,
+                   saturadas e claras (VCE HuC6260: 3 bits por canal, 512 cores, níveis v x 255 / 7), 16 cores por tile 8x8 de fundo e 15 mais transparente por célula 16x16 de sprite, sem dithering, só uma leve suavidade de composto, na resolução menor do console (cerca de 256x224, pixels grandes e quadrados, mesma proporção). ZX SPECTRUM: os limites da máquina real, incluindo o color clash: a escala de 192 linhas do Spectrum com pixels grandes e quadrados, e cada célula 8x8 tem só duas cores, uma INK e uma PAPER entre as 8 cores básicas, com um único bit BRIGHT para as duas; cada pixel é uma ou a outra. O PAPER preto é o preferido, como na maioria dos jogos do Spectrum, e contornos e detalhes são mantidos. As células do cenário ficam presas ao próprio cenário e rolam com ele, então as cores não se arrastam nem piscam; cada tipo de sprite tem uma cor de INK própria que nunca muda, desenhada nessa cor e em preto sobre o que estiver atrás; as cápsulas de power-up ficam da cor da arma (VULCAN vermelho, LASER azul, MISSILE branco). O texto na tela (linha de pontos no topo, legendas entre as fases) ignora as células: é desenhado em baixa resolução, monocromático e opaco por cima do cenário, para nunca sumir. MSX2: estilo SCREEN 5, 212 linhas, 16 cores por vez escolhidas para a cena entre as 512 do MSX2 (3 bits por vermelho, verde e azul); o conjunto muda devagar para não piscar; cada pixel fica com a mais próxima das 16, sem color clash. MEGA DRIVE: a resolução real H40, 320x224 (320 colunas no campo de jogo), as 512 cores do Mega Drive (3 bits por canal, níveis reais do DAC) em 4 linhas de 15 cores mais o fundo preto: duas linhas para o cenário e duas para os sprites; cada tile 8x8 usa uma linha, e as linhas mudam devagar para não piscar. Não é salvo: toda vez que o jogo abre, e ao fim de cada partida, volta para ORIGINAL (valores antigos de color_filter no rudebreaker.cfg são ignorados e removidos).
 
   Efeitos de CRT: seis chaves ON/OFF separadas, todas OFF por padrão.
   Como o COLOR FILTER, só afetam o playfield durante o jogo (e o demo),
@@ -586,6 +576,54 @@ SOUND
                    como no PC-98, então um efeito pode cortar um
                    canal da música por um instante. Salvo no
                    rudebreaker.cfg.
+
+  MUSIC CHIP       (ALTERNATE VERSIONS > CUSTOM) ORIGINAL (padrão), SID, GAME BOY, PSG, PC ENGINE, VIRTUAL BOY, ZX SPECTRUM, MSX2, MEGA DRIVE. Para
+                   diversão: toca a música por um modelo simples do chip de
+                   som de outra máquina em vez do chip FM do PC-98. As notas
+                   que o jogo manda para o chip FM são lidas (altura, nota
+                   ligada/desligada, volume) e as mais importantes vão para
+                   as vozes que esse chip tem, então partes podem sumir e o
+                   som é tosco de propósito; não é uma conversão exata. SID
+                   (Commodore 64): 3 vozes com dente de serra, pulso (com
+                   variação de largura), triângulo e ruído, passando por um
+                   filtro ressonante. GAME BOY: 2 canais de pulso, um canal
+                   de onda de 4 bits para o baixo e um canal de ruído, com
+                   DAC de 4 bits. PSG (SN76489 do Game Gear): 3 ondas
+                   quadradas e ruído, volume em passos de 2 dB e nenhuma
+                   nota abaixo de cerca de 110 Hz. PC ENGINE: 6 canais de
+                   wavetable de 32 passos e 5 bits. VIRTUAL BOY (VSU): 5
+                   canais de wavetable de 32 passos e 6 bits (o quinto com
+                   sweep e modulação) e um canal de ruído, nada abaixo de cerca de 76 Hz. ZX SPECTRUM (AY-3-8912 do 128K, 1,7734 MHz, mono): 3 ondas quadradas, um gerador de ruído compartilhado e o envelope de hardware, 16 níveis de volume logarítmicos. MSX2 (o PSG e um cartucho SCC da Konami, sem FM): 3 ondas quadradas e ruído do PSG e 5 canais SCC de wavetable de 32 passos (os dois últimos dividem a forma de onda); a guitarra são duas serras do SCC na tônica e na quinta sobre uma quadrada do PSG uma oitava abaixo; o baixo e as outras partes tocam no SCC; a bateria usa quadradas e ruído do PSG. MEGA DRIVE (Mega Drive 1: FM YM2612, 6 canais de 4 operadores, mais o PSG SN76489): patches FM de metais, baixo e guitarra (a guitarra é um lead FM bem distorcido e desafinado em uníssono, uma oitava acima, no estilo da guitarra de Thunder Force III/IV; patch nosso), com os degraus de volume grossos e o som do DAC de 9 bits do YM2612; bateria nas quadradas e no ruído do PSG, sem samples. O SOUND TEST também toca
+                   pelo MUSIC CHIP escolhido. Independente do COLOR FILTER.
+                   Não é salvo (volta para ORIGINAL a cada abertura e após cada partida).
+                   A guitarra distorcida ganha um chip inteiro (no VIRTUAL BOY e no SID, cada parte de guitarra ganha um), com todas
+                   as vozes formando uma guitarra (SID: sync/ring e filtro;
+                   GAME BOY: dois pulsos, onda distorcida e palhetada no
+                   ruído; PSG: três quadradas e palhetada no ruído; PC
+                   ENGINE e VIRTUAL BOY: wavetables e palhetada no ruído; ZX SPECTRUM: o envelope como serra zumbindo, quinta e oitava de power chord e palhetada no ruído; MSX2: duas serras do SCC na tônica e na quinta, uma quadrada do PSG uma oitava abaixo e palhetada no ruído do PSG; MEGA DRIVE: uma cadeia FM saturada na tônica e na quinta com palhetada no ruído),
+                   depois
+                   coloração de amplificador e caixa. Outro chip toca o
+                   resto, com baixo e bateria no equilíbrio do original, e uma segunda parte de guitarra também toca nele: dois chips no total (VIRTUAL BOY e SID: até três).
+
+  SFX CHIP         As mesmas opções para os efeitos sonoros, independente do
+                   MUSIC CHIP. Vale para o segundo chip usado por SOUND
+                   CHANNELS: EXTRA; com ORIGINAL os efeitos tocam no chip da
+                   música e seguem o MUSIC CHIP. Não é salvo.
+
+  ALTERNATE VERSIONS  (página própria do CONFIG, depois de SOUND) Uma
+                   chave para "e se o jogo tivesse saído em outra
+                   máquina": ORIGINAL PC-98 (ORIGINAL/ORIGINAL/ORIGINAL),
+                   COMMODORE 64 (filtro COMMODORE 64, chips SID), GAME BOY
+                   (GAME BOY, GAME BOY), GAME GEAR (GAME GEAR, PSG), PC
+                   ENGINE (PC ENGINE, PC ENGINE), VIRTUAL BOY (VIRTUAL BOY,
+                   VIRTUAL BOY), ZX SPECTRUM 128K (ZX SPECTRUM, ZX SPECTRUM),
+                   MSX2 (MSX2, MSX2), MEGA DRIVE (MEGA DRIVE, MEGA DRIVE).
+                   A ativa mostra ON. CUSTOM abre mais três linhas, COLOR
+                   FILTER, MUSIC CHIP e SFX CHIP (acima), para escolher
+                   cada um à mão (ESQUERDA/DIREITA). Nada disso é salvo:
+                   toda vez que o jogo abre, e ao fim de cada partida (game
+                   over, final ou saída para o título), volta para ORIGINAL
+                   PC-98.
 
   SOUND TEST       Abre a página SOUND TEST (abaixo).
 
