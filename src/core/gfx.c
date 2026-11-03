@@ -23,6 +23,14 @@ static int g_rank_frame;
  * of bg). Output filters read it; the art itself is not changed. */
 static uint8_t g_layer[RB_GFX_W * RB_GFX_H];
 static int g_layer_ok;
+/* Object kind of each shown sprite pixel for the ZX filter: 0 none,
+ * 1 body (ship, enemies, ground objects), 2 bullet, shot or item. */
+static uint8_t g_kind[RB_GFX_W * RB_GFX_H];
+/* luma of the background under each sprite pixel (ZX SPECTRUM filter) */
+static uint8_t g_bgl[RB_GFX_W * RB_GFX_H];
+static uint16_t g_sidm[RB_GFX_W * RB_GFX_H];  /* sprite id per shown pixel */
+static uint8_t g_bgim[RB_GFX_W * RB_GFX_H];   /* background index per shown pixel */
+static int g_world_scroll;
 /* Enemy bullet colour: 0 original, then PINK, LILAC, HOT PINK. Row 0
  * replaces index 11 (the bright red), row 1 index 8 (the dark red). */
 static int g_bullet;
@@ -87,6 +95,10 @@ struct RbGfx {
     uint8_t glyph_on[512];
     int active;
     uint8_t tint[RB_GFX_W * RB_GFX_H]; /* 1: enemy bullet pixel in a shot colour */
+    uint8_t kind[RB_GFX_W * RB_GFX_H];
+    int kind_cur;
+    uint16_t sid[RB_GFX_W * RB_GFX_H];  /* sprite family id (ZX filter) */
+    int sid_cur;
     int tint_cur;          /* sprite being stamped: 1 enemy bullet, 2 player shot */
     int tint_gold;         /* orange/gold pixels in the bullet being drawn */
     int tint_red;          /* red pixels (8, 9, 11) in it */
@@ -172,6 +184,8 @@ static void put_idx(RbGfx *gfx, int x, int y, uint8_t idx)
     }
     at = pix_at(x, y);
     gfx->pix[at] = idx;
+    gfx->kind[at] = (uint8_t)gfx->kind_cur;
+    gfx->sid[at] = (uint16_t)gfx->sid_cur;
     gfx->tint[at] = 0;
     if (gfx->tint_cur == 1) {
         /* Every pixel of a bullet that cannot be shot is recoloured,
@@ -206,6 +220,8 @@ static void rmw_idx(RbGfx *gfx, int x, int y, uint8_t planes, int set)
         v = (uint8_t)(v & (uint8_t)~planes);
     }
     gfx->pix[at] = v;
+    gfx->kind[at] = (uint8_t)gfx->kind_cur;
+    gfx->sid[at] = (uint16_t)gfx->sid_cur;
     if (gfx->paint_bg) {
         gfx->bg[at] = v;
     }
@@ -709,6 +725,7 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
      * that holds still on screen still moves through the buffer. */
     memcpy(gfx->pix, gfx->bg, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
     memset(gfx->tint, 0, sizeof gfx->tint);
+    memset(gfx->kind, 0, sizeof gfx->kind);
     gfx->paint_bg = 0;
     if (g_bulletlog < 0) {
         g_bulletlog = ((char *)0) ? atoi(((char *)0)) : 0;
@@ -760,6 +777,25 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
         }
         /* Enemy bullets (0x0080) that cannot be shot (no 0x0020 or
          * 0x0040 bit, which the player's shots test). */
+        /* 0x0080 enemy bullets, 0x0100 shootable bullets, 0x0010 items,
+         * 0x1000 the player's shots. */
+        gfx->kind_cur = (type & 0x1190u) ? 2 : 1;
+        /* one id per sprite family (entity type and sheet), the same
+         * for all its animation frames */
+        gfx->sid_cur = (int)(((unsigned)type * 40503u ^ (unsigned)seg * 2654435761u) >> 8 & 0xFFFFu) | 1;
+        /* weapon capsules (sheet 28, first cell 122/124/126 = V/M/L,
+         * 138.. for the lower row): fixed ids the ZX filter colours by
+         * weapon */
+        if (seg == 28u && chunk[cof[i]] && pat < clen[cof[i]]) {
+            unsigned c0 = chunk[cof[i]][pat];
+
+            if (c0 >= 138u && c0 <= 143u) {
+                c0 -= 16u;
+            }
+            if (c0 >= 122u && c0 <= 127u) {
+                gfx->sid_cur = (int)(0xFFF1u + ((c0 - 122u) & ~1u));  /* FFF1 V, FFF3 M, FFF5 L */
+            }
+        }
         gfx->tint_cur = g_bullet && (type & 0x0080u) && !(type & 0x0060u) ? 1 : 0;
         gfx->tint_gold = 0;
         gfx->tint_red = 0;
@@ -803,6 +839,8 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
             bulletlog_note(type, seg, pat, gfx->tint_cur);
         }
         gfx->tint_cur = 0;
+        gfx->kind_cur = 0;
+        gfx->sid_cur = 0;
     }
     gfx->tint_cur = 0;
     gfx->paint_bg = 1;
@@ -2999,6 +3037,31 @@ static void dim_panel(uint32_t *rgba, int w)
     }
 }
 
+/* ZX filter: sprite family ids and background indices of the shown
+ * frame, and the scroll that maps screen row y to page row
+ * (y + scroll) % RB_GFX_H. */
+#define RB_GFX_TXW 640
+static uint32_t g_txt_pre[RB_GFX_TXW * 400];
+static uint8_t g_txt_mask[RB_GFX_TXW * 400], g_txt_ov[RB_GFX_TXW * 400];
+static int g_txt_ok;
+
+int gfx_world(const uint16_t **sid, const uint8_t **bgi)
+{
+    *sid = g_layer_ok ? g_sidm : NULL;
+    *bgi = g_layer_ok ? g_bgim : NULL;
+    return g_world_scroll;
+}
+
+const uint8_t *gfx_bg_luma(void)
+{
+    return g_layer_ok ? g_bgl : NULL;
+}
+
+const uint8_t *gfx_kind_mask(void)
+{
+    return g_layer_ok ? g_kind : NULL;
+}
+
 const uint8_t *gfx_layer_mask(void)
 {
     return g_layer_ok ? g_layer : NULL;
@@ -3097,6 +3160,7 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
         g_pres_valid = 0;
     }
     g_pres_scroll = scroll;
+    g_world_scroll = scroll;
     /* One scene for the whole frame. The grade scales each palette
      * index from that scene's settled 4-bit color, so a fade still
      * tracks the script. Original mode leaves scene at -1. */
@@ -3136,12 +3200,18 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
             if (blank_sides && (x < 80 || x >= 560)) {
                 rgba[(size_t)y * (size_t)w + (size_t)x] = 0x000000FFu;
                 g_layer[(size_t)y * RB_GFX_W + (size_t)x] = 0;
+                g_kind[(size_t)y * RB_GFX_W + (size_t)x] = 0;
                 continue;
             }
             at = (size_t)src * RB_GFX_W + (size_t)x;
             idx = gfx->pix[at];
             g_layer[(size_t)y * RB_GFX_W + (size_t)x] =
                 (uint8_t)(!tail && idx != gfx->bg[at]);
+            g_kind[(size_t)y * RB_GFX_W + (size_t)x] =
+                g_layer[(size_t)y * RB_GFX_W + (size_t)x] ? (gfx->kind[at] ? gfx->kind[at] : 1) : 0;
+            g_sidm[(size_t)y * RB_GFX_W + (size_t)x] =
+                g_layer[(size_t)y * RB_GFX_W + (size_t)x] ? gfx->sid[at] : 0;
+            g_bgim[(size_t)y * RB_GFX_W + (size_t)x] = tail ? gfx->hold[at] : gfx->bg[at];
             if (tail && idx == gfx->bg[at]) {
                 idx = gfx->hold[at];
             }
@@ -3185,7 +3255,18 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
         }
     }
     dim_panel(rgba, w);
+    /* text mask for the ZX filter: pixels the text layers change */
+    if (w == RB_GFX_TXW) {
+        memcpy(g_txt_pre, rgba, sizeof g_txt_pre);
+    }
     overlay_text(gfx, text, rgba, w);
+    if (w == RB_GFX_TXW) {
+        size_t k;
+
+        for (k = 0; k < (size_t)RB_GFX_TXW * 400u; k++) {
+            g_txt_ov[k] = (uint8_t)(rgba[k] != g_txt_pre[k]);
+        }
+    }
     /* The ranking table is text drawn over the same title art; it keeps
      * the original look, so the 30th AE credits are left off there. */
     g_title_frame = 0;
@@ -3198,5 +3279,28 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
     if (!text_besides_push(text)) {
         title_brand(gfx, rgba, w, 0);
     }
-    ending_credit(gfx, text, rgba, w);
+    if (w == RB_GFX_TXW) {
+        static uint32_t pre2[RB_GFX_TXW * 400];
+        size_t k;
+
+        memcpy(pre2, rgba, sizeof pre2);
+        ending_credit(gfx, text, rgba, w);
+        for (k = 0; k < (size_t)RB_GFX_TXW * 400u; k++) {
+            g_txt_mask[k] = (uint8_t)(rgba[k] != pre2[k] || g_txt_ov[k]);
+        }
+        g_txt_ok = 1;
+    } else {
+        ending_credit(gfx, text, rgba, w);
+    }
+}
+
+int gfx_text_mask(const uint8_t **mask, const uint32_t **pre)
+{
+    if (mask) {
+        *mask = g_txt_ok ? g_txt_mask : 0;
+    }
+    if (pre) {
+        *pre = g_txt_ok ? g_txt_pre : 0;
+    }
+    return g_txt_ok;
 }

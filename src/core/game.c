@@ -49,22 +49,21 @@ static const char *const k_bullet_name[5] = {"ORIGINAL", "PINK", "LILAC", "BLUE"
 static int          g_cfg_9r;      /* settings file has the pr9r defaults */
 /* HITBOX: 0 OFF, then the bullet colours (PINK..GREEN) plus RED and
  * WHITE. Never the colour enemy bullets use (ORIGINAL is the red). */
-#define HIT_N 7
+#define HIT_N 6
 static int          g_hitbox;
 static const char *const k_hit_name[HIT_N] = {
-    "OFF", "PINK", "LILAC", "BLUE", "GREEN", "RED", "WHITE"
+    "OFF", "PINK", "LILAC", "BLUE", "GREEN", "RED"
 };
 static const uint32_t k_hit_rgba[HIT_N] = {
-    0, 0xFF60D0FFu, 0xD8A0FFFFu, 0x50C8FFFFu, 0x78FFC8FFu, 0xFF3030FFu,
-    0xFFFFFFFFu
+    0, 0xFF60D0FFu, 0xD8A0FFFFu, 0x50C8FFFFu, 0x78FFC8FFu, 0xFF3030FFu
 };
 static const char *const k_hit_cfg[HIT_N] = {
-    "off", "pink", "lilac", "blue", "green", "red", "white"
+    "off", "pink", "lilac", "blue", "green", "red"
 };
 static int          g_fullscreen;   /* FULLSCREEN option / F11 */
 static int          g_scaling = 3;  /* SCALING: 0 SMOOTH, 1 SHARP, 2 INTEGER, 3 AUTO */
 static int          g_aspect43 = 1; /* ASPECT: 1 = 4:3, 0 = 1:1 */
-static int          g_ship_aggr;    /* SHIP SPEED: 0 STANDARD, 1 AGGRESSIVE */
+static int          g_ship_aggr;    /* SHIP SPEED: 0 STANDARD, 1 AGGRESSIVE (default) */
 static int          g_cfilter;      /* COLOR FILTER, CF_* */
 static unsigned     g_crt;          /* CRT effects, 1 << CRT_* */
 /* Attract mode. g_demo is the stage being shown (0 = none). While it
@@ -89,6 +88,48 @@ static uint16_t     g_pprev;
 static uint16_t     g_pad_prev;
 static uint8_t      g_ptext[RB_VM_TEXT_SIZE];
 static int          g_sndx = 1;         /* SOUND CHANNELS: 0 ORIGINAL, 1 EXTRA */
+/* MUSIC CHIP / SFX CHIP: 0 ORIGINAL, 1 SID, 2 GAME BOY, 3 PSG, 4 PC ENGINE,
+ * 5 VIRTUAL BOY, 6 ZX SPECTRUM, 7 MSX2. */
+#define CHIP_N 9
+static int          g_mchip;
+static int          g_schip;
+static const char *const k_chip_name[CHIP_N] = {"ORIGINAL", "SID", "GAME BOY", "PSG", "PC ENGINE", "VIRTUAL BOY", "ZX SPECTRUM", "MSX2", "MEGA DRIVE"};
+static const char *const k_chip_key[CHIP_N] = {"original", "sid", "gameboy", "psg", "pcengine", "virtualboy", "zx", "msx2", "megadrive"};
+
+/* ALTERNATE VERSIONS (CONFIG page; cfg key alternate_versions, old
+ * key parallel_universe read and dropped): one machine = filter + music chip + sfx chip.
+ * Not stored on its own: the row shows the preset the three settings
+ * match, or CUSTOM. */
+#define PU_N 9
+static const char *const k_pu_name[PU_N] = {"ORIGINAL PC-98", "COMMODORE 64", "GAME BOY",
+                                           "GAME GEAR", "PC ENGINE", "VIRTUAL BOY", "ZX SPECTRUM 128K", "MSX2", "MEGA DRIVE"};
+static const int k_pu_set[PU_N][2] = {{0, 0}, {3, 1}, {1, 2}, {4, 3}, {5, 4}, {2, 5}, {6, 6}, {7, 7}, {8, 8}};
+
+static int pu_index(void)
+{
+    int k;
+
+    for (k = 0; k < PU_N; k++) {
+        if (g_cfilter == k_pu_set[k][0] && g_mchip == k_pu_set[k][1] && g_schip == k_pu_set[k][1]) {
+            return k;
+        }
+    }
+    return -1;
+}
+
+static int chip_from_key(const char *s)
+{
+    int i;
+    size_t n;
+
+    for (i = 0; i < CHIP_N; i++) {
+        n = strlen(k_chip_key[i]);
+        if (strncmp(s, k_chip_key[i], n) == 0 && (s[n] == 0 || s[n] == '\n' || s[n] == '\r')) {
+            return i;
+        }
+    }
+    return 0;
+}
 static int          g_cfg_9zf;      /* settings file has the pr9zf defaults */
 /* 1CC on record (saved) and whether this run still counts. */
 static int          g_onecc;
@@ -170,9 +211,11 @@ static void load_cfg(const RbGame *g)
     g_onecc = 0;
     g_loop_on = 1;
     g_sndx = 1;
+    g_mchip = 0;
+    g_schip = 0;
     g_scaling = 3;
     g_aspect43 = 1;
-    g_ship_aggr = 0;
+    g_ship_aggr = 1;
     g_cfilter = CF_ORIGINAL;
     g_crt = 0;
     g_cfg_9zf = 0;
@@ -245,6 +288,9 @@ static void load_cfg(const RbGame *g)
                     g_hitbox = k;
                 }
             }
+            if (strncmp(line + 7, "white", 5) == 0) {
+                g_hitbox = 1;   /* WHITE was removed: PINK */
+            }
         } else if (strncmp(line, "fullscreen=on", 13) == 0) {
             g_fullscreen = 1;
         } else if (strncmp(line, "fullscreen=off", 14) == 0) {
@@ -271,12 +317,11 @@ static void load_cfg(const RbGame *g)
                     }
                 }
             }
+        } else if (strncmp(line, "parallel_universe=", 18) == 0 ||
+                   strncmp(line, "alternate_versions=", 19) == 0) {
+            /* informational: the three settings carry the choice */
         } else if (strncmp(line, "color_filter=", 13) == 0) {
-            int k = cfilter_from_key(line + 13);
-
-            if (k >= 0) {
-                g_cfilter = k;
-            }
+            /* not persisted: every launch starts as the ORIGINAL PC-98 */
         } else if (strncmp(line, "ship_speed=aggressive", 21) == 0) {
             g_ship_aggr = 1;
         } else if (strncmp(line, "ship_speed=standard", 19) == 0) {
@@ -289,6 +334,10 @@ static void load_cfg(const RbGame *g)
             g_sndx = 1;
         } else if (strncmp(line, "sound_channels=original", 23) == 0) {
             g_sndx = 0;
+        } else if (strncmp(line, "music_chip=", 11) == 0) {
+            /* not persisted */
+        } else if (strncmp(line, "sfx_chip=", 9) == 0) {
+            /* not persisted */
         } else if (strncmp(line, "defaults9zf=1", 13) == 0) {
             g_cfg_9zf = 1;
         } else if (strncmp(line, "attract=on", 10) == 0) {
@@ -552,7 +601,6 @@ static void save_cfg(const RbGame *g)
     fprintf(fp, "scaling=%s\naspect=%s\n",
             g_scaling == 0 ? "smooth" : g_scaling == 1 ? "sharp" : g_scaling == 2 ? "integer" : "auto",
             g_aspect43 ? "4:3" : "1:1");
-    fprintf(fp, "color_filter=%s\n", cfilter_key(g_cfilter));
     fprintf(fp, "orientation=%d\n", g_orient * 90);
     {
         int k;
@@ -617,43 +665,47 @@ static void fullscreen_apply(int on)
 }
 
 /* HITBOX overlay: the ship's own collision box (the words the hit test
- * reads), filled as a round dot with a thin dark rim, over the ship. */
+ * reads), drawn as a 1 px outline with a 40 % fill so the sprite under
+ * it stays visible. Display only; the hit test is not touched. */
+static uint32_t hit_blend(uint32_t d, uint32_t c, int a256)
+{
+    uint32_t r = 0;
+    int sh;
+
+    for (sh = 8; sh <= 24; sh += 8) {
+        int dc = (int)((d >> sh) & 0xFFu);
+        int cc = (int)((c >> sh) & 0xFFu);
+
+        r |= (uint32_t)(dc + ((cc - dc) * a256) / 256) << sh;
+    }
+    return r | (d & 0xFFu);
+}
+
 static void hitbox_draw(uint32_t *fb)
 {
     int x0, y0, x1, y1;
     int x, y;
     uint32_t c;
-    int w, h;
 
     if (!fb || !g_vm || !g_hitbox || !vm_ship_box(g_vm, &x0, &y0, &x1, &y1)) {
         return;
     }
     c = k_hit_rgba[g_hitbox];
-    w = x1 - x0;
-    h = y1 - y0;
-    for (y = y0 - 1; y <= y1; y++) {
-        for (x = x0 - 1; x <= x1; x++) {
-            /* Ellipse test in doubled units, centre (x0+x1-1)/2. */
-            long dx = 2L * x + 1 - (x0 + x1);
-            long dy = 2L * y + 1 - (y0 + y1);
-            long rw = w;
-            long rh = h;
-            long in = dx * dx * rh * rh + dy * dy * rw * rw;
-            long lim = rw * rw * rh * rh;
-            long rw2 = rw + 2;
-            long rh2 = rh + 2;
+    for (y = y0; y < y1; y++) {
+        for (x = x0; x < x1; x++) {
             uint32_t *d;
 
             if (x < 0 || y < 0 || x >= RB_NATIVE_W || y >= RB_NATIVE_H) {
                 continue;
             }
             d = &fb[(size_t)y * RB_NATIVE_W + (size_t)x];
-            if (x >= x0 && x < x1 && y >= y0 && y < y1 &&
-                (w < 4 || h < 4 || in <= lim + lim / 4)) {
-                *d = c;
-            } else if (dx * dx * rh2 * rh2 + dy * dy * rw2 * rw2 <=
-                       rw2 * rw2 * rh2 * rh2) {
-                *d = 0x101010FFu;
+            /* Closed outline. The sides are 2 px wide: the playfield is
+             * shown squeezed horizontally (4:3), which would drop a
+             * 1 px column; top and bottom stay 1 px. */
+            if (x <= x0 + 1 || x >= x1 - 2 || y == y0 || y == y1 - 1) {
+                *d = c;                         /* outline */
+            } else {
+                *d = hit_blend(*d, c, 102);     /* 40 % fill */
             }
         }
     }
@@ -679,7 +731,8 @@ enum {
     PAGE_KEYS,
     PAGE_SOUND,
     PAGE_GFX,
-    PAGE_SNDOPT
+    PAGE_SNDOPT,
+    PAGE_ALT
 };
 
 /* GAMEPLAY / GRAPHICS / SOUND list option ids; the setting code below
@@ -690,13 +743,14 @@ enum {
     OPT_SNDX, OPT_FULLSCREEN, OPT_SCALING, OPT_ASPECT, OPT_CFILTER, OPT_ORIENT,
     OPT_CRT0, /* + CRT_COUNT effects */
     OPT_ATTRACT = 30,
-    OPT_SNDTEST = 40, OPT_BACK = 41
+    OPT_MCHIP = 31, OPT_SCHIP = 32, OPT_PRESET = 33, OPT_CUSTOM = 34,
+    OPT_SNDTEST = 40, OPT_BACK = 41, OPT_PU0 = 50
 };
 static const int k_view_game[] = {OPT_DIFF, OPT_RANK, OPT_SUICIDE, OPT_SHIP, OPT_SPEED,
                                   OPT_TRAINING, OPT_LOOP, OPT_ATTRACT, OPT_BACK};
 static const int k_view_gfx[] = {OPT_FULLSCREEN, OPT_SCALING, OPT_ASPECT, OPT_ORIENT,
                                  OPT_PANELS, OPT_PALETTE, OPT_BULLET, OPT_HITBOX,
-                                 OPT_CFILTER, OPT_CRT0 + 0, OPT_CRT0 + 1, OPT_CRT0 + 2,
+                                 OPT_CRT0 + 0, OPT_CRT0 + 1, OPT_CRT0 + 2,
                                  OPT_CRT0 + 3, OPT_CRT0 + 4, OPT_CRT0 + 5, OPT_PACING,
                                  OPT_BACK};
 static const int k_view_snd[] = {OPT_SNDX, OPT_SNDTEST, OPT_BACK};
@@ -704,8 +758,43 @@ static const int k_view_snd[] = {OPT_SNDX, OPT_SNDTEST, OPT_BACK};
  * stage music under the paused match. */
 static const int k_view_snd_p[] = {OPT_SNDX, OPT_BACK};
 
+/* Presets, CUSTOM, and (once CUSTOM is picked) the three single
+ * settings. Nothing here is saved: every launch and every finished
+ * play session goes back to the ORIGINAL PC-98. */
+static int g_custom;
+static int k_view_alt[PU_N + 5];
+
+static void alt_reset(void)
+{
+    g_custom = 0;
+    g_cfilter = CF_ORIGINAL;
+    g_mchip = g_schip = 0;
+    sys_audio_chips(0, 0);
+}
+
+static int alt_view(void)
+{
+    int n = 0, k;
+
+    for (k = 0; k < PU_N; k++) {
+        k_view_alt[n++] = OPT_PU0 + k;
+    }
+    k_view_alt[n++] = OPT_CUSTOM;
+    if (g_custom) {
+        k_view_alt[n++] = OPT_CFILTER;
+        k_view_alt[n++] = OPT_MCHIP;
+        k_view_alt[n++] = OPT_SCHIP;
+    }
+    k_view_alt[n++] = OPT_BACK;
+    return n;
+}
+
 static const int *opt_view(int page, int *n)
 {
+    if (page == PAGE_ALT) {
+        *n = alt_view();
+        return k_view_alt;
+    }
     if (page == PAGE_GAME) {
         *n = (int)(sizeof k_view_game / sizeof k_view_game[0]);
         return k_view_game;
@@ -962,6 +1051,7 @@ static int page_count(void)
     switch (g_page) {
     case PAGE_GAME:
     case PAGE_GFX:
+    case PAGE_ALT:
     case PAGE_SNDOPT: {
         int n;
 
@@ -971,13 +1061,14 @@ static int page_count(void)
     case PAGE_CTRL:  return 3;
     case PAGE_KEYS:  return 11;
     case PAGE_SOUND: return 7;
-    default:         return g_pmenu ? 5 : 7;
+    default:         return g_pmenu ? 5 : 8;
     }
 }
 
 static int opt_page(void)
 {
-    return g_page == PAGE_GAME || g_page == PAGE_GFX || g_page == PAGE_SNDOPT;
+    return g_page == PAGE_GAME || g_page == PAGE_GFX || g_page == PAGE_SNDOPT ||
+           g_page == PAGE_ALT;
 }
 
 static int opt_id(void)
@@ -1101,6 +1192,28 @@ static void change_value(RbGame *g, int dir)
             g_orient = (g_orient + (dir < 0 ? 3 : 1)) % 4;
             sys_set_orientation(g_orient);
             changed = 1;
+        } else if (opt >= OPT_PU0 && opt < OPT_PU0 + PU_N) {
+            /* Host only: filter, music chip and sfx chip of one machine. */
+            int k = opt - OPT_PU0;
+
+            g_cfilter = k_pu_set[k][0];
+            g_mchip = g_schip = k_pu_set[k][1];
+            sys_audio_chips(g_mchip, g_schip);
+            g_custom = 0;
+            changed = 1;
+        } else if (opt == OPT_CUSTOM) {
+            /* Shows the three single settings, starting from the
+             * current ones. */
+            g_custom = !g_custom;
+            changed = 1;
+        } else if (opt == OPT_MCHIP || opt == OPT_SCHIP) {
+            /* Host only: plays the music / effects through another
+             * chip's voices, saved. */
+            int *ch = opt == OPT_MCHIP ? &g_mchip : &g_schip;
+
+            *ch = (*ch + (dir < 0 ? CHIP_N - 1 : 1)) % CHIP_N;
+            sys_audio_chips(g_mchip, g_schip);
+            changed = 1;
         } else if (opt == OPT_ATTRACT) {
             /* Host only: demo play after the ranking, saved. */
             g_attract_on = !g_attract_on;
@@ -1168,7 +1281,7 @@ static void pause_back_to_list(void)
     g_cursor = 0;
     g_capture = 0;
     g_pmenu = 1;
-    g_pcur = 1;
+    g_pcur = 0;
     g_pprev = 0xFFFFu;
     vm_text_restore(g_vm, g_ptext);
 }
@@ -1188,10 +1301,12 @@ static void activate_row(RbGame *g)
         } else if (g_cursor == 2) {
             enter_page(PAGE_SNDOPT);
         } else if (g_cursor == 3) {
-            enter_page(PAGE_CTRL);
+            enter_page(g_pmenu ? PAGE_CTRL : PAGE_ALT);
         } else if (g_cursor == 4) {
-            handoff(3);
+            enter_page(PAGE_CTRL);
         } else if (g_cursor == 5) {
+            handoff(3);
+        } else if (g_cursor == 6) {
             handoff(4);
         } else {
             handoff(2);
@@ -1203,7 +1318,12 @@ static void activate_row(RbGame *g)
         int from = g_page;
 
         enter_page(PAGE_ROOT);
-        g_cursor = from == PAGE_GFX ? 1 : from == PAGE_SNDOPT ? 2 : 0;
+        g_cursor = from == PAGE_GFX ? 1 : from == PAGE_SNDOPT ? 2 : from == PAGE_ALT ? 3 : 0;
+        menu_ok();
+        return;
+    }
+    if (g_page == PAGE_ALT && (opt_id() >= OPT_PU0 || opt_id() == OPT_CUSTOM)) {
+        change_value(g, 1);
         menu_ok();
         return;
     }
@@ -1218,7 +1338,7 @@ static void activate_row(RbGame *g)
             menu_ok();
         } else if (g_cursor == 2) {
             enter_page(PAGE_ROOT);
-            g_cursor = 3;
+            g_cursor = g_pmenu ? 3 : 4;
             menu_ok();
         }
         return;
@@ -1289,9 +1409,13 @@ static void go_back(void)
         enter_page(PAGE_ROOT);
         g_cursor = 2;
         break;
-    case PAGE_CTRL:
+    case PAGE_ALT:
         enter_page(PAGE_ROOT);
         g_cursor = 3;
+        break;
+    case PAGE_CTRL:
+        enter_page(PAGE_ROOT);
+        g_cursor = g_pmenu ? 3 : 4;
         break;
     case PAGE_SOUND:
         enter_page(PAGE_SNDOPT);
@@ -1635,8 +1759,8 @@ static void host_menu_paint(void)
     char num[8];
     char track[24];
     const char *title = "CONFIG";
-    static const char *root_name[7] = {
-        "GAMEPLAY", "GRAPHICS", "SOUND", "CONTROLS", "RANKING", "PASSWORD", "BACK"
+    static const char *root_name[8] = {
+        "GAMEPLAY", "GRAPHICS", "SOUND", "ALTERNATE VERSIONS", "CONTROLS", "RANKING", "PASSWORD", "BACK"
     };
     static const char *key_name[11] = {
         "UP", "DOWN", "LEFT", "RIGHT", "FIRE", "MODE", "SHIFT", "PAUSE",
@@ -1644,7 +1768,7 @@ static void host_menu_paint(void)
     };
 
     if (g_pmenu == 1 && g_vm) {
-        static const char *pitem[3] = {"RESUME", "CONFIG", "EXIT"};
+        static const char *pitem[2] = {"RESUME", "MAIN MENU"};
 
         /* Dark box in the middle of the playfield, the match's text
          * (HUD) left as it is around it. */
@@ -1653,7 +1777,7 @@ static void host_menu_paint(void)
             vm_text_write(g_vm, 26, row, "", 14, 0);
         }
         vm_text_write(g_vm, 35, 9, "PAUSE", 0, 0xE1u);
-        for (i = 0; i < 3; i++) {
+        for (i = 0; i < 2; i++) {
             paint_option_row(34, 0, 11 + i * 2, pitem[i], NULL, 0, i == g_pcur, 0);
         }
         return;
@@ -1674,6 +1798,8 @@ static void host_menu_paint(void)
         title = "GRAPHICS";
     } else if (g_page == PAGE_SNDOPT) {
         title = "SOUND";
+    } else if (g_page == PAGE_ALT) {
+        title = "ALTERNATE VERSIONS";
     } else if (g_page == PAGE_CTRL) {
         title = "CONTROLS";
     } else if (g_page == PAGE_KEYS) {
@@ -1689,7 +1815,7 @@ static void host_menu_paint(void)
             paint_line(i, menu_row(4, i), proot[i], NULL, 0);
         }
     } else if (g_page == PAGE_ROOT) {
-        for (i = 0; i < 7; i++) {
+        for (i = 0; i < 8; i++) {
             paint_line(i, menu_row(4, i), root_name[i], NULL, 0);
         }
     } else if (opt_page()) {
@@ -1698,7 +1824,7 @@ static void host_menu_paint(void)
         static const char *k_orient[4] = {"0", "90", "180", "270"};
 
         for (i = 0; i < nv; i++) {
-            int r = game_row(i) + (g_page != PAGE_GFX ? i : 0);
+            int r = game_row(i) + (g_page != PAGE_GFX && g_page != PAGE_ALT ? i : 0);
 
             switch (v[i]) {
             case 0: paint_line(i, r, "DIFFICULTY", k_diff[diff_index()], diff_index() != 2); break;
@@ -1718,6 +1844,13 @@ static void host_menu_paint(void)
             case 14: paint_line(i, r, "SCALING", g_scaling == 0 ? "SMOOTH" : g_scaling == 1 ? "SHARP" : g_scaling == 2 ? "INTEGER" : "AUTO", g_scaling != 3); break;
             case 15: paint_line(i, r, "ASPECT", g_aspect43 ? "4X3" : "1X1", !g_aspect43); break;
             case 16: paint_line(i, r, "COLOR FILTER", cfilter_name(g_cfilter), g_cfilter != CF_ORIGINAL); break;
+            case OPT_PU0: case OPT_PU0 + 1: case OPT_PU0 + 2: case OPT_PU0 + 3:
+            case OPT_PU0 + 4: case OPT_PU0 + 5: case OPT_PU0 + 6: case OPT_PU0 + 7: case OPT_PU0 + 8:
+                paint_line(i, r, k_pu_name[v[i] - OPT_PU0], !g_custom && pu_index() == v[i] - OPT_PU0 ? "ON" : NULL, !g_custom && pu_index() == v[i] - OPT_PU0);
+                break;
+            case OPT_CUSTOM: paint_line(i, r, "CUSTOM", g_custom || pu_index() < 0 ? "ON" : NULL, g_custom || pu_index() < 0); break;
+            case OPT_MCHIP: paint_line(i, r, "MUSIC CHIP", k_chip_name[g_mchip], g_mchip != 0); break;
+            case OPT_SCHIP: paint_line(i, r, "SFX CHIP", k_chip_name[g_schip], g_schip != 0); break;
             case OPT_ATTRACT: paint_line(i, r, "ATTRACT MODE", g_attract_on ? "ON" : "OFF", !g_attract_on); break;
             case OPT_ORIENT: paint_line(i, r, "ORIENTATION", k_orient[g_orient & 3], g_orient != 0); break;
             case OPT_SNDTEST: paint_line(i, r, "SOUND TEST", NULL, 0); break;
@@ -1730,6 +1863,8 @@ static void host_menu_paint(void)
                 }
                 break;
             }
+        }
+        if (g_page == PAGE_ALT) {
         }
     } else if (g_page == PAGE_CTRL) {
         paint_line(0, menu_row(4, 0), "JOYSTICK", joy_value(), joy_flag());
@@ -2042,6 +2177,7 @@ void game_init(RbGame *g, const RbDisk *disk)
     gfx_set_bullet_color(g_bullet_c);
     hit_fix();
     sys_audio_extra(g_sndx);
+    sys_audio_chips(g_mchip, g_schip);
     sys_set_scaling(g_scaling);
     sys_set_aspect(g_aspect43);
     sys_set_orientation(g_orient);
@@ -2145,6 +2281,18 @@ static void step_script(RbGame *g)
     g->player.lives = info.lives;
     g->player.pos.x = info.ship_x;
     g->player.pos.y = info.ship_y;
+    {
+        /* End of a play session (game over, ending, quit to the
+         * title): alternate versions go back to the ORIGINAL PC-98. */
+        static int was_play;
+
+        if (info.chunk >= 2 && !g_demo) {
+            was_play = 1;
+        } else if (was_play && info.chunk < 2) {
+            was_play = 0;
+            alt_reset();
+        }
+    }
     if (info.chunk >= 2 && info.chunk <= 6) {
         g->stage = (uint16_t)(info.chunk - 1u);
         if (g->state == RB_STATE_TITLE || g->state == RB_STATE_RANKING) {
@@ -3470,10 +3618,10 @@ static void pause_input(RbGame *g)
         edge = (uint16_t)(now & (uint16_t)~g_pprev);
         g_pprev = now;
         if (edge & RB_BTN_UP) {
-            g_pcur = (g_pcur + 2) % 3;
+            g_pcur = (g_pcur + 1) % 2;
             menu_beep();
         } else if (edge & RB_BTN_DOWN) {
-            g_pcur = (g_pcur + 1) % 3;
+            g_pcur = (g_pcur + 1) % 2;
             menu_beep();
         } else if ((edge & 0x2000u) || ((edge & 0x1000u) && g_pcur == 0)) {
             /* RESUME (also START / Esc / pad B). */
@@ -3482,14 +3630,6 @@ static void pause_input(RbGame *g)
             g_pmenu = 0;
             menu_ok();
         } else if ((edge & 0x1000u) && g_pcur == 1) {
-            g_pmenu = 2;
-            g_menu_latched = 1;
-            g_page = PAGE_ROOT;
-            g_cursor = 0;
-            g_capture = 0;
-            g_menu_prev = 0xFFFFu;
-            menu_ok();
-        } else if ((edge & 0x1000u) && g_pcur == 2) {
             menu_ok();
             pause_exit(g);
         }
@@ -3846,7 +3986,6 @@ void game_render(const RbGame *g)
 
             if (frame && vm_gfx_active(g_vm)) {
                 vm_present(g_vm, frame, RB_NATIVE_W, RB_NATIVE_H);
-                hitbox_draw(frame);
             } else {
                 RbVmSprite spr[256];
                 int n;
@@ -3914,8 +4053,32 @@ void game_render(const RbGame *g)
         if (!g_pmenu && !menu_visible()) {
             memcpy(snap_raw, px, n * 4u);
             cfilter_set_layer(gfx_layer_mask());
+            cfilter_set_bg(gfx_bg_luma());
+            cfilter_set_kind(gfx_kind_mask());
+            {
+                const uint16_t *wsid;
+                const uint8_t *wbgi;
+                int wsc = gfx_world(&wsid, &wbgi);
+
+                cfilter_set_world(wsid, wbgi, wsc);
+                {
+                    const uint8_t *tm;
+                    const uint32_t *tp;
+
+                    gfx_text_mask(&tm, &tp);
+                    cfilter_set_text(tm, tp);
+                }
+            }
+            {
+                RbVmInfo zi;
+
+                vm_info(g_vm, &zi);
+                cfilter_set_stage(zi.chunk >= 2 && zi.chunk <= 6 ? (int)zi.chunk - 1 : 1);
+            }
             cfilter_apply(px, RB_NATIVE_W, RB_NATIVE_H, g_cfilter);
             crt_apply(px, RB_NATIVE_W, 80, 0, 480, RB_NATIVE_H, g_crt, g->frame);
+            /* after the filters, so its 1 px sides stay crisp */
+            hitbox_draw(px);
             memcpy(snap_f, px, n * 4u);
             snap_ok = 1;
         } else if (g_pmenu && snap_ok) {
