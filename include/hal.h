@@ -269,9 +269,9 @@ void      sys_set_orientation(int o);
  * renderer's logical size), mouse cursor hidden while it is on. */
 void sys_set_fullscreen(int on);
 int  sys_fullscreen(void);
-/* SCALING: 0 SMOOTH, 1 SHARP, 2 INTEGER (default). */
+/* SCALING: 0 SMOOTH, 1 SHARP, 2 INTEGER, 3 AUTO (default). */
 void sys_set_scaling(int mode);
-/* ASPECT: 1 = 4:3 (default, PC-98 monitor shape), 0 = 1:1 square pixels. */
+/* ASPECT: 1 = 4:3 screen (default, PC-98 monitor shape), 0 = 8:5 (640x400, square pixels). */
 void sys_set_aspect(int a43);
 /* 1 once per F11 press since the last call. */
 int  sys_take_fullscreen_key(void);
