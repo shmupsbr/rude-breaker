@@ -616,10 +616,10 @@ static void flaws(uint32_t *px, int w, int h, int mode)
          * sub-palette; soft composite. */
         /* HuC6260 VCE: background tiles are 8x8 machine pixels with one
          * of 16 sub-palettes of 16 (entry 0 shared), sprites 16x16 with
-         * one sub-palette of 15 + transparent. After lowres() a machine
-         * pixel is 400/224 host pixels, so a tile is 14 and a sprite
-         * cell 29 host pixels, from the playfield's left edge (x 80). */
-        int tx, ty, t = 14, sc = 29, x0 = w >= 560 ? 80 : 0, x1 = w >= 560 ? 560 : w;
+         * one sub-palette of 15 + transparent. On the game's own pixels
+         * (2 host pixels wide) a tile is 16 and a sprite cell 32 host
+         * pixels, from the playfield's left edge (x 80). */
+        int tx, ty, t = 16, sc = 32, x0 = w >= 560 ? 80 : 0, x1 = w >= 560 ? 560 : w;
         size_t i, n = (size_t)w * h;
 
         g_lc_mask = g_layer;
@@ -1039,7 +1039,7 @@ static __attribute__((unused)) void zx_screen(uint32_t *px, int w, int h)
  * pixels "lines" tall and as many wide as square pixels give (no
  * stretching), each the average of the host pixels it covers, then
  * drawn back nearest-neighbour. The HUD text is painted after. */
-static void lowres(uint32_t *px, int w, int h, int lines)
+static __attribute__((unused)) void lowres(uint32_t *px, int w, int h, int lines)
 {
     float s = (float)h / (float)lines;
     int gw = (int)(480.0f / s + 0.5f), mx, my;
@@ -1084,10 +1084,10 @@ static void lowres(uint32_t *px, int w, int h, int lines)
  * The playfield (x 80..559, 480x400) box-averaged into "lines" rows
  * of square machine pixels (gw wide), and drawn back nearest-neighbour
  * with the same cell edges. */
-#define MG_MAX (320 * 224)
+#define MG_MAX (320 * 400)
 static uint32_t g_mg[MG_MAX];
 static uint8_t g_mg_spr[MG_MAX];
-static int g_mg_x[321], g_mg_y[257];
+static int g_mg_x[321], g_mg_y[401];
 static int g_mg_gwf;   /* columns over the playfield, 0 = square pixels */
 
 static int mg_read(const uint32_t *px, int w, int h, int lines, int *gwp)
@@ -1095,7 +1095,7 @@ static int mg_read(const uint32_t *px, int w, int h, int lines, int *gwp)
     float s = (float)h / (float)lines, sx;
     int gw = g_mg_gwf ? g_mg_gwf : (int)(480.0f / s + 0.5f), mx, my;
 
-    if (w < 560 || s <= 1.0f || gw > 320) {
+    if (w < 560 || s < 1.0f || gw > 320) {
         return 0;
     }
     sx = 480.0f / (float)gw;
@@ -1666,7 +1666,8 @@ static void zx_world(uint32_t *px, int w, int h)
 }
 
 /* ---- MSX2 SCREEN 5 -------------------------------------------------
- * 212 lines; 16 colours out of the V9938's 512 (3 bits per channel),
+ * On the game's own pixels (no resampling: a 212-line grid made
+ * everything shimmer as it moved); 16 colours out of the V9938's 512 (3 bits per channel),
  * chosen for the scene: warm-started from the last palette and refined
  * on a 512-bin histogram, entries snapped to the 3-bit grid, and only
  * swapped in when the new set is clearly better (no flicker). Then
@@ -1718,10 +1719,13 @@ static void msx2_screen(uint32_t *px, int w, int h)
     static uint16_t key[MG_MAX];
     int gw, n, i, k, j, it, pal[16];
 
-    if (!mg_read(px, w, h, 212, &gw)) {
+    g_mg_gwf = 240;                        /* the game's own pixels: no resampling */
+    if (!mg_read(px, w, h, 400, &gw)) {
+        g_mg_gwf = 0;
         return;
     }
-    n = gw * 212;
+    g_mg_gwf = 0;
+    n = gw * 400;
     memset(hist, 0, sizeof hist);
     for (i = 0; i < n; i++) {
         uint32_t p = g_mg[i];
@@ -1816,16 +1820,15 @@ static void msx2_screen(uint32_t *px, int w, int h)
     for (i = 0; i < n; i++) {
         g_mg[i] = m2_rgb(g_m2_pal[g_m2_map[key[i]]]);
     }
-    mg_write(px, w, h, 212, gw);
+    mg_write(px, w, h, 400, gw);
 }
 
 
-/* ---- MEGA DRIVE (H40, 320x224) --------------------------------------
- * 224 lines, 320 columns over the playfield (real H40 width; the
- * side panels stand for the border). 9-bit colour (3 bits per channel) on the VDP's
+/* ---- MEGA DRIVE (interlace, 8x16 tiles) ----------------------------
+ * 9-bit colour (3 bits per channel) on the VDP's
  * non-linear DAC levels; four palette lines of 15 colours plus the
  * shared transparent/backdrop (black): 61 colours on screen. Lines 0-1
- * serve the scenery, 2-3 the sprites; every 8x8 tile picks one line
+ * serve the scenery, 2-3 the sprites; every 8x16 tile picks one line
  * for its scenery pixels and one for its sprite pixels. The lines are
  * refitted to the scene each frame from the last ones and only
  * swapped in when clearly better (no flicker). */
@@ -1833,6 +1836,14 @@ static const uint8_t k_md_lv[8] = {0, 52, 87, 116, 144, 172, 206, 255};
 #define MDL 15
 #define MDT_W 40
 #define MDT_H 28
+/* The grid is the game's own pixels: 240 columns of two host pixels
+ * and all 400 lines (the VDP's interlace mode, 8x16 tiles), so nothing
+ * is resampled. A 320x224 grid over a 480x400 playfield cut pixels to
+ * uneven widths and heights, and everything that moves against that
+ * grid (sprites, the HUD against the anchored scenery) shimmered. */
+#define MD_COLS 240
+#define MD_ROWS 400
+#define MDT_PH 16
 static int g_md_pal[4][MDL];
 static int g_md_ok, g_md_seed;
 static uint8_t g_md_q[256];
@@ -1963,6 +1974,20 @@ static void md_fit(const long *hist, int *pal)
     }
 }
 
+/* tile of grid pixel i: scenery tiles stay in page space (glued to
+ * the scrolling scenery), sprite tiles in screen space (glued to the
+ * sprites and the HUD, which do not scroll) */
+static int g_rot_sc;
+static int md_tile(int i, int gw, int spr)
+{
+    int y = i / gw;
+
+    if (spr && g_rot_sc) {
+        y = (y - g_rot_sc + MD_ROWS) % MD_ROWS;
+    }
+    return (y / MDT_PH) * MDT_W + (i % gw) / 8;
+}
+
 static void md_screen(uint32_t *px, int w, int h)
 {
     static uint16_t key[MG_MAX];
@@ -1971,8 +1996,8 @@ static void md_screen(uint32_t *px, int w, int h)
     static uint16_t map[4][512];
     int gw, n, i, l, t, pass;
 
-    g_mg_gwf = 320;
-    if (!mg_read(px, w, h, 224, &gw)) {
+    g_mg_gwf = MD_COLS;
+    if (!mg_read(px, w, h, MD_ROWS, &gw)) {
         g_mg_gwf = 0;
         return;
     }
@@ -1980,13 +2005,13 @@ static void md_screen(uint32_t *px, int w, int h)
     if (!g_md_ok) {
         md_build();
     }
-    n = gw * 224;
+    n = gw * MD_ROWS;
     if (!g_md_seed) {
         /* first frame: dark tiles to line 0/2, light ones to 1/3 */
         static long ts[MDT_W * MDT_H], tn[MDT_W * MDT_H];
 
         for (i = 0; i < n; i++) {
-            int tt = (i / gw / 8) * MDT_W + (i % gw) / 8;
+            int tt = md_tile(i, gw, g_mg_spr[i]);
 
             ts[tt] += LUM24(g_mg[i]);
             tn[tt]++;
@@ -2006,7 +2031,7 @@ static void md_screen(uint32_t *px, int w, int h)
 
         memset(hist, 0, sizeof hist);
         for (i = 0; i < n; i++) {
-            int tt = (i / gw / 8) * MDT_W + (i % gw) / 8;
+            int tt = md_tile(i, gw, g_mg_spr[i]);
 
             hist[g_mg_spr[i] ? 2 + g_md_tl[1][tt] : g_md_tl[0][tt]][key[i]]++;
         }
@@ -2030,7 +2055,7 @@ static void md_screen(uint32_t *px, int w, int h)
 
             memset(te, 0, sizeof te);
             for (i = 0; i < n; i++) {
-                int tt = (i / gw / 8) * MDT_W + (i % gw) / 8, k = key[i], b = g_mg_spr[i] ? 2 : 0;
+                int tt = md_tile(i, gw, g_mg_spr[i]), k = key[i], b = g_mg_spr[i] ? 2 : 0;
 
                 te[tt][b] += g_md_d[k][map[b][k]];
                 te[tt][b + 1] += g_md_d[k][map[b + 1][k]];
@@ -2046,13 +2071,15 @@ static void md_screen(uint32_t *px, int w, int h)
         }
     }
     for (i = 0; i < n; i++) {
-        int tt = (i / gw / 8) * MDT_W + (i % gw) / 8;
+        int tt = md_tile(i, gw, g_mg_spr[i]);
         int l2 = g_mg_spr[i] ? 2 + g_md_tl[1][tt] : g_md_tl[0][tt];
 
         g_mg[i] = md_rgb(map[l2][key[i]]);
     }
-    mg_write(px, w, h, 224, gw);
+    mg_write(px, w, h, MD_ROWS, gw);
 }
+
+
 
 static void cf_apply_screen(uint32_t *px, int w, int h, int mode)
 {
@@ -2065,9 +2092,8 @@ static void cf_apply_screen(uint32_t *px, int w, int h, int mode)
     }
     /* machine line counts: PCE 224, ZX 192 (C64 is its 2x2 cell grid,
      * 200 lines; GAME BOY, VIRTUAL BOY and GAME GEAR keep their dots) */
-    if (mode == CF_PCENGINE) {
-        lowres(px, w, h, 224);
-    }
+    /* PC ENGINE keeps the game's own pixel grid: resampling to 224
+     * lines made sprites and the HUD shimmer against the scenery */
     if (mode == CF_ZX) {
         zx_world(px, w, h);     /* zx_clash (screen cells) and the Syder-style zx_screen stay as fallback / unused */
         return;
@@ -2105,7 +2131,65 @@ static void rot_rows(void *dst, const void *src, int w, int h, int sc, size_t es
     memcpy(dst, (const char *)src + top * row, (size_t)sc * row);
 }
 
-void cfilter_apply(uint32_t *px, int w, int h, int mode)
+/* ---- Hardware pixel grid (PC ENGINE 256x224, MSX2 256x212) ----------
+ * Point-samples the finished playfield onto the console's grid, the way
+ * the hardware composes it: background cells are fixed to the scrolling
+ * scenery (page rows, so the scenery moves rigidly, a whole cell pattern
+ * at a time), sprite and HUD cells are fixed to the screen. Nothing
+ * resamples a sprite at a different phase from one frame to the next,
+ * so it never changes shape (the old box resample in page space made
+ * sprites and the score line shimmer). Fixed nearest mapping, no new
+ * colours. sc: page scroll (screen row y shows page row (y + sc) % h). */
+static uint32_t g_hg_src[640 * 400];
+
+static void hw_grid(uint32_t *px, int w, int h, int cols, int rows, int sc)
+{
+    int x, y, c;
+    static int cx[480], cc[480];
+
+    if (w != 640 || h != 400) {
+        return;
+    }
+    memcpy(g_hg_src, px, (size_t)w * h * 4u);
+    for (c = 0; c < 480; c++) {
+        cc[c] = c * cols / 480;
+        cx[c] = 80 + (int)(((float)cc[c] + 0.5f) * 480.0f / (float)cols);
+    }
+    for (y = 0; y < h; y++) {
+        int rs = y * rows / h, ys = (int)(((float)rs + 0.5f) * (float)h / (float)rows);
+        int py = (y + sc) % h, rb = py * rows / h;
+        int pb0 = (rb * h + rows - 1) / rows, pb1 = ((rb + 1) * h + rows - 1) / rows;
+        int pc = (int)(((float)rb + 0.5f) * (float)h / (float)rows);
+        int yb = ((pc - sc) % h + h) % h;
+
+        for (x = 80; x < 560; x++) {
+            int xs = cx[x - 80];
+            size_t sa = (size_t)ys * w + xs, ba = (size_t)yb * w + xs;
+            uint32_t o;
+
+            if ((g_layer && g_layer[sa]) || (g_w_txt && g_w_txt[sa])) {
+                o = g_hg_src[sa];
+            } else {
+                o = g_hg_src[ba];
+                if ((g_layer && g_layer[ba]) || (g_w_txt && g_w_txt[ba])) {
+                    int q;
+
+                    for (q = pb0; q < pb1; q++) {   /* scenery under a sprite */
+                        size_t a = (size_t)(((q - sc) % h + h) % h) * w + xs;
+
+                        if (!(g_layer && g_layer[a]) && !(g_w_txt && g_w_txt[a])) {
+                            o = g_hg_src[a];
+                            break;
+                        }
+                    }
+                }
+            }
+            px[(size_t)y * w + x] = o;
+        }
+    }
+}
+
+static void cf_apply_inner(uint32_t *px, int w, int h, int mode)
 {
     int sc = g_w_scroll;
 
@@ -2126,9 +2210,26 @@ void cfilter_apply(uint32_t *px, int w, int h, int mode)
         rot_rows(g_rot_px, px, w, h, sc, 4);
         if (L) { rot_rows(g_rot_l, L, w, h, sc, 1); g_layer = g_rot_l; }
         if (K) { rot_rows(g_rot_k, K, w, h, sc, 1); g_kind = g_rot_k; }
+        g_rot_sc = sc;
         cf_apply_screen(g_rot_px, w, h, mode);
+        g_rot_sc = 0;
         g_layer = L;
         g_kind = K;
         rot_rows(px, g_rot_px, w, h, h - sc, 4);
+    }
+}
+
+void cfilter_apply(uint32_t *px, int w, int h, int mode)
+{
+    int sc = g_w_bgi && g_w_scroll > 0 && g_w_scroll < h ? g_w_scroll : 0;
+
+    cf_apply_inner(px, w, h, mode);
+    if (!px) {
+        return;
+    }
+    if (mode == CF_PCENGINE) {
+        hw_grid(px, w, h, 256, 224, sc);   /* 256-dot mode, 224 lines */
+    } else if (mode == CF_MSX2) {
+        hw_grid(px, w, h, 256, 212, sc);   /* SCREEN 5: 256x212 */
     }
 }
