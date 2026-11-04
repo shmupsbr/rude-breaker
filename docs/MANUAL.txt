@@ -925,9 +925,12 @@ loop 2 the run ends, unless Kraken appears (below). In loop 2:
 
 KRAKEN is the true last boss. It appears only after stage 5 of loop 2,
 and only when you took every hidden medal in both loops and never lost
-a ship. The recurring mid-boss (the ship that enters and leaves in
-every stage, not the stage 5 fortress) flies off, waits, and returns
-as only its central hull, named Kraken, with four segmented arms.
+a ship. The stage 5 boss falls off the bottom of the screen while it
+breaks apart, and the white flash still plays, so that blast is not
+seen in the middle of the screen. If Kraken is not due, the run then
+ends as usual. If it is, three seconds after the flash the boss's
+central part rises back, puts out four segmented arms, and the fight
+starts.
 Each arm ends in a glowing orb and bends toward your ship. Kraken
 cannot be hit until all four arms are destroyed. Each arm has half of
 Kraken's hit points. Kraken fires every pattern the stage 5 fortress
@@ -937,7 +940,9 @@ a time from random arms when three remain, one from each arm when two
 remain, and very fast when one remains. Every 10 seconds one random
 arm (the same arm can be picked again) stretches out to hit you, and
 that arm does not shoot while it is stretched. The other attacks
-continue. Destroying Kraken plays the ending.
+continue. Destroying Kraken explodes it in the middle of the screen,
+the boss death the stage 5 boss no longer plays there, and then the
+ending.
 
 The original debug cheat is still in the code. During the game, pause
 with Escape and type N E K O C O. Then:

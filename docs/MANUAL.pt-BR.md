@@ -939,10 +939,12 @@ termina, salvo se o Kraken aparecer (abaixo). No loop 2:
 
 KRAKEN é o chefe final verdadeiro. Ele só aparece depois da fase 5 do
 loop 2, e só se você pegou todas as medalhas escondidas nos dois loops
-e nunca perdeu a nave. O chefe que entra e sai em toda fase (não a
-fortaleza da fase 5) vai embora, espera, e volta só com o casco central,
-chamado Kraken, com quatro braços segmentados. Cada braço termina numa
-esfera que brilha e se curva na direção da sua nave. O Kraken não leva
+e nunca perdeu a nave. O chefe da fase 5 cai pela borda de baixo da
+tela enquanto se desfaz, e o clarão branco continua, então a explosão
+não acontece no meio da tela. Se o Kraken não for acontecer, a partida
+segue o final de sempre. Se for, três segundos depois do clarão a parte
+central sobe de volta, solta quatro braços segmentados, e a luta começa.
+Cada braço termina numa esfera que brilha e se curva na direção da sua nave. O Kraken não leva
 dano até os quatro braços caírem. Cada braço tem metade dos pontos de
 vida do Kraken. O Kraken dispara todos os padrões da fortaleza da fase
 5, no dobro da velocidade, e troca de padrão a cada 10 segundos. Os
@@ -951,7 +953,9 @@ dois ao mesmo tempo de braços aleatórios com três, um de cada braço
 com dois, e muito rápido com um só. A cada 10 segundos um braço
 aleatório (o mesmo pode ser escolhido de novo) se estica para te
 atingir, e esse braço não atira enquanto está esticado. Os outros
-ataques continuam. Destruir o Kraken mostra o final.
+ataques continuam. Destruir o Kraken explode ele no meio da tela, a
+morte de chefe que o chefe da fase 5 não mostra mais ali, e então vem
+o final.
 
 O cheat de debug original continua no código. Durante a partida,
 pause com o Esc e digite N E K O C O. Depois:
