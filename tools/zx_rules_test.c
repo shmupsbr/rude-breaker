@@ -98,6 +98,8 @@ int main(void)
         put(316, y, 0x33333300u, 1, 0xFFF8, 1, 50, 0);
     }
     put(338, 316, 0xC0C0C000u, 1, 0xFFF8, 1, 160, 0);
+    put(320, 310, 0x5A5A5A00u, 1, 0xFFF8, 1, 90, 0);
+    put(324, 312, 0x99999900u, 1, 0xFFF8, 1, 150, 0);
     for (x = 304; x < 328; x++) {
         put(x, 316, 0x44444400u, 1, 0xFFF8, 1, 40, 0);
     }
@@ -121,6 +123,8 @@ int main(void)
     expect("ship light is white", (ship_hi & 0xFFFFFF00u) == 0xFFFFFF00u);
     expect("ship grey is black", (ship_mid & 0xFFFFFF00u) == 0x00000000u);
     expect("ship dark line is black", (ship_lo & 0xFFFFFF00u) == 0x00000000u);
+    expect("ship mid-dark seam is black", (at(320, 310) & 0xFFFFFF00u) == 0x00000000u);
+    expect("ship lighter panel stays white", (at(324, 312) & 0xFFFFFF00u) == 0xFFFFFF00u);
     expect("side cannon stays white", (at(338, 316) & 0xFFFFFF00u) == 0xFFFFFF00u);
     expect("wing tip stays white", (tip & 0xFFFFFF00u) == 0xFFFFFF00u);
     opt_hi = at(252, 310);
@@ -129,17 +133,35 @@ int main(void)
     expect("option detail is black", (opt_lo & 0xFFFFFF00u) == 0x00000000u);
     expect("star stays white", (at(400, 40) & 0xFFFFFF00u) == 0xFFFFFF00u);
 
-    /* Clouds: a light-blue field must dither, not flatten to one cyan. */
+    /* Clouds stage: the sky is solid cyan. The white clouds dither with black. */
     clear_frame();
     fill(80, 0, 112, 32, 0xB4DCE800u, 0, 0, 0, 0, 3);
     apply(3, 10);
+    white = blue = other = 0;
     for (y = 2; y < 30; y++) {
         for (x = 82; x < 110; x++) {
             uint32_t c = at(x, y) & 0xFFFFFF00u;
 
-            if (c == 0xFFFFFF00u || c == 0xD7D7D700u) {
+            if (c == 0x00D7D700u) {
+                blue++;
+            } else {
+                other++;
+            }
+        }
+    }
+    expect("sky is solid cyan", blue > 0 && other == 0);
+    printf("  sky cyan=%d other=%d\n", blue, other);
+    clear_frame();
+    fill(80, 0, 112, 32, 0xE4E4E400u, 0, 0, 0, 0, 3);
+    apply(3, 10);
+    white = blue = other = 0;
+    for (y = 2; y < 30; y++) {
+        for (x = 82; x < 110; x++) {
+            uint32_t c = at(x, y) & 0xFFFFFF00u;
+
+            if (c == 0xFFFFFF00u) {
                 white++;
-            } else if (c == 0x00D7D700u || c == 0x00FFFF00u || c == 0x0000D700u || c == 0x0000FF00u) {
+            } else if (c == 0x00000000u) {
                 blue++;
             } else {
                 other++;
@@ -147,9 +169,15 @@ int main(void)
         }
     }
     expect("clouds use white", white > 0);
-    expect("clouds use blue or cyan", blue > 0);
-    expect("clouds stay in light blue and white", other == 0);
-    printf("  clouds white=%d blue=%d other=%d\n", white, blue, other);
+    expect("clouds use black", blue > 0);
+    expect("clouds are only white and black", other == 0);
+    printf("  clouds white=%d black=%d other=%d\n", white, blue, other);
+
+    /* Stage 1 asteroids: dim rock, solid dark magenta, not black. */
+    clear_frame();
+    fill(80, 80, 112, 112, 0x40204000u, 0, 0, 0, 40, 1);
+    apply(1, 10);
+    expect("stage 1 asteroids are dark magenta", (at(90, 90) & 0xFFFFFF00u) == 0xD700D700u);
 
     /* Dark green city field on another stage. */
     clear_frame();
@@ -247,7 +275,8 @@ int main(void)
                 }
             }
         }
-        expect("scenery keeps a hue", hue > 0);
+        expect("scenery keeps a hue", hue > 0 && grey == 0);
+        expect("scenery is one solid colour", hue > 0 && (at(86, 70) & 0xFFFFFF00u) == (at(90, 80) & 0xFFFFFF00u));
         printf("  hue=%d grey=%d sample=%06X\n", hue, grey, (at(90, 80) >> 8) & 0xFFFFFF);
     }
 

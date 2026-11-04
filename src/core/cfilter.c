@@ -1290,11 +1290,10 @@ static void zx_clash(uint32_t *px, int w, int h)
 /* ---- ZX SPECTRUM, world-locked attributes -------------------------
  * Machine pixels are 2x2 host pixels and attribute cells 16x16 host
  * pixels (8x8 machine pixels), both on the scrolling page's own grid,
- * so the scenery's colours move with it and never crawl. Each scenery
- * cell gets INK + PAPER from the 8 base colours with one BRIGHT bit
- * (black paper preferred), worked out once from the cell's art and
- * kept until that art (or the palette) changes. Scenery stays on the
- * dark (non-BRIGHT) colours. Every sprite family gets one BRIGHT ink,
+ * so the scenery's colours move with it and never crawl. Scenery is one
+ * solid dark (non-BRIGHT) colour. The clouds stage is the exception:
+ * the sky is solid cyan and the clouds are white with a black dither.
+ * Every sprite family gets one BRIGHT ink,
  * voted over its first frames and then fixed for good; its pixels are
  * that ink or black, whatever it overlaps, so a sprite never changes
  * colour. Stars stay white (a later pass). */
@@ -1362,6 +1361,32 @@ static int zx_dark_near(uint32_t rgb)
     return bj;
 }
 
+/* Nearest dark colour that keeps a tint. Black and grey lose when the
+ * pixel is actually coloured, so a blue-grey field does not go grey. */
+static int zx_solid_ink(uint32_t rgb)
+{
+    const uint16_t *d = g_zc_d[K24_12(rgb)];
+    int r = (int)(rgb >> 16), g = (int)((rgb >> 8) & 255), b = (int)(rgb & 255);
+    int hi = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    int lo = r < g ? (r < b ? r : b) : (g < b ? g : b);
+    int j, bj = 0;
+
+    for (j = 1; j < 8; j++) {
+        if (d[j] < d[bj]) {
+            bj = j;
+        }
+    }
+    if (hi - lo > 8 && (bj == 0 || bj == 7)) {
+        bj = 1;
+        for (j = 2; j < 7; j++) {
+            if (d[j] < d[bj]) {
+                bj = j;
+            }
+        }
+    }
+    return bj;
+}
+
 /* Black backdrop plus white star dots. */
 static int zx_is_space(uint32_t idx0)
 {
@@ -1404,15 +1429,7 @@ static int zx_is_space(uint32_t idx0)
     return dark > 350 && stars >= 4;
 }
 
-/* Ordered dither: one ink and one paper per 8x8 cell, mixed in a Bayer
- * pattern at the density that matches the original colour. Pairs are a
- * colour with black, with white, or with its bright/dark twin, which is
- * how a missing semitone is faked. Sprites are not dithered. */
-#define ZX_NP 40
-static uint8_t g_pa[ZX_NP], g_pb[ZX_NP], g_pcloud[ZX_NP];
-static int g_pn;
-static uint8_t g_lut_p[4096], g_lut_t[4096], g_lut_cp[4096], g_lut_ct[4096];
-static int g_lut_ok;
+/* Bayer matrix, only for the clouds (white mixed with black). */
 static const uint8_t k_bayer[64] = {
     0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26,
     12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22,
@@ -1420,104 +1437,17 @@ static const uint8_t k_bayer[64] = {
     15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21
 };
 
-static int zx_mix_err(int r, int g, int b, int ia, int ib, int t)
+/* Scenery is one solid dark colour. The clouds stage is the exception:
+ * a blue sky stays solid cyan, and the near-white clouds are white with
+ * a black dither. A dark green field (a city) stays dark green. Dim
+ * scenery that would vanish in black stays one object colour (stage 1
+ * asteroids dark magenta, later stages cyan) with its dark lines black.
+ * Sprites are left alone. */
+static void zx_paint_scenery(void)
 {
-    int ar = (int)(k_zx16[ia] >> 16), ag = (int)((k_zx16[ia] >> 8) & 255), ab = (int)(k_zx16[ia] & 255);
-    int br = (int)(k_zx16[ib] >> 16), bg = (int)((k_zx16[ib] >> 8) & 255), bb = (int)(k_zx16[ib] & 255);
-    int mr = (ar * (8 - t) + br * t) / 8, mg = (ag * (8 - t) + bg * t) / 8, mb = (ab * (8 - t) + bb * t) / 8;
-
-    return (int)redmean(r, g, b, (uint32_t)mr << 16 | (uint32_t)mg << 8 | (uint32_t)mb);
-}
-
-static void zx_lut_build(void)
-{
-    int c, i = 0, k;
-
-    for (c = 1; c <= 15; c++) {
-        g_pa[i] = 0;
-        g_pb[i] = (uint8_t)c;
-        g_pcloud[i] = (uint8_t)(c == 1 || c == 5 || c == 7 || c == 9 || c == 13 || c == 15);
-        i++;
-    }
-    for (c = 1; c <= 14; c++) {
-        g_pa[i] = (uint8_t)c;
-        g_pb[i] = 15;
-        g_pcloud[i] = (uint8_t)(c == 1 || c == 5 || c == 7 || c == 9 || c == 13);
-        i++;
-    }
-    for (c = 1; c <= 7; c++) {
-        g_pa[i] = (uint8_t)c;
-        g_pb[i] = (uint8_t)(c + 8);
-        g_pcloud[i] = (uint8_t)(c == 1 || c == 5 || c == 7);
-        i++;
-    }
-    g_pn = i;
-    for (k = 0; k < 4096; k++) {
-        int r = ((k >> 8) & 15) * 17, g = ((k >> 4) & 15) * 17, b = (k & 15) * 17;
-        int p, best = 0, bt = 0, be = -1, cb = 0, ct = 0, ce = -1;
-
-        for (p = 0; p < g_pn; p++) {
-            int t, te = -1, tt = 0;
-
-            for (t = 0; t <= 8; t++) {
-                int e = zx_mix_err(r, g, b, g_pa[p], g_pb[p], t);
-
-                if (te < 0 || e < te) {
-                    te = e;
-                    tt = t;
-                }
-            }
-            {
-                /* Scenery stays on the dark colours. A tinted pixel must
-                 * not collapse to black+white just because that line is
-                 * nearer in luminance: keep the hue. */
-                int mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
-                int mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
-                int grey = g_pa[p] == 0 && (g_pb[p] == 7 || g_pb[p] == 15);
-
-                if (grey && mx - mn > 8) {
-                    te += 200000;
-                }
-                if (g_pa[p] >= 8 && g_pa[p] != 15) {
-                    te += 200000;
-                }
-                if (g_pb[p] >= 8 && g_pb[p] != 15) {
-                    te += 200000;
-                }
-            }
-            if (be < 0 || te < be) {
-                be = te;
-                best = p;
-                bt = tt;
-            }
-            if (g_pcloud[p] && (ce < 0 || te < ce)) {
-                ce = te;
-                cb = p;
-                ct = tt;
-            }
-        }
-        g_lut_p[k] = (uint8_t)best;
-        g_lut_t[k] = (uint8_t)bt;
-        g_lut_cp[k] = (uint8_t)cb;
-        g_lut_ct[k] = (uint8_t)ct;
-    }
-    g_lut_ok = 1;
-}
-
-/* Every scenery cell, on every stage. Sprites are left alone. A dark
- * green field (a city) stays dark green; a light blue field (clouds)
- * falls out as white mixed with blue or cyan. */
-static void zx_dither_scenery(void)
-{
-    static uint8_t votes[ZW_CW * ZW_CH][ZX_NP];
-    static uint8_t win[ZW_CW * ZW_CH];
     static int green_cell[ZW_CW * ZW_CH];
     int i, c;
 
-    if (!g_lut_ok) {
-        zx_lut_build();
-    }
-    memset(votes, 0, sizeof votes);
     memset(green_cell, 0, sizeof green_cell);
     {
         static int rs[ZW_CW * ZW_CH], gs[ZW_CW * ZW_CH], bs[ZW_CW * ZW_CH], ns[ZW_CW * ZW_CH];
@@ -1528,17 +1458,9 @@ static void zx_dither_scenery(void)
         memset(ns, 0, sizeof ns);
         for (i = 0; i < ZW_W * ZW_H; i++) {
             int mx = i % ZW_W, my = i / ZW_W, c0 = (my >> 3) * ZW_CW + (mx >> 3);
-            int k12, p;
 
             if (g_zw_spr[i] || !g_zw_n[i]) {
                 continue;
-            }
-            k12 = K24_12(g_zw_col[i]);
-            /* every scenery cell, every stage: the pair that best matches
-             * the original colours. Sprites are skipped above. */
-            p = g_lut_p[k12];
-            if (p < g_pn) {
-                votes[c0][p]++;
             }
             rs[c0] += (int)(g_zw_col[i] >> 16);
             gs[c0] += (int)((g_zw_col[i] >> 8) & 255);
@@ -1546,17 +1468,9 @@ static void zx_dither_scenery(void)
             ns[c0]++;
         }
         for (c = 0; c < ZW_CW * ZW_CH; c++) {
-            int p, bp = 0, bv = -1;
             int n = ns[c] ? ns[c] : 1;
             int ar = rs[c] / n, ag = gs[c] / n, ab = bs[c] / n;
 
-            for (p = 0; p < g_pn; p++) {
-                if (votes[c][p] > bv) {
-                    bv = votes[c][p];
-                    bp = p;
-                }
-            }
-            win[c] = (uint8_t)bp;
             /* city field: dark and green, not the clouds stage */
             green_cell[c] = g_cf_stage != 3 && ns[c] >= 8 && ag > ar + 18 && ag > ab + 18 &&
                             (ar + ag + ab) / 3 < 100;
@@ -1564,8 +1478,7 @@ static void zx_dither_scenery(void)
     }
     for (i = 0; i < ZW_W * ZW_H; i++) {
         int mx = i % ZW_W, my = i / ZW_W, c0 = (my >> 3) * ZW_CW + (mx >> 3);
-        int k12, p, t, a, b, sel;
-        int r, g, bv, best, bt;
+        int sel, r, g, b, hi, lo, l;
 
         if (!g_zw_n[i]) {
             continue;
@@ -1574,39 +1487,49 @@ static void zx_dither_scenery(void)
             g_zw_scn[i] = k_zx16[g_zw_bgc[i] & 15];
             continue;
         }
+        r = (int)(g_zw_col[i] >> 16);
+        g = (int)((g_zw_col[i] >> 8) & 255);
+        b = (int)(g_zw_col[i] & 255);
+        hi = r > g ? (r > b ? r : b) : (g > b ? g : b);
+        lo = r < g ? (r < b ? r : b) : (g < b ? g : b);
+        l = LUM24(g_zw_col[i]);
         if (green_cell[c0]) {
-            /* a dark green field is closer to black than to #00D700, so a
-             * free mix would drop it. Keep the city ground dark green. */
+            /* a dark green field is closer to black than to #00D700 */
             sel = 4;
-            g_zw_out[i] = g_zw_scn[i] = k_zx16[sel];
-            g_zw_bgc[i] = (uint8_t)sel;
-            continue;
-        } else {
-            k12 = K24_12(g_zw_col[i]);
-            p = win[c0];
-            a = g_pa[p];
-            b = g_pb[p];
-            /* Clouds: light blue and white, not a grey field. */
-            if (g_cf_stage == 3) {
-                a = 5;
-                b = 7;
-            }
-            r = (int)(g_zw_col[i] >> 16);
-            g = (int)((g_zw_col[i] >> 8) & 255);
-            bv = (int)(g_zw_col[i] & 255);
-            best = -1;
-            bt = g_cf_stage == 3 ? g_lut_ct[k12] : g_lut_t[k12];
-            for (t = 0; t <= 8; t++) {
-                int e = zx_mix_err(r, g, bv, a, b, t);
+        } else if (g_cf_stage == 3) {
+            /* Coloured blue is the sky. Near-white pixels are the clouds. */
+            if (hi - lo >= 48) {
+                sel = l > 16 ? 5 : 0;
+            } else {
+                int t = l * 8 / 255;
 
-                if (best < 0 || e < best) {
-                    best = e;
-                    bt = t;
+                if (t > 8) {
+                    t = 8;
                 }
+                sel = (t * 8 > k_bayer[(my & 7) * 8 + (mx & 7)]) ? 15 : 0;
             }
-            t = bt;
+        } else if (g_zw_dim[c0]) {
+            int bn = g_zw_n[i] - g_zw_sn[i];
+            int bd = bn > 0 && g_zw_bd[i] * 2 >= bn;
+            int m = 0, cnt = 0;
+
+            if (mx > 0) { m += LUM24(g_zw_col[i - 1]); cnt++; }
+            if (mx < ZW_W - 1) { m += LUM24(g_zw_col[i + 1]); cnt++; }
+            if (my > 0) { m += LUM24(g_zw_col[i - ZW_W]); cnt++; }
+            if (my < ZW_H - 1) { m += LUM24(g_zw_col[i + ZW_W]); cnt++; }
+            m = cnt ? m / cnt : l;
+            sel = (!bd && l > 16 && l >= m - 24) ? (g_cf_stage == 1 ? 3 : 5) : 0;
+        } else {
+            int m = 0, cnt = 0;
+
+            if (mx > 0) { m += LUM24(g_zw_col[i - 1]); cnt++; }
+            if (mx < ZW_W - 1) { m += LUM24(g_zw_col[i + 1]); cnt++; }
+            if (my > 0) { m += LUM24(g_zw_col[i - ZW_W]); cnt++; }
+            if (my < ZW_H - 1) { m += LUM24(g_zw_col[i + ZW_W]); cnt++; }
+            m = cnt ? m / cnt : l;
+            /* a line darker than its neighbours stays black */
+            sel = (l <= 12 || l < m - 36) ? 0 : zx_solid_ink(g_zw_col[i]);
         }
-        sel = (t * 8 > k_bayer[(my & 7) * 8 + (mx & 7)]) ? b : a;
         g_zw_out[i] = g_zw_scn[i] = k_zx16[sel];
         g_zw_bgc[i] = (uint8_t)sel;
     }
@@ -1956,8 +1879,8 @@ static void zx_world(uint32_t *px, int w, int h)
             g_zw_bgc[i] = (uint8_t)ci;
         }
     }
-    /* Halftone every background cell. Sprites stay flat (painted next). */
-    zx_dither_scenery();
+    /* Solid scenery colours. Sprites stay flat (painted next). */
+    zx_paint_scenery();
     /* background under sprites: the scenery that pixel covered, else the cell */
     {
         static uint8_t mode[ZW_CW * ZW_CH];
@@ -3095,10 +3018,11 @@ static void zx_player(uint32_t *px, int w)
                 continue;
             }
             {
-                /* Light and mid grey stay white (or the weapon colour).
-                 * Only the darkest art pixels become black. Every own
-                 * pixel is kept at 1 px; a hole in the 2x2 goes back to
-                 * the scenery so the checker and the cannons survive. */
+                /* Light grey stays white (or the weapon colour). Mid-dark
+                 * panel seams go black too, still short of the lighter
+                 * wings and cannons. Every own pixel is kept at 1 px; a
+                 * hole in the 2x2 goes back to the scenery so the checker
+                 * and the cannons survive. */
                 const size_t k4[4] = {q, q + 1, q + (size_t)w, q + (size_t)w + 1};
                 int k, sc = g_w_scroll < 0 ? 0 : g_w_scroll;
 
@@ -3116,8 +3040,11 @@ static void zx_player(uint32_t *px, int w)
                     if (v == 1 || v == 2 || v == 3) {
                         int l = pix_shade(k4[k]);
                         int use = v == 1 ? 15 : g_pl_sink;
-                        int lim = v == 3 ? 16 : (smax[v] / 4 > 0 ? smax[v] / 4 : 1);
+                        int lim = v == 3 ? 16 : (v == 1 ? smax[1] * 2 / 5 : smax[v] / 4);
 
+                        if (lim < 1) {
+                            lim = 1;
+                        }
                         px[k4[k]] = (l >= lim ? k_zx16[use] : 0) << 8 | 0xFFu;
                     } else {
                         px[k4[k]] = scn;
