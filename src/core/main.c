@@ -8,6 +8,7 @@
  * An image may be a raw .hdm, .fdi, .d88, .hdi, .nhd, or a zip of one.
  */
 #include "diskimg.h"
+#include "version.h"
 #include "exepath.h"
 #include "game.h"
 #include "hal.h"
@@ -67,14 +68,20 @@ static void choose_source(int argc, char **argv, char *out, size_t n)
 
     out[0] = 0;
     for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--version") == 0 || strcmp(argv[i], "-v") == 0) {
+            printf("Rude Breaker 30th AE PC port %s\n", RB_VERSION);
+            exit(0);
+        }
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             fprintf(stderr,
-                    "usage: rudebreaker [folder-or-disk-image]\n"
+                    "Rude Breaker 30th AE PC port %s\n"
+                    "usage: rudebreaker [--version] [folder-or-disk-image]\n"
                     "\n"
                     "Put SGM1.DAT, FPLAY.COM, and SONG.DAT next to this program,\n"
                     "or drop a PC-98 disk image there. Images: .hdm .fdi .d88\n"
                     ".hdi .nhd, or a zip of one of those. RBRANK.DAT is\n"
-                    "optional. SGC.COM, READJS.COM, and RUDEBR.BAT are not read.\n");
+                    "optional. SGC.COM, READJS.COM, and RUDEBR.BAT are not read.\n",
+                    RB_VERSION);
             exit(0);
         }
         if (!cli) {
@@ -131,13 +138,14 @@ int main(int argc, char **argv)
     int rc = 0;
 
     choose_source(argc, argv, source, sizeof(source));
+    fprintf(stderr, "rudebreaker: version %s\n", RB_VERSION);
     fprintf(stderr, "rudebreaker: data directory: %s\n", source);
     disk_init(&disk);
     if (disk_open(source, &disk) != 0 && disk.label[0] == 0) {
         snprintf(disk.label, sizeof(disk.label), "%s", source);
     }
 
-    if (sys_init("Rude Breaker 30th AE") != 0) {
+    if (sys_init("Rude Breaker 30th AE " RB_VERSION) != 0) {
         fprintf(stderr, "sys_init failed\n");
         disk_free(&disk);
         return 1;

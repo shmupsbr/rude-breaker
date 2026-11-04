@@ -1647,6 +1647,103 @@ static void paint_en(const RbGfx *gfx, uint32_t *rgba, int w, int x, int y,
             x += 16;
             continue;
         }
+        if (ch == '+' || ch == '-') {
+            /* No plus in the game font either, and its dash cell is a
+             * crossed symbol: strokes as thick as the '8', centred on
+             * the digits' height ('-' is the bar of the '+'). */
+            id = 0x7629u - 0x7600u;
+            if (gfx->glyph_on[id]) {
+                int r0 = -1, r1 = -1, c0 = 16, c1 = -1, t = 0, r, c, i, j;
+
+                for (r = 0; r < 16; r++) {
+                    unsigned line = ((unsigned)gfx->glyph[id][r * 2] << 8) | gfx->glyph[id][r * 2 + 1];
+
+                    for (c = 0; c < 16; c++) {
+                        if (line & (0x8000u >> c)) {
+                            if (r0 < 0) r0 = r;
+                            r1 = r;
+                            if (c < c0) c0 = c;
+                            if (c > c1) c1 = c;
+                        }
+                    }
+                }
+                if (r0 >= 0) {
+                    int rs = r0 + (r1 - r0 + 1) / 4;
+                    unsigned mid = ((unsigned)gfx->glyph[id][rs * 2] << 8) |
+                                   gfx->glyph[id][rs * 2 + 1];
+                    int cx, cy, half;
+
+                    for (c = c0; c <= c1 && (mid & (0x8000u >> c)); c++) {
+                        t++;
+                    }
+                    if (t < 1 || t > 4) t = 2;
+                    cx = (c0 + c1 + 1) / 2 - t / 2;
+                    cy = (r0 + r1 + 1) / 2 - t / 2;
+                    half = (c1 - c0 + 1) / 2;
+                    for (i = -half + t / 2; i < half + t / 2; i++) {
+                        for (j = 0; j < t; j++) {
+                            int px[2] = { x + cx - t / 2 + i, x + cx + j };
+                            int py[2] = { y + cy + j, y + cy - t / 2 + i };
+                            int k;
+
+                            for (k = 0; k < (ch == '+' ? 2 : 1); k++) {
+                                if ((unsigned)px[k] < (unsigned)w && (unsigned)py[k] < (unsigned)RB_GFX_H) {
+                                    rgba[(size_t)py[k] * (size_t)w + (size_t)px[k]] = rgb;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            x += 16;
+            continue;
+        }
+        if (ch == '.') {
+            /* The game font has no full stop (its 0x2E cell is another
+             * symbol): one square dot as thick as the side strokes of
+             * its '8', sitting on the digits' baseline. */
+            id = 0x7629u - 0x7600u;
+            if (gfx->glyph_on[id]) {
+                int r0 = -1, r1 = -1, c0 = 16, c1 = -1, t = 0, r, c, dy, dx;
+
+                for (r = 0; r < 16; r++) {
+                    unsigned line = ((unsigned)gfx->glyph[id][r * 2] << 8) | gfx->glyph[id][r * 2 + 1];
+
+                    for (c = 0; c < 16; c++) {
+                        if (line & (0x8000u >> c)) {
+                            if (r0 < 0) r0 = r;
+                            r1 = r;
+                            if (c < c0) c0 = c;
+                            if (c > c1) c1 = c;
+                        }
+                    }
+                }
+                if (r0 >= 0) {
+                    int rs = r0 + (r1 - r0 + 1) / 4;
+                    unsigned mid = ((unsigned)gfx->glyph[id][rs * 2] << 8) |
+                                   gfx->glyph[id][rs * 2 + 1];
+                    int cx;
+
+                    for (c = c0; c <= c1 && (mid & (0x8000u >> c)); c++) {
+                        t++;
+                    }
+                    if (t < 1 || t > 4) t = 2;
+                    cx = (c0 + c1 + 1) / 2 - t / 2;
+                    for (dy = 0; dy < t; dy++) {
+                        for (dx = 0; dx < t; dx++) {
+                            int px = x + cx + dx;
+                            int py = y + r1 - t + 1 + dy;
+
+                            if ((unsigned)px < (unsigned)w && (unsigned)py < (unsigned)RB_GFX_H) {
+                                rgba[(size_t)py * (size_t)w + (size_t)px] = rgb;
+                            }
+                        }
+                    }
+                }
+            }
+            x += 16;
+            continue;
+        }
         if (ch == ':') {
             /* The game font has no colon: two square dots, as thick as
              * the side strokes of its '8', spaced to its height. */
@@ -1715,10 +1812,8 @@ static void paint_en(const RbGfx *gfx, uint32_t *rgba, int w, int x, int y,
             code = (uint16_t)(0x7630u + (unsigned)(ch - 'A'));
         } else if (ch == '!') {
             code = 0x764Au;
-        } else if (ch == '-' || ch == '/') {
+        } else if (ch == '/') {
             code = 0x764Cu;
-        } else if (ch == '.') {
-            code = 0x762Eu;
         } else {
             x += 16;
             continue;

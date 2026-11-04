@@ -2,6 +2,7 @@
  * Game state machine. Platform-agnostic; talks to hardware only via hal.h.
  */
 #include "game.h"
+#include "version.h"
 #include "diskimg.h"
 #include "player.h"
 #include "enemy.h"
@@ -15,6 +16,7 @@
 #include "crt.h"
 #include "demo.h"
 #include "gfx.h"
+#include "eq.h"
 #include "panels.h"
 
 #include <stdio.h>
@@ -76,6 +78,35 @@ static int          g_demo_lives = -1;
 static int          g_demo_keep[3];
 static uint32_t     g_demo_hi;
 static int          g_attract_on = 1;  /* ATTRACT MODE option, saved */
+/* I-FRAMES (GAMEPLAY, saved): CLASSIC by default, NEW adds: rings from the ship
+ * while the invulnerability timer runs. Display only. */
+static int          g_aura_on;
+/* MASTER VOLUME, host output level in percent (0..100, saved). The
+ * game's own music and effect levels are not touched. */
+static int          g_mvol = 100;
+/* BALANCE (-10 left .. 10 right), OUTPUT PROFILE (EQP_*) and the CUSTOM
+ * EQ curve in dB, host output shaping, saved. */
+static int          g_bal;
+static int          g_eqp;
+static int8_t       g_eqc[EQ_BANDS];
+
+static void apply_eq(void)
+{
+    sys_audio_eq(g_eqp, g_eqc, g_bal);
+}
+
+static void eq_reset_all(void)
+{
+    g_bal = 0;
+    g_eqp = EQP_FLAT;
+    memset(g_eqc, 0, sizeof g_eqc);
+    apply_eq();
+}
+/* JOYSTICK turned OFF by hand: a pad plugged in later (or found at the
+ * next launch) is not switched on by itself. Saved as joystick=off. */
+static int          g_joy_off_saved;
+/* preset=original in the cfg: apply the ORIGINAL PRESET once at boot. */
+static int          g_cfg_preset;
 static unsigned     g_rank_seen;       /* frames the boot ranking has been up */
 static uint32_t     g_demo_t0;         /* demo start, wall clock ms */
 #define DEMO_MS 30000u
@@ -163,6 +194,7 @@ static int          g_pl_kind;
 static int          g_pl;
 static int          g_joy_was;
 static int          g_joy_lockout;
+static void original_preset(RbGame *g);
 /* Set by a VM iteration that flips the page. Frame skip leaves it
  * clear so the picture already on screen stays up. */
 static int          g_show_frame = 1;
@@ -223,6 +255,13 @@ static void load_cfg(const RbGame *g)
     g_hitbox = 0;
     g_fullscreen = 0;
     g_cfg_v9p = 0;
+    g_aura_on = 0;
+    g_mvol = 100;
+    g_bal = 0;
+    g_eqp = EQP_FLAT;
+    memset(g_eqc, 0, sizeof g_eqc);
+    g_joy_off_saved = 0;
+    g_cfg_preset = 0;
     sys_bind_restore();
     cfg_path(g, path, sizeof path);
     fp = fopen(path, "r");
@@ -343,6 +382,51 @@ static void load_cfg(const RbGame *g)
             /* not persisted */
         } else if (strncmp(line, "defaults9zf=1", 13) == 0) {
             g_cfg_9zf = 1;
+        } else if (strncmp(line, "iframes=new", 11) == 0) {
+            g_aura_on = 1;
+        } else if (strncmp(line, "iframes=classic", 15) == 0) {
+            g_aura_on = 0;
+        } else if (strncmp(line, "master_volume=", 14) == 0) {
+            int v = atoi(line + 14);
+
+            g_mvol = v < 0 ? 0 : v > 100 ? 100 : v;
+        } else if (strncmp(line, "balance=", 8) == 0) {
+            int v = atoi(line + 8);
+
+            g_bal = v < -EQ_BAL_MAX ? -EQ_BAL_MAX : v > EQ_BAL_MAX ? EQ_BAL_MAX : v;
+        } else if (strncmp(line, "output_profile=", 15) == 0) {
+            char key[32];
+            int k = 0;
+            int pv;
+
+            while (k < 31 && line[15 + k] && line[15 + k] != '\n' && line[15 + k] != '\r') {
+                key[k] = line[15 + k];
+                k++;
+            }
+            key[k] = 0;
+            pv = eq_profile_from_key(key);
+            g_eqp = pv < 0 ? EQP_FLAT : pv;
+        } else if (strncmp(line, "custom_eq=", 10) == 0) {
+            const char *q = line + 10;
+            int b;
+
+            for (b = 0; b < EQ_BANDS && *q; b++) {
+                int v = atoi(q);
+
+                g_eqc[b] = (int8_t)(v < -EQ_DB_MAX ? -EQ_DB_MAX : v > EQ_DB_MAX ? EQ_DB_MAX : v);
+                while (*q && *q != ',') {
+                    q++;
+                }
+                if (*q == ',') {
+                    q++;
+                }
+            }
+        } else if (strncmp(line, "joystick=off", 12) == 0) {
+            g_joy_off_saved = 1;
+        } else if (strncmp(line, "joystick=auto", 13) == 0) {
+            g_joy_off_saved = 0;
+        } else if (strncmp(line, "preset=original", 15) == 0) {
+            g_cfg_preset = 1;
         } else if (strncmp(line, "attract=on", 10) == 0) {
             g_attract_on = 1;
         } else if (strncmp(line, "attract=off", 11) == 0) {
@@ -600,6 +684,18 @@ static void save_cfg(const RbGame *g)
             g_sndx ? "extra" : "original");
     fprintf(fp, "rank_mode=%s\n", g_rank_mode ? "advanced" : "classic");
     fprintf(fp, "attract=%s\n", g_attract_on ? "on" : "off");
+    fprintf(fp, "iframes=%s\n", g_aura_on ? "new" : "classic");
+    fprintf(fp, "master_volume=%d\n", g_mvol);
+    fprintf(fp, "balance=%d\noutput_profile=%s\ncustom_eq=", g_bal, eq_profile_key(g_eqp));
+    {
+        int b;
+
+        for (b = 0; b < EQ_BANDS; b++) {
+            fprintf(fp, "%s%d", b ? "," : "", g_eqc[b]);
+        }
+    }
+    fprintf(fp, "\n");
+    fprintf(fp, "joystick=%s\n", g_joy_lockout ? "off" : "auto");
     fprintf(fp, "ship_speed=%s\n", g_ship_aggr ? "aggressive" : "standard");
     fprintf(fp, "scaling=%s\naspect=%s\n",
             g_scaling == 0 ? "smooth" : g_scaling == 1 ? "sharp" : g_scaling == 2 ? "integer" : "auto",
@@ -716,6 +812,137 @@ static void hitbox_draw(uint32_t *fb)
 
 static int btn_pressed(const RbGame *g, uint16_t mask);
 
+/* I-FRAMES NEW. While the invulnerability timer (global DF) runs, waves
+ * in the game's own invulnerability reds run over the ship's surface,
+ * from its centre outward, and stop at the sprite's edge: only opaque
+ * sprite pixels of the ship, and of the options while they are joined
+ * to it, are recoloured. The band width pulses on two harmonic cycles
+ * (8 and 4 frames) and the bands thin out as the timer runs down. Pixel
+ * art only: three palette colours, no blending. Drawn before COLOR
+ * FILTER and CRT so those treat it like the rest of the picture. */
+#define AURA_WX 80
+#define AURA_WY 64
+static void aura_draw(uint32_t *fb, const RbGame *g)
+{
+    static const uint32_t pal[3] = { 0x994444FFu, 0xE75C58FFu, 0xFFCC77FFu };
+    static uint8_t m[(2 * AURA_WX) * (2 * AURA_WY)];
+    static int16_t q[(2 * AURA_WX) * (2 * AURA_WY)][2];
+    static int top;
+    static int prev;
+    const uint8_t *kind;
+    int df, x0, y0, x1, y1, cx, cy, x, y, n, h, fade, tri8, tri4, bw, pass, nose;
+    unsigned t;
+    const int W = 2 * AURA_WX, H = 2 * AURA_WY;
+
+    if (!fb || !g_vm || g_demo || g->state != RB_STATE_PLAY) {
+        prev = 0;
+        return;
+    }
+    df = vm_global_u8(g_vm, 0xDF);
+    if (df > prev) {
+        top = df;
+    }
+    prev = df;
+    kind = gfx_kind_mask();
+    if (!g_aura_on || df <= 0 || top <= 0 || !kind ||
+        !vm_ship_box(g_vm, &x0, &y0, &x1, &y1)) {
+        return;
+    }
+    cx = (x0 + x1) / 2;
+    cy = (y0 + y1) / 2;
+    /* m: 1 body pixel, 3 option/shot pixel, 2 = part of the ship */
+    n = 0;
+    for (y = 0; y < H; y++) {
+        for (x = 0; x < W; x++) {
+            int sx = cx - AURA_WX + x, sy = cy - AURA_WY + y;
+            uint8_t v = 0;
+
+            if (sx >= 80 && sx < 560 && sy >= 0 && sy < RB_NATIVE_H) {
+                uint8_t k = kind[(size_t)sy * RB_GFX_W + (size_t)sx];
+
+                v = k == 1 ? 1 : k ? 3 : 0;
+                if (v == 1 && sx >= x0 && sx < x1 && sy >= y0 && sy < y1) {
+                    v = 2;
+                    q[n][0] = (int16_t)x;
+                    q[n][1] = (int16_t)y;
+                    n++;
+                }
+            }
+            m[y * W + x] = v;
+        }
+    }
+    /* Body: grow over sprite pixels with gaps of up to 3 px, so a loose
+     * enemy further off stays out. Then the docked options: the other
+     * kind (options share it with shots), touching the body and not
+     * above its nose, where the shots leave. */
+    for (pass = 0; pass < 2; pass++) {
+        int want = pass ? 3 : 1;
+        int reach = pass ? 1 : 3;
+
+        if (pass) {
+            int h0 = n;
+
+            nose = H;
+            for (h = 0; h < h0; h++) {
+                if (q[h][1] < nose) {
+                    nose = q[h][1];
+                }
+            }
+            nose += 2;
+            h = 0;
+        } else {
+            h = 0;
+        }
+        for (; h < n; h++) {
+            int qx = q[h][0], qy = q[h][1], dx, dy;
+
+            for (dy = -reach; dy <= reach; dy++) {
+                for (dx = -reach; dx <= reach; dx++) {
+                    int nx = qx + dx, ny = qy + dy;
+
+                    if (nx < 0 || ny < 0 || nx >= W || ny >= H || m[ny * W + nx] != want ||
+                        (pass && ny < nose)) {
+                        continue;
+                    }
+                    m[ny * W + nx] = 2;
+                    q[n][0] = (int16_t)nx;
+                    q[n][1] = (int16_t)ny;
+                    n++;
+                }
+            }
+        }
+    }
+    t = g->frame;
+    tri8 = (t & 4) ? 4 - (int)(t & 3) : (int)(t & 3);        /* 0..4 */
+    tri4 = (t & 2) ? 2 - (int)(t & 1) : (int)(t & 1);        /* 0..2 */
+    fade = df * 4 >= top ? 4 : (df * 16 + top - 1) / top;    /* 1..4 */
+    bw = (2 + (tri8 + tri4) / 2) * fade / 4;                 /* 0..5 */
+    if (bw < 1) {
+        bw = 1;
+    }
+    for (y = 0; y < H; y++) {
+        for (x = 0; x < W; x++) {
+            int dx, dy, d, ph;
+
+            if (m[y * W + x] != 2) {
+                continue;
+            }
+            dx = (x - AURA_WX) * 5 / 6;    /* round on the 4:3 picture */
+            dy = y - AURA_WY;
+            d = 0;
+            while ((d + 1) * (d + 1) <= dx * dx + dy * dy) {
+                d++;
+            }
+            ph = (int)(((unsigned)(d + 1000) - t * 2u) % 16u);   /* outward */
+            if (ph >= bw) {
+                continue;
+            }
+            fb[(size_t)(cy - AURA_WY + y) * RB_NATIVE_W + (size_t)(cx - AURA_WX + x)] =
+                pal[ph == 0 && fade >= 3 ? 2 : (ph * 2 < bw ? 1 : 0)];
+        }
+    }
+}
+
 static int script_settings(void)
 {
     /* SETTINGS, the two JIS characters behind that English label. */
@@ -735,7 +962,8 @@ enum {
     PAGE_SOUND,
     PAGE_GFX,
     PAGE_SNDOPT,
-    PAGE_ALT
+    PAGE_ALT,
+    PAGE_EQ
 };
 
 /* GAMEPLAY / GRAPHICS / SOUND list option ids; the setting code below
@@ -747,19 +975,29 @@ enum {
     OPT_CRT0, /* + CRT_COUNT effects */
     OPT_ATTRACT = 30,
     OPT_MCHIP = 31, OPT_SCHIP = 32, OPT_PRESET = 33, OPT_CUSTOM = 34,
-    OPT_SNDTEST = 40, OPT_BACK = 41, OPT_PU0 = 50
+    OPT_AURA = 35, OPT_MVOL = 36, OPT_BAL = 37, OPT_PROF = 38, OPT_EQ = 39,
+    OPT_SNDTEST = 40, OPT_BACK = 41, OPT_PU0 = 50,
+    OPT_EQB0 = 60, /* + EQ_BANDS */ OPT_EQRST = 70
 };
 static const int k_view_game[] = {OPT_DIFF, OPT_RANK, OPT_SUICIDE, OPT_SHIP, OPT_SPEED,
-                                  OPT_TRAINING, OPT_LOOP, OPT_ATTRACT, OPT_BACK};
+                                  OPT_TRAINING, OPT_LOOP, OPT_ATTRACT, OPT_AURA, OPT_BACK};
 static const int k_view_gfx[] = {OPT_FULLSCREEN, OPT_SCALING, OPT_ASPECT, OPT_ORIENT,
                                  OPT_PANELS, OPT_PALETTE, OPT_BULLET, OPT_HITBOX,
                                  OPT_CRT0 + 0, OPT_CRT0 + 1, OPT_CRT0 + 2,
                                  OPT_CRT0 + 3, OPT_CRT0 + 4, OPT_CRT0 + 5, OPT_PACING,
                                  OPT_BACK};
-static const int k_view_snd[] = {OPT_SNDX, OPT_SNDTEST, OPT_BACK};
+static const int k_view_snd[] = {OPT_SNDX, OPT_MVOL, OPT_BAL, OPT_PROF, OPT_EQ,
+                                 OPT_SNDTEST, OPT_BACK};
 /* From the pause menu the Sound Test is left out: it would stop the
  * stage music under the paused match. */
-static const int k_view_snd_p[] = {OPT_SNDX, OPT_BACK};
+static const int k_view_snd_p[] = {OPT_SNDX, OPT_MVOL, OPT_BAL, OPT_PROF, OPT_EQ,
+                                   OPT_BACK};
+static const int k_view_eq[] = {OPT_EQB0 + 0, OPT_EQB0 + 1, OPT_EQB0 + 2, OPT_EQB0 + 3,
+                                OPT_EQB0 + 4, OPT_EQB0 + 5, OPT_EQB0 + 6, OPT_EQB0 + 7,
+                                OPT_EQB0 + 8, OPT_EQB0 + 9, OPT_BACK};
+/* Row of an option on the SOUND page (where SOUND TEST and CUSTOM EQ
+ * return to). */
+static int snd_index(int opt);
 
 /* Presets, CUSTOM, and (once CUSTOM is picked) the three single
  * settings. Nothing here is saved: every launch and every finished
@@ -805,6 +1043,10 @@ static const int *opt_view(int page, int *n)
     if (page == PAGE_GFX) {
         *n = (int)(sizeof k_view_gfx / sizeof k_view_gfx[0]);
         return k_view_gfx;
+    }
+    if (page == PAGE_EQ) {
+        *n = (int)(sizeof k_view_eq / sizeof k_view_eq[0]);
+        return k_view_eq;
     }
     if (page == PAGE_SNDOPT && g_pmenu) {
         *n = (int)(sizeof k_view_snd_p / sizeof k_view_snd_p[0]);
@@ -1055,7 +1297,8 @@ static int page_count(void)
     case PAGE_GAME:
     case PAGE_GFX:
     case PAGE_ALT:
-    case PAGE_SNDOPT: {
+    case PAGE_SNDOPT:
+    case PAGE_EQ: {
         int n;
 
         opt_view(g_page, &n);
@@ -1063,15 +1306,28 @@ static int page_count(void)
     }
     case PAGE_CTRL:  return 3;
     case PAGE_KEYS:  return 11;
-    case PAGE_SOUND: return 7;
-    default:         return g_pmenu ? 5 : 9;
+    case PAGE_SOUND: return 9;
+    default:         return g_pmenu ? 5 : 10;
     }
 }
 
 static int opt_page(void)
 {
     return g_page == PAGE_GAME || g_page == PAGE_GFX || g_page == PAGE_SNDOPT ||
-           g_page == PAGE_ALT;
+           g_page == PAGE_ALT || g_page == PAGE_EQ;
+}
+
+static int snd_index(int opt)
+{
+    int n, i;
+    const int *v = opt_view(PAGE_SNDOPT, &n);
+
+    for (i = 0; i < n; i++) {
+        if (v[i] == opt) {
+            return i;
+        }
+    }
+    return 0;
 }
 
 static int opt_id(void)
@@ -1218,6 +1474,36 @@ static void change_value(RbGame *g, int dir)
             *ch = (*ch + (dir < 0 ? CHIP_N - 1 : 1)) % CHIP_N;
             sys_audio_chips(g_mchip, g_schip);
             changed = 1;
+        } else if (opt == OPT_AURA) {
+            /* Host only: display overlay, saved. */
+            g_aura_on = !g_aura_on;
+            changed = 1;
+        } else if (opt == OPT_MVOL) {
+            /* Host only: output level in 10 % steps, saved. */
+            g_mvol += dir < 0 ? -10 : 10;
+            g_mvol = g_mvol < 0 ? 0 : g_mvol > 100 ? 100 : g_mvol;
+            sys_audio_volume(g_mvol);
+            changed = 1;
+        } else if (opt == OPT_BAL) {
+            /* Host only: software balance, saved. */
+            g_bal += dir < 0 ? -1 : 1;
+            g_bal = g_bal < -EQ_BAL_MAX ? -EQ_BAL_MAX : g_bal > EQ_BAL_MAX ? EQ_BAL_MAX : g_bal;
+            apply_eq();
+            changed = 1;
+        } else if (opt == OPT_PROF) {
+            /* Host only: output EQ curve, saved. */
+            g_eqp = (g_eqp + (dir < 0 ? EQP_N - 1 : 1)) % EQP_N;
+            apply_eq();
+            changed = 1;
+        } else if (opt >= OPT_EQB0 && opt < OPT_EQB0 + EQ_BANDS) {
+            /* Editing a band picks the CUSTOM curve. */
+            int b = opt - OPT_EQB0;
+            int v = g_eqc[b] + (dir < 0 ? -1 : 1);
+
+            g_eqc[b] = (int8_t)(v < -EQ_DB_MAX ? -EQ_DB_MAX : v > EQ_DB_MAX ? EQ_DB_MAX : v);
+            g_eqp = EQP_CUSTOM;
+            apply_eq();
+            changed = 1;
         } else if (opt == OPT_ATTRACT) {
             /* Host only: demo play after the ranking, saved. */
             g_attract_on = !g_attract_on;
@@ -1263,6 +1549,16 @@ static void change_value(RbGame *g, int dir)
                 g_se_no = 47;
             }
             g_pl_kind = 1;
+            changed = 1;
+        } else if (g_cursor == 6 || g_cursor == 7) {
+            /* Same MUSIC / SFX CHIP as ALTERNATE VERSIONS (not saved,
+             * back to ORIGINAL with the rest of that page); the track
+             * playing now switches at once. */
+            int *ch = g_cursor == 6 ? &g_mchip : &g_schip;
+
+            *ch = (*ch + (dir < 0 ? CHIP_N - 1 : 1)) % CHIP_N;
+            sys_audio_chips(g_mchip, g_schip);
+            g_custom = 1;
             changed = 1;
         }
     }
@@ -1314,6 +1610,10 @@ static void restore_defaults(RbGame *g)
     g_crt = 0;
     g_hitbox = 0;
     g_attract_on = 1;
+    g_aura_on = 0;
+    g_mvol = 100;
+    sys_audio_volume(g_mvol);
+    eq_reset_all();
     sys_bind_restore();
     sys_pace_set_pref_exact(0);
     if (g_vm) {
@@ -1330,6 +1630,39 @@ static void restore_defaults(RbGame *g)
     sys_set_orientation(g_orient);
     panels_set_aspect(g_aspect43);
     fullscreen_apply(0);
+    apply_host_options();
+    save_cfg(g);
+    rank_flush(g);
+}
+
+/* ORIGINAL PRESET (CONFIG, or preset=original in the cfg): the game as
+ * on the PC-98 disk, for side-by-side comparison. Turns off what the
+ * port adds to play and picture; display options (window, scaling,
+ * aspect, orientation, frame pacing), keys, DIFFICULTY, SUICIDE
+ * BULLETS, hi-scores, the ranking and passwords stay as they are. */
+static void original_preset(RbGame *g)
+{
+    g_modern = 0;
+    g_training = 0;
+    g_rank_on = 0;
+    g_rank_mode = 0;
+    g_panels_on = 0;
+    g_bullet_c = 0;
+    g_loop_on = 0;
+    g_sndx = 0;
+    g_ship_aggr = 0;
+    g_crt = 0;
+    g_hitbox = 0;
+    g_aura_on = 0;
+    eq_reset_all();
+    alt_reset();
+    if (g_vm) {
+        /* SHIP SELECT ON: the weapon pick scene, as on the disk. */
+        set_flag_word((uint16_t)(flag_word() & (uint16_t)~0x0080u));
+    }
+    gfx_set_bullet_color(g_bullet_c);
+    hit_fix();
+    sys_audio_extra(g_sndx);
     apply_host_options();
     save_cfg(g);
     rank_flush(g);
@@ -1357,17 +1690,41 @@ static void activate_row(RbGame *g)
             handoff(3);
         } else if (g_cursor == 6) {
             handoff(4);
-        } else if (g_cursor == 7) {
-            /* RESTORE DEFAULTS: the first press asks, the second does it. */
-            if (!g_confirm) {
-                g_confirm = 1;
+        } else if (g_cursor == 7 || g_cursor == 8) {
+            /* ORIGINAL PRESET / RESTORE DEFAULTS: the first press asks,
+             * the second does it. */
+            if (g_confirm != g_cursor) {
+                g_confirm = g_cursor;
             } else {
                 g_confirm = 0;
-                restore_defaults(g);
+                if (g_cursor == 7) {
+                    original_preset(g);
+                } else {
+                    restore_defaults(g);
+                }
             }
         } else {
             handoff(2);
         }
+        menu_ok();
+        return;
+    }
+    if (opt_page() && opt_id() == OPT_EQ) {
+        enter_page(PAGE_EQ);
+        menu_ok();
+        return;
+    }
+    if (opt_page() && opt_id() >= OPT_EQB0 && opt_id() < OPT_EQB0 + EQ_BANDS) {
+        /* FIRE on a band puts it back to 0 dB. */
+        g_eqc[opt_id() - OPT_EQB0] = 0;
+        apply_eq();
+        save_cfg(g);
+        menu_ok();
+        return;
+    }
+    if (g_page == PAGE_EQ && opt_id() == OPT_BACK) {
+        enter_page(PAGE_SNDOPT);
+        g_cursor = snd_index(OPT_EQ);
         menu_ok();
         return;
     }
@@ -1429,9 +1786,12 @@ static void activate_row(RbGame *g)
             player_pause();
         } else if (g_cursor == 5) {
             player_stop();
-        } else if (g_cursor == 6) {
+        } else if (g_cursor == 8) {
             enter_page(PAGE_SNDOPT);
-            g_cursor = 1;
+            g_cursor = snd_index(OPT_SNDTEST);
+        } else if (g_cursor == 6 || g_cursor == 7) {
+            change_value(g, 1);
+            return;
         }
         menu_ok();
     }
@@ -1476,7 +1836,11 @@ static void go_back(void)
         break;
     case PAGE_SOUND:
         enter_page(PAGE_SNDOPT);
-        g_cursor = 1;
+        g_cursor = snd_index(OPT_SNDTEST);
+        break;
+    case PAGE_EQ:
+        enter_page(PAGE_SNDOPT);
+        g_cursor = snd_index(OPT_EQ);
         break;
     default:
         if (g_pmenu) {
@@ -1645,13 +2009,13 @@ static void paint_option_row(int col, int value_col, int row,
 
 static const char *joy_value(void)
 {
-    if (!joy_flag()) {
-        return sys_joy_present() ? "UNUSED" : "NONE";
+    if (!sys_joy_present()) {
+        return "NONE";
     }
     if (sys_joy_name()[0]) {
         return sys_joy_name();
     }
-    return "IN USE";
+    return "GAMEPAD";
 }
 
 /* Text columns are 8 px; each menu character is a 16 px cell (two
@@ -1687,7 +2051,7 @@ static int game_row(int index)
 #define VU_X0     64
 #define VU_X1     576
 #define VU_TOP    296
-#define VU_BOTTOM 360
+#define VU_BOTTOM 376
 static float    g_vu_lv[VU_N];
 static float    g_vu_pk[VU_N];
 static uint32_t g_vu_pk_t[VU_N];
@@ -1772,39 +2136,108 @@ static void vu_fill(uint32_t *fb, int x0, int y0, int x1, int y1, uint32_t c,
     }
 }
 
+/* 90s micro-system LED look: each bar is a stack of segments, lit from
+ * the bottom, green / yellow / red from the PC-98 text palette (DAC
+ * steps of 0x11), unlit ones as dark glass of the same hue, and a held
+ * peak segment. */
+#define VU_SEG   12
+#define VU_SEG_H 3
+#define VU_SEG_G 1
+static uint32_t vu_seg_rgb(int k, int lit)
+{
+    static const uint32_t on[VU_SEG] = {
+        0x00EE22FFu, 0x00EE22FFu, 0x22FF22FFu, 0x44FF22FFu, 0x88FF00FFu,
+        0xBBFF00FFu, 0xEEEE00FFu, 0xFFDD00FFu, 0xFFAA00FFu, 0xFF7700FFu,
+        0xFF4400FFu, 0xFF1100FFu
+    };
+    uint32_t c = on[k];
+
+    if (!lit) {
+        /* about a sixth: the off segment still shows its colour */
+        uint32_t r = ((c >> 24) & 0xFFu) / 6u + 0x06u;
+        uint32_t g = ((c >> 16) & 0xFFu) / 6u + 0x06u;
+        uint32_t b = ((c >> 8) & 0xFFu) / 6u + 0x06u;
+
+        c = (r << 24) | (g << 16) | (b << 8) | 0xFFu;
+    }
+    return c;
+}
+
 static void vu_draw(uint32_t *fb)
 {
     int span = (VU_X1 - VU_X0) / VU_N;
     int gap = span / 4;
-    int h = VU_BOTTOM - VU_TOP;
+    int pitch = VU_SEG_H + VU_SEG_G;
+    int top = VU_BOTTOM - VU_SEG * pitch + VU_SEG_G;
     int i;
 
     if (!fb) {
         return;
     }
-    /* Faint well and baseline so a silent meter still reads as a meter. */
-    vu_fill(fb, VU_X0 - 4, VU_TOP - 4, VU_X1 + 4 - gap, VU_BOTTOM + 3,
-            0x101828FFu, 150);
-    vu_fill(fb, VU_X0, VU_BOTTOM + 1, VU_X1 - gap, VU_BOTTOM + 2,
-            0x6080A0FFu, 200);
+    /* Dark display window with a thin bezel. */
+    vu_fill(fb, VU_X0 - 6, top - 6, VU_X1 + 6 - gap, VU_BOTTOM + 6,
+            0x0C0C10FFu, 230);
+    vu_fill(fb, VU_X0 - 6, top - 6, VU_X1 + 6 - gap, top - 5, 0x334455FFu, 255);
+    vu_fill(fb, VU_X0 - 6, VU_BOTTOM + 5, VU_X1 + 6 - gap, VU_BOTTOM + 6,
+            0x334455FFu, 255);
     for (i = 0; i < VU_N; i++) {
         int x = VU_X0 + i * span;
-        int bh = (int)(g_vu_lv[i] * (float)h + 0.5f);
-        int ph = (int)(g_vu_pk[i] * (float)h + 0.5f);
+        int lit = (int)(g_vu_lv[i] * (float)VU_SEG + 0.5f);
+        int pk = (int)(g_vu_pk[i] * (float)VU_SEG + 0.5f) - 1;
+        int k;
 
-        if (g_vu_lv[i] > 0.0f && bh < 2) {
-            bh = 2;
+        if (g_vu_lv[i] > 0.0f && lit < 1) {
+            lit = 1;
         }
-        if (bh > 0) {
-            vu_fill(fb, x, VU_BOTTOM - bh, x + span - gap, VU_BOTTOM,
-                    0xFFFFFFFFu, 235);
+        if (lit > VU_SEG) {
+            lit = VU_SEG;
         }
-        if (ph > 0 && g_pl != 0) {
-            int py = VU_BOTTOM - ph - 3;
+        if (pk >= VU_SEG) {
+            pk = VU_SEG - 1;
+        }
+        for (k = 0; k < VU_SEG; k++) {
+            int y1 = VU_BOTTOM - k * pitch;
+            int on = k < lit || (g_pl != 0 && k == pk && pk >= lit);
 
-            vu_fill(fb, x, py, x + span - gap, py + 2, 0x60E0FFFFu, 255);
+            vu_fill(fb, x, y1 - VU_SEG_H, x + span - gap, y1, vu_seg_rgb(k, on), 255);
         }
     }
+}
+
+/* CUSTOM EQ sliders: one LED segment per dB from the 0 dB mark, cuts
+ * in green, boosts through yellow to red, like the Sound Test meter. */
+static void eq_draw(uint32_t *fb)
+{
+    int b;
+
+    if (!fb) {
+        return;
+    }
+    for (b = 0; b < EQ_BANDS; b++) {
+        int row = 4 + b * 2 - 1;
+        int y0 = row * 16 + 5;
+        int x0 = 400;
+        int db = g_eqc[b];
+        int k;
+
+        for (k = -EQ_DB_MAX; k <= EQ_DB_MAX; k++) {
+            int x = x0 + (k + EQ_DB_MAX) * 8;
+            int on = k == 0 || (db < 0 && k >= db && k < 0) || (db > 0 && k <= db && k > 0);
+            int seg = k < 0 ? (k + EQ_DB_MAX) * 4 / EQ_DB_MAX : 4 + k * 7 / EQ_DB_MAX;
+            uint32_t c;
+
+            if (seg > VU_SEG - 1) {
+                seg = VU_SEG - 1;
+            }
+            c = k == 0 ? (on ? 0xFFFFFFFFu : 0x333333FFu) : vu_seg_rgb(seg, on);
+            vu_fill(fb, x, k == 0 ? y0 - 2 : y0, x + 6, k == 0 ? y0 + 8 : y0 + 6, c, 255);
+        }
+    }
+}
+
+static int eq_page_visible(void)
+{
+    return menu_visible() && g_vm && g_page == PAGE_EQ;
 }
 
 static int sound_page_visible(void)
@@ -1819,9 +2252,9 @@ static void host_menu_paint(void)
     char num[8];
     char track[24];
     const char *title = "CONFIG";
-    static const char *root_name[9] = {
+    static const char *root_name[10] = {
         "GAMEPLAY", "GRAPHICS", "SOUND", "ALTERNATE VERSIONS", "CONTROLS", "RANKING", "PASSWORD",
-        "RESTORE DEFAULTS", "BACK"
+        "ORIGINAL PRESET", "RESTORE DEFAULTS", "BACK"
     };
     static const char *key_name[11] = {
         "UP", "DOWN", "LEFT", "RIGHT", "FIRE", "MODE", "SHIFT", "PAUSE",
@@ -1867,6 +2300,8 @@ static void host_menu_paint(void)
         title = "DEFINE KEYS";
     } else if (g_page == PAGE_SOUND) {
         title = "SOUND TEST";
+    } else if (g_page == PAGE_EQ) {
+        title = "CUSTOM EQ";
     }
     vm_text_write(g_vm, MENU_LABEL_COL, 1, title, 0, 0xE1u);
     if (g_page == PAGE_ROOT && g_pmenu) {
@@ -1876,17 +2311,20 @@ static void host_menu_paint(void)
             paint_line(i, menu_row(4, i), proot[i], NULL, 0);
         }
     } else if (g_page == PAGE_ROOT) {
-        for (i = 0; i < 9; i++) {
+        for (i = 0; i < 10; i++) {
+            int ask = (i == 7 || i == 8) && g_confirm == i;
+
             paint_line(i, menu_row(4, i), root_name[i],
-                       i == 7 && g_confirm ? "PRESS AGAIN" : NULL, i == 7 && g_confirm);
+                       ask ? "PRESS AGAIN" : NULL, ask);
         }
+        vm_text_write(g_vm, MENU_VALUE_COL, 1, "VER " RB_VERSION_MENU, MENU_VALUE_W, 0xA1u);
     } else if (opt_page()) {
         int nv;
         const int *v = opt_view(g_page, &nv);
         static const char *k_orient[4] = {"0", "90", "180", "270"};
 
         for (i = 0; i < nv; i++) {
-            int r = game_row(i) + (g_page != PAGE_GFX && g_page != PAGE_ALT ? i : 0);
+            int r = game_row(i) + (g_page != PAGE_GFX && g_page != PAGE_ALT ? i : 0) - (g_page == PAGE_EQ);
 
             switch (v[i]) {
             case 0: paint_line(i, r, "DIFFICULTY", k_diff[diff_index()], diff_index() != 2); break;
@@ -1913,12 +2351,45 @@ static void host_menu_paint(void)
             case OPT_CUSTOM: paint_line(i, r, "CUSTOM", g_custom || pu_index() < 0 ? "ON" : NULL, g_custom || pu_index() < 0); break;
             case OPT_MCHIP: paint_line(i, r, "MUSIC CHIP", k_chip_name[g_mchip], g_mchip != 0); break;
             case OPT_SCHIP: paint_line(i, r, "SFX CHIP", k_chip_name[g_schip], g_schip != 0); break;
+            case OPT_AURA: paint_line(i, r, "I-FRAMES", g_aura_on ? "NEW" : "CLASSIC", g_aura_on); break;
+            case OPT_MVOL: {
+                char vb[8];
+
+                snprintf(vb, sizeof vb, "%d", g_mvol);
+                paint_line(i, r, "MASTER VOLUME", vb, g_mvol != 100);
+                break;
+            }
+            case OPT_BAL: {
+                char vb[16];
+
+                if (g_bal == 0) {
+                    snprintf(vb, sizeof vb, "CENTER");
+                } else {
+                    snprintf(vb, sizeof vb, "%s %d", g_bal < 0 ? "LEFT" : "RIGHT", g_bal < 0 ? -g_bal : g_bal);
+                }
+                paint_line(i, r, "BALANCE", vb, g_bal != 0);
+                break;
+            }
+            case OPT_PROF: paint_line(i, r, "OUTPUT PROFILE", eq_profile_name(g_eqp), g_eqp != EQP_FLAT); break;
+            case OPT_EQ: paint_line(i, r, "CUSTOM EQ", g_eqp == EQP_CUSTOM ? "IN USE" : NULL, g_eqp == EQP_CUSTOM); break;
+            case OPT_EQRST: paint_line(i, r, "FLAT ALL BANDS", NULL, 0); break;
             case OPT_ATTRACT: paint_line(i, r, "ATTRACT MODE", g_attract_on ? "ON" : "OFF", !g_attract_on); break;
             case OPT_ORIENT: paint_line(i, r, "ORIENTATION", k_orient[g_orient & 3], g_orient != 0); break;
             case OPT_SNDTEST: paint_line(i, r, "SOUND TEST", NULL, 0); break;
             case OPT_BACK: paint_line(i, r, "BACK", NULL, 0); break;
             default:
-                if (v[i] >= OPT_CRT0 && v[i] < OPT_CRT0 + CRT_COUNT) {
+                if (v[i] >= OPT_EQB0 && v[i] < OPT_EQB0 + EQ_BANDS) {
+                    char lb[16];
+                    char vb[8];
+                    int b = v[i] - OPT_EQB0;
+                    int db = g_eqc[b];
+
+                    /* the slider is drawn in pixels by eq_draw() */
+                    snprintf(lb, sizeof lb, "%s HZ", eq_band_name(b));
+                    snprintf(vb, sizeof vb, "%s%d", db > 0 ? "+" : "", db);
+                    paint_option_row(MENU_LABEL_COL, MENU_VALUE_COL, r, lb, vb, 3,
+                                     i == g_cursor, db != 0);
+                } else if (v[i] >= OPT_CRT0 && v[i] < OPT_CRT0 + CRT_COUNT) {
                     int on = (g_crt >> (v[i] - OPT_CRT0)) & 1;
 
                     paint_line(i, r, crt_name(v[i] - OPT_CRT0), on ? "ON" : "OFF", on);
@@ -1929,15 +2400,18 @@ static void host_menu_paint(void)
         if (g_page == PAGE_ALT) {
         }
     } else if (g_page == PAGE_CTRL) {
-        paint_line(0, menu_row(4, 0), "JOYSTICK", joy_value(), joy_flag());
+        paint_line(0, menu_row(4, 0), "JOYSTICK", joy_flag() ? "ON" : "OFF", joy_flag());
         paint_line(1, menu_row(4, 1), "DEFINE KEYS", NULL, 0);
         paint_line(2, menu_row(4, 2), "BACK", NULL, 0);
-        if (sys_joy_present()) {
-            vm_text_write(g_vm, MENU_LABEL_COL, 12, "PAD FOUND", 0, 0xA1u);
-            vm_text_write(g_vm, MENU_VALUE_COL, 12, sys_joy_name(),
-                          MENU_VALUE_W, 0xA1u);
-        } else {
-            vm_text_write(g_vm, MENU_LABEL_COL, 12, "PLUG IN A PAD ANY TIME",
+        /* The one device in use: this controller, or none. */
+        vm_text_write(g_vm, MENU_LABEL_COL, 12, "DEVICE", 0, 0xE1u);
+        vm_text_write(g_vm, MENU_VALUE_COL, 12, joy_value(), MENU_VALUE_W,
+                      sys_joy_present() && joy_flag() ? 0xC1u : 0xA1u);
+        if (!sys_joy_present()) {
+            vm_text_write(g_vm, MENU_LABEL_COL, 14, "PLUG IN A PAD ANY TIME",
+                          0, 0xA1u);
+        } else if (!joy_flag() && g_joy_lockout) {
+            vm_text_write(g_vm, MENU_LABEL_COL, 14, "OFF BY HAND  STAYS OFF",
                           0, 0xA1u);
         }
     } else if (g_page == PAGE_KEYS) {
@@ -1955,15 +2429,18 @@ static void host_menu_paint(void)
         const char *state = "STOP";
 
         snprintf(num, sizeof num, "%02d", g_bgm_no);
-        paint_line(0, menu_row(3, 0), "SOUND", sound_on() ? "ON" : "OFF",
+        paint_line(0, 3, "SOUND", sound_on() ? "ON" : "OFF",
                    sound_on());
-        paint_line(1, menu_row(3, 1), "BGM", num, g_pl_kind == 0 && g_pl == 1);
+        paint_line(1, 5, "BGM", num, g_pl_kind == 0 && g_pl == 1);
         snprintf(num, sizeof num, "%02d", g_se_no);
-        paint_line(2, menu_row(3, 2), "SE", num, g_pl_kind == 1 && g_pl == 1);
-        paint_line(3, menu_row(3, 3), "PLAY", NULL, 0);
-        paint_line(4, menu_row(3, 4), "PAUSE", NULL, 0);
-        paint_line(5, menu_row(3, 5), "STOP", NULL, 0);
-        paint_line(6, menu_row(3, 6), "BACK", NULL, 0);
+        paint_line(2, 7, "SE", num, g_pl_kind == 1 && g_pl == 1);
+        paint_line(3, 9, "PLAY", NULL, 0);
+        paint_line(4, 11, "PAUSE", NULL, 0);
+        paint_line(5, 13, "STOP", NULL, 0);
+        /* chips of ALTERNATE VERSIONS, switchable here (not saved) */
+        paint_line(6, 15, "MUSIC CHIP", k_chip_name[g_mchip], g_mchip != 0);
+        paint_line(7, 17, "SFX CHIP", k_chip_name[g_schip], g_schip != 0);
+        paint_line(8, 19, "BACK", NULL, 0);
         if (g_pl == 1) {
             state = "PLAY";
         } else if (g_pl == 2) {
@@ -1972,15 +2449,14 @@ static void host_menu_paint(void)
         snprintf(track, sizeof track, "%s %02d  %s",
                  g_pl_kind ? "SE" : "BGM",
                  g_pl_kind ? g_se_no : g_bgm_no, state);
-        vm_text_write(g_vm, MENU_LABEL_COL, 17, "TRACK", 0, 0xE1u);
-        vm_text_write(g_vm, MENU_VALUE_COL, 17, track, MENU_VALUE_W,
+                vm_text_write(g_vm, MENU_VALUE_COL, 1, track, MENU_VALUE_W,
                       g_pl == 1 ? 0xC1u : 0xA1u);
     }
     if (g_capture) {
-        vm_text_write(g_vm, MENU_LABEL_COL, 23, "ESC OR PAD BACK CANCELS", 0,
+        vm_text_write(g_vm, MENU_LABEL_COL, 24, "ESC OR PAD BACK CANCELS", 0,
                       0xA1u);
     } else {
-        vm_text_write(g_vm, MENU_LABEL_COL, 23,
+        vm_text_write(g_vm, MENU_LABEL_COL, 24,
                       "FIRE OK  ESC BACK  LEFT RIGHT SET", 0, 0xA1u);
     }
 }
@@ -2240,6 +2716,13 @@ void game_init(RbGame *g, const RbDisk *disk)
     hit_fix();
     sys_audio_extra(g_sndx);
     sys_audio_chips(g_mchip, g_schip);
+    sys_audio_volume(g_mvol);
+    apply_eq();
+    if (g_joy_off_saved) {
+        /* JOYSTICK was turned OFF by hand: keep it off. */
+        g_joy_lockout = 1;
+        set_flag_word((uint16_t)(flag_word() & (uint16_t)~0x0400u));
+    }
     sys_set_scaling(g_scaling);
     sys_set_aspect(g_aspect43);
     sys_set_orientation(g_orient);
@@ -2263,6 +2746,10 @@ void game_init(RbGame *g, const RbDisk *disk)
         set_speed(1);
         save_cfg(g);
         rank_flush(g);
+    }
+    if (g_cfg_preset) {
+        g_cfg_preset = 0;
+        original_preset(g);
     }
     apply_host_options();
     if (!((char *)0) && !0) {
@@ -4032,6 +4519,9 @@ void game_render(const RbGame *g)
                     vu_update();
                     vu_draw(frame);
                 }
+                if (eq_page_visible()) {
+                    eq_draw(frame);
+                }
             }
             break;
         }
@@ -4137,6 +4627,7 @@ void game_render(const RbGame *g)
                 vm_info(g_vm, &zi);
                 cfilter_set_stage(zi.chunk >= 2 && zi.chunk <= 6 ? (int)zi.chunk - 1 : 1);
             }
+            aura_draw(px, g);
             cfilter_apply(px, RB_NATIVE_W, RB_NATIVE_H, g_cfilter);
             crt_apply(px, RB_NATIVE_W, 80, 0, 480, RB_NATIVE_H, g_crt, g->frame);
             /* after the filters, so its 1 px sides stay crisp */
