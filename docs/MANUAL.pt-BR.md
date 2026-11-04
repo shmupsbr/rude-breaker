@@ -1,7 +1,10 @@
 RUDE BREAKER 30th AE - PORT PARA PC - MANUAL DO USUÁRIO
 =======================================================
 
-Build pr9ze - 31/10/2026
+Versão 0.10.0 - 03/11/2026
+
+O programa mostra o mesmo número: rudebreaker --version, o título da
+janela e a linha de cima da página CONFIG (VER 0.10.0).
 
 Também em: inglês (MANUAL.md / .txt), japonês (MANUAL.ja.md / .txt).
 
@@ -291,14 +294,20 @@ nem recorde, nem ranking, nem configurações. O movimento da nave na
 demo segue o trajeto de um jogador de verdade; é uma gravação de
 comandos nossa, não dado do jogo.
 
+Os dois rankings são coisas diferentes. No modo atração o ranking faz
+parte do ciclo original: aparece sozinho por alguns segundos e passa,
+sem precisar de tecla (qualquer tecla sai do ciclo). O RANKING do
+CONFIG abre a mesma tabela para olhar o tempo que quiser; fecha quando
+você aperta uma tecla.
+
 O CONFIG tem estas páginas: GAMEPLAY, GRAPHICS, SOUND, ALTERNATE VERSIONS, CONTROLS,
-RANKING, PASSWORD, RESTORE DEFAULTS e BACK. As opções mantêm os nomes antigos no
+RANKING, PASSWORD, ORIGINAL PRESET, RESTORE DEFAULTS e BACK. As opções mantêm os nomes antigos no
 rudebreaker.cfg, então saves de versões anteriores carregam sem mudança.
 
 GAMEPLAY
 
   Opções, nesta ordem: DIFFICULTY, RANK, SUICIDE BULLETS, SHIP SELECT,
-  SHIP SPEED, TRAINING, LOOP, ATTRACT MODE e BACK.
+  SHIP SPEED, TRAINING, LOOP, ATTRACT MODE, I-FRAMES e BACK.
 
   DIFFICULTY       VERY EASY, EASY, NORMAL, HARD, VERY HARD. São os
                    próprios níveis de dificuldade do jogo original.
@@ -353,6 +362,21 @@ GAMEPLAY
                    roda uma demo de 30 segundos (sem música, só efeitos
                    sonoros) e depois o logo da Compile de novo. OFF: sem
                    demo. Salvo no rudebreaker.cfg.
+
+  I-FRAMES         CLASSIC (padrão) ou NEW. CLASSIC: a invencibilidade
+                   da nave depois de um golpe ou de um power-up aparece
+                   como no original (o contorno vermelho). NEW: uma luz
+                   vermelha também percorre a própria nave em ondas, do
+                   centro para fora, e para na borda do sprite; os
+                   options também recebem enquanto estão acoplados. Usa
+                   os vermelhos do efeito original, pulsa e vai
+                   afinando conforme o tempo restante acaba, então dá
+                   para ver quando está para terminar. É desenhada pelo
+                   port por cima da imagem, em pixels puros (sem
+                   suavização); os filtros de cor e as opções de CRT
+                   valem para ela também. Só muda o visual: o tempo de
+                   invencibilidade é o mesmo. Salvo no rudebreaker.cfg
+                   (iframes=classic / new).
 
   BACK
 
@@ -573,7 +597,8 @@ GRAPHICS
 
 SOUND
 
-  Opções: SOUND CHANNELS, SOUND TEST e BACK.
+  Opções: SOUND CHANNELS, MASTER VOLUME, BALANCE, OUTPUT PROFILE,
+  CUSTOM EQ, SOUND TEST e BACK.
 
   SOUND CHANNELS   EXTRA (padrão): os efeitos tocam num segundo chip
                    emulado, e a música nunca é cortada. ORIGINAL: os
@@ -630,18 +655,61 @@ SOUND
                    over, final ou saída para o título), volta para ORIGINAL
                    PC-98.
 
+  MASTER VOLUME    0 a 100 em passos de 10 (padrão 100). O volume de
+                   toda a saída de som do programa, ajustado pelo port
+                   por cima dos volumes de música e efeitos do próprio
+                   jogo (que não mudam). Em 100 o som sai exatamente
+                   como antes. Salvo no rudebreaker.cfg (master_volume=).
+
+  BALANCE          CENTER (padrão), ou LEFT / RIGHT de 1 a 10: o
+                   outro lado fica mais baixo, um décimo por passo, então
+                   10 é só um lado. Feito pelo port na saída. Salvo
+                   (balance=, de -10 a 10).
+  OUTPUT PROFILE   Uma curva de EQ para onde você ouve: FLAT (padrão,
+                   sem mudança), HEADPHONES (agudos mais suaves e um
+                   crossfeed leve entre os ouvidos), TV (menos grave
+                   profundo, faixa da voz à frente), MONITOR (caixas de
+                   mesa), STEREO SPEAKERS, 2.1 (grave abaixo de uns 120 Hz
+                   igual nos dois lados, para subwoofer, e um reforço de
+                   grave), LARGE SPEAKERS, HOME THEATER, LAPTOP e SMALL
+                   SPEAKERS (corta o grave profundo para alto-falantes
+                   pequenos não distorcerem), CUSTOM (a curva do CUSTOM
+                   EQ). O nível baixa pelo maior reforço para nada
+                   clipar. FLAT com BALANCE CENTER deixa o som
+                   exatamente como antes. Salvo (output_profile=).
+  CUSTOM EQ        Página com um EQ gráfico de 10 bandas: 31, 62, 125,
+                   250, 500 Hz, 1K, 2K, 4K, 8K, 16K, cada uma de -12 a
+                   +12 dB em passos de 1 dB com esquerda/direita; o Tiro
+                   volta a banda para 0. Mexer numa banda escolhe OUTPUT
+                   PROFILE CUSTOM. Salvo (custom_eq=, dez números).
   SOUND TEST       Abre a página SOUND TEST (abaixo).
 
   BACK
 
 CONTROLS
 
-  JOYSTICK         Mostra se há um controle em uso, e o nome dele.
-                   Troque com esquerda/direita.
+  JOYSTICK         ON ou OFF: se o jogo lê um controle. Um controle é
+                   ligado sozinho ao ser conectado, mas se você puser
+                   JOYSTICK em OFF aqui ele fica desligado, também
+                   depois de reiniciar e quando um controle é conectado
+                   de novo, até você pôr em ON (salvo como
+                   joystick=off; auto é o padrão).
+                   Embaixo: DEVICE mostra o único controle em uso (o
+                   nome dele), ou NONE. Com dois controles conectados,
+                   o que está em uso continua em uso quando o outro é
+                   conectado ou removido.
   DEFINE KEYS      Remapeia UP, DOWN, LEFT, RIGHT, FIRE, MODE, SHIFT,
                    PAUSE e SPEED. Escolha uma ação e aperte a tecla
                    ou o botão novo. RESTORE DEFAULTS volta as teclas
                    listadas na seção 3.
+                   Os botões do controle aparecem com nomes legíveis,
+                   pela família do controle quando ela é conhecida:
+                   A / B / X / Y, LB / RB, VIEW / BACK e MENU / START em
+                   controles estilo Xbox; CROSS, CIRCLE, SQUARE,
+                   TRIANGLE, L1 / R1 em controles PlayStation; letras
+                   Nintendo pela posição. Gatilhos, analógicos, o
+                   D-PAD, BACK PADDLE 1-4, TOUCHPAD CLICK e o botão de
+                   share / captura têm nomes próprios.
   BACK
 
 SOUND TEST (aberto pelo SOUND)
@@ -652,12 +720,34 @@ SOUND TEST (aberto pelo SOUND)
   SE               Escolha um efeito sonoro (0-47) com
                    esquerda/direita; o Tiro toca.
   PLAY / PAUSE / STOP   Controles do player.
-  As barras embaixo são um VU meter do que está tocando.
+  MUSIC CHIP / SFX CHIP   Os chips do ALTERNATE VERSIONS, trocados
+                   aqui com esquerda/direita; a faixa tocando muda na
+                   hora. Como lá, não são salvos: voltam para ORIGINAL
+                   na próxima abertura e depois de uma partida.
+  A linha de cima mostra a faixa e o estado. O medidor embaixo é um
+  VU do que está tocando, em segmentos de LED do verde ao vermelho,
+  com pico retido.
   (Alguns números são mudos: estão vazios nos dados originais.)
 
 RANKING            Abre a tabela de recordes original.
 
 PASSWORD           Abre a tela de senha original.
+
+ORIGINAL PRESET    Um passo para o jogo como era no disco do PC-98,
+                   por exemplo para comparar. Aperte Fire uma vez:
+                   aparece PRESS AGAIN; aperte Fire de novo para
+                   confirmar. Põe LOOP OFF, RANK OFF, SHIP SELECT ON (a
+                   escolha de arma, como no disco), SOUND CHANNELS
+                   ORIGINAL, a paleta original, sem COLOR FILTER, sem
+                   CRT, sem painéis laterais, cores de tiro originais,
+                   HITBOX OFF, SHIP SPEED STANDARD, TRAINING OFF,
+                   I-FRAMES CLASSIC, os chips de música e efeitos
+                   originais, OUTPUT PROFILE FLAT e BALANCE CENTER. Janela, escala, aspecto, orientação,
+                   teclas, DIFFICULTY, SUICIDE BULLETS, MASTER VOLUME,
+                   recordes, o ranking (RBRANK.DAT) e senhas não são
+                   mexidos; nada é apagado. Dá para mudar qualquer opção
+                   depois. A linha preset=original no rudebreaker.cfg
+                   faz o mesmo uma vez na próxima abertura.
 
 RESTORE DEFAULTS   Volta todas as opções do CONFIG ao padrão de uma
                    instalação nova (teclas incluídas). Aperte Fire uma
@@ -667,6 +757,26 @@ RESTORE DEFAULTS   Volta todas as opções do CONFIG ao padrão de uma
 
 BACK               Volta ao título.
 
+
+PERFIS DE CONTROLE (Steam Deck e outros)
+
+  Qualquer controle que o SDL conhece funciona sem configurar: analógico
+  ou D-PAD movem, o botão de baixo atira, o da direita é o MODE, START
+  pausa. Use o DEFINE KEYS para o resto.
+  Steam Deck (no modo desktop ou jogo, pelo Steam Input com o layout
+  "Gamepad"): analógico esquerdo ou D-PAD movem, A FIRE, B MODE, X
+  SHIFT, MENU (o botão à direita da tela) PAUSE. Os botões de trás (L4,
+  L5, R4, R5) chegam como BACK PADDLE 1-4, então dá para pôr SPEED ou
+  SHIFT num deles no DEFINE KEYS; se o Steam mapear eles para outros
+  botões, configure no Steam Input. Ainda não testado num Deck de
+  verdade.
+
+LINUX: WAYLAND E X11
+
+  No Linux o programa abre primeiro em X11 (num desktop Wayland, pelo
+  XWayland), que funciona em todo lugar. Para usar Wayland nativo, abra
+  com SDL_VIDEODRIVER=wayland ./rudebreaker ; para voltar, tire a
+  variável ou use SDL_VIDEODRIVER=x11.
 
 5. MODO DE TREINO
 -----------------

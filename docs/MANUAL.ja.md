@@ -1,7 +1,10 @@
 RUDE BREAKER 30th AE - PC版移植 - 取扱説明書
 =============================================
 
-ビルド pr9ze - 2026年10月31日
+バージョン 0.10.0 - 2026年11月3日
+
+プログラムも同じ番号を表示します：rudebreaker --version、ウィンドウの
+タイトル、CONFIG ページの一番上の行（VER 0.10.0）。
 
 ほかの言語：英語（MANUAL.md / .txt）、ポルトガル語（MANUAL.pt-BR.md / .txt）。
 
@@ -281,14 +284,19 @@ Bボタン（パッド）で1ページ戻ります。
 の軌跡に基づく、このポート独自の入力記録で、ゲームのデータではあり
 ません。
 
+2つのランキングは別物です。アトラクトモードのランキングはオリジナルの
+ループの一部で、数秒間ひとりでに表示されて次へ進みます（キーは不要、
+どのキーでもループを抜けます）。CONFIG の RANKING は同じ表を好きな
+だけ眺めるためのもので、キーを押すと閉じます。
+
 CONFIGには GAMEPLAY、GRAPHICS、SOUND、ALTERNATE VERSIONS、CONTROLS、RANKING、PASSWORD、
-RESTORE DEFAULTS、BACK のページがあります。rudebreaker.cfg の設定名は以前と同じなので、
+ORIGINAL PRESET、RESTORE DEFAULTS、BACK のページがあります。rudebreaker.cfg の設定名は以前と同じなので、
 以前の版の設定もそのまま読み込めます。
 
 GAMEPLAY
 
   項目の順番：DIFFICULTY、RANK、SUICIDE BULLETS、SHIP SELECT、DEFAULT
-  SPEED、TRAINING、LOOP、ATTRACT MODE、BACK。
+  SPEED、TRAINING、LOOP、ATTRACT MODE、I-FRAMES、BACK。
 
   DIFFICULTY       VERY EASY、EASY、NORMAL、HARD、VERY HARD。オリジナル
                    そのままの難易度です。NORMALがオリジナルの初期設定。
@@ -338,6 +346,18 @@ GAMEPLAY
                    30秒のデモ（音楽なし、効果音のみ）、その後コンパイル
                    のロゴに戻ります。OFF：デモなし。
                    rudebreaker.cfg に保存されます。
+
+  I-FRAMES         CLASSIC（初期設定）または NEW。CLASSIC：被弾後や
+                   パワーアップ後の自機の無敵はオリジナルどおりの見た目
+                   （赤い輪郭）。NEW：さらに赤い光が自機の表面を中心から
+                   外へ波のように走り、スプライトの端で止まります。
+                   オプションも合体している間は同じように光ります。
+                   オリジナルの演出の赤を使い、脈打ち、残り時間が減る
+                   につれて細くなるので、無敵が切れそうなのが分かります。
+                   このポートが画面の上にドットそのまま（なめらかに
+                   しない）で描き、カラーフィルターや CRT の設定もかかり
+                   ます。変わるのは見た目だけで、無敵時間は同じです。
+                   rudebreaker.cfg に保存されます（iframes=classic / new）。
 
   BACK
 
@@ -532,7 +552,8 @@ GRAPHICS
 
 SOUND
 
-  項目：SOUND CHANNELS、SOUND TEST、BACK。
+  項目：SOUND CHANNELS、MASTER VOLUME、BALANCE、OUTPUT PROFILE、
+  CUSTOM EQ、SOUND TEST、BACK。
 
   SOUND CHANNELS   EXTRA（初期設定）：効果音を2つ目のエミュレート音源で
                    鳴らし、音楽は途切れません。ORIGINAL：PC-98と同じく
@@ -587,18 +608,56 @@ SOUND
                    バー、エンディング、タイトルへ戻る）に ORIGINAL PC-98 に
                    戻ります。
 
+  MASTER VOLUME    0～100、10刻み（初期設定 100）。プログラム全体の
+                   出力音量で、ゲーム自体の音楽・効果音の音量（変わり
+                   ません）の上にポート側でかけます。100 なら音は以前と
+                   まったく同じです。rudebreaker.cfg に保存されます
+                   （master_volume=）。
+
+  BALANCE          CENTER（初期設定）、または LEFT / RIGHT の 1～10。
+                   反対側が1段ごとに10分の1ずつ小さくなり、10 で片側
+                   だけになります。ポートが出力で処理します。保存され
+                   ます（balance=、-10～10）。
+  OUTPUT PROFILE   聴く環境に合わせた EQ カーブ：FLAT（初期設定、変化
+                   なし）、HEADPHONES（高域を少し抑え、左右に軽いクロス
+                   フィード）、TV（重低音を減らし声の帯域を前に）、
+                   MONITOR（デスクのスピーカー）、STEREO SPEAKERS、2.1
+                   （約120 Hz以下の低音を左右同じにしてサブウーファー
+                   向けに、低音を少し持ち上げ）、LARGE SPEAKERS、HOME
+                   THEATER、LAPTOP、SMALL SPEAKERS（小さいスピーカーが
+                   歪まないよう重低音をカット）、CUSTOM（CUSTOM EQ の
+                   カーブ）。音割れしないよう、最大のブースト分だけ音量
+                   を下げます。FLAT で BALANCE CENTER なら音は以前と
+                   まったく同じです。保存されます（output_profile=）。
+  CUSTOM EQ        10バンドのグラフィック EQ のページ：31、62、125、
+                   250、500 Hz、1K、2K、4K、8K、16K。左右でそれぞれ
+                   -12～+12 dB を 1 dB 刻み、Fire でそのバンドを 0 に
+                   戻します。バンドを変えると OUTPUT PROFILE は CUSTOM
+                   になります。保存されます（custom_eq=、10個の数）。
   SOUND TEST       SOUND TEST ページ（下記）を開きます。
 
   BACK
 
 CONTROLS
 
-  JOYSTICK         使用中のゲームパッドの有無と名前を表示します。
-                   左右で切り替えます。
+  JOYSTICK         ON または OFF：ゲームパッドを読むかどうか。パッドを
+                   つなぐと自動で ON になりますが、ここで OFF にすると、
+                   再起動後もパッドをつなぎ直しても、ON に戻すまで OFF
+                   のままです（joystick=off として保存。初期設定は auto）。
+                   下の DEVICE には使用中のコントローラー1台の名前、
+                   または NONE が出ます。2台つないでいるとき、もう1台を
+                   抜き差ししても使用中のものはそのままです。
   DEFINE KEYS      UP、DOWN、LEFT、RIGHT、FIRE、MODE、SHIFT、PAUSE、
                    SPEED を割り当て直します。動作を選んで、新しいキーか
                    パッドのボタンを押してください。RESTORE DEFAULTS で
                    3章のキーに戻ります。
+                   パッドのボタンは読みやすい名前で表示されます。種類が
+                   分かれば Xbox 系は A / B / X / Y、LB / RB、VIEW / BACK、
+                   MENU / START、PlayStation 系は CROSS、CIRCLE、SQUARE、
+                   TRIANGLE、L1 / R1、Nintendo 系は位置つきの文字です。
+                   トリガー、スティック、D-PAD、BACK PADDLE 1-4、
+                   TOUCHPAD CLICK、シェア／キャプチャボタンにも名前が
+                   あります。
   BACK
 
 SOUND TEST（SOUND から開きます）
@@ -607,12 +666,33 @@ SOUND TEST（SOUND から開きます）
   BGM              左右で曲（0～47）を選び、ショットで再生。
   SE               左右で効果音（0～47）を選び、ショットで再生。
   PLAY / PAUSE / STOP   プレイヤーの操作。
-  下のバーは再生中の音のVUメーターです。
+  MUSIC CHIP / SFX CHIP   ALTERNATE VERSIONS の音源チップを、ここで
+                   左右で切り替えられます。再生中の曲もすぐ切り替わり
+                   ます。あちらと同じく保存されず、次の起動時とゲーム
+                   終了後に ORIGINAL に戻ります。
+  一番上の行に曲と状態が出ます。下のメーターは再生中の音の VU で、
+  緑から赤への LED セグメントとピークホールド付きです。
   （一部の番号は無音です。オリジナルのデータで空になっています。）
 
 RANKING            オリジナルのハイスコア表を開きます。
 
 PASSWORD           オリジナルのパスワード画面を開きます。
+
+ORIGINAL PRESET    PC-98 のディスクのとおりのゲームに一度で戻します
+                   （比較などに）。Fire を1回押すと PRESS AGAIN と出るの
+                   で、もう1回 Fire で確定します。LOOP OFF、RANK OFF、
+                   SHIP SELECT ON（ディスクどおりの武器選択）、SOUND
+                   CHANNELS ORIGINAL、オリジナルのパレット、COLOR FILTER
+                   なし、CRT なし、サイドパネルなし、オリジナルの弾の色、
+                   HITBOX OFF、SHIP SPEED STANDARD、TRAINING OFF、
+                   I-FRAMES CLASSIC、オリジナルの音源チップ、OUTPUT PROFILE
+                   FLAT、BALANCE CENTER になります。
+                   ウィンドウ、スケーリング、アスペクト、画面の向き、
+                   キー、DIFFICULTY、SUICIDE BULLETS、MASTER VOLUME、
+                   ハイスコア、ランキング（RBRANK.DAT）、パスワードは
+                   そのままで、何も削除しません。あとからどの設定も
+                   変えられます。rudebreaker.cfg に preset=original と
+                   書くと、次の起動時に1回同じことをします。
 
 RESTORE DEFAULTS   CONFIG のすべての設定を新しくインストールしたときの
                    状態に戻します（キー設定も含む）。Fire を1回押すと
@@ -622,6 +702,26 @@ RESTORE DEFAULTS   CONFIG のすべての設定を新しくインストールし
 
 BACK               タイトルに戻ります。
 
+
+コントローラーの設定例（Steam Deck ほか）
+
+  SDL が知っているパッドなら設定なしで動きます：スティックか D-PAD で
+  移動、下のボタンでショット、右のボタンで MODE、START でポーズ。ほかは
+  DEFINE KEYS で設定してください。
+  Steam Deck（デスクトップでもゲームモードでも、Steam Input の
+  「ゲームパッド」レイアウト）：左スティックか D-PAD で移動、A で FIRE、
+  B で MODE、X で SHIFT、MENU（画面右のボタン）で PAUSE。背面ボタン
+  （L4、L5、R4、R5）は BACK PADDLE 1-4 として届くので、DEFINE KEYS で
+  SPEED や SHIFT を割り当てられます。Steam がほかのボタンに割り当てて
+  いる場合は Steam Input 側で設定してください。実機の Deck ではまだ
+  試していません。
+
+LINUX：WAYLAND と X11
+
+  Linux ではまず X11 で開きます（Wayland のデスクトップでは XWayland
+  経由）。どこでも動く方法です。Wayland で直接動かすには
+  SDL_VIDEODRIVER=wayland ./rudebreaker で起動し、戻すには変数を外すか
+  SDL_VIDEODRIVER=x11 にします。
 
 5. トレーニングモード
 ---------------------
