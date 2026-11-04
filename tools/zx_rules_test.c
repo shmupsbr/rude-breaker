@@ -196,6 +196,39 @@ int main(void)
     expect("tile cruiser 1 is dark yellow", (at(120, 40) & 0xFFFFFF00u) == 0xD7D70000u);
     expect("tile cruiser 2 is cyan", (at(120, 190) & 0xFFFFFF00u) == 0x00FFFF00u);
 
+    /* Gappy hull: bright pixels split by black lines must still be flat. */
+    clear_frame();
+    apply(1, 10);
+    clear_frame();
+    for (y = 10; y < 90; y++) {
+        for (x = 100; x < 180; x++) {
+            if ((x + y) & 1) {
+                put(x, y, 0xC0404000u, 0, 0, 0, 140, 1);
+            }
+        }
+    }
+    apply(2, 10);
+    {
+        uint32_t c = at(120, 40) & 0xFFFFFF00u;
+        int bad = c != 0xD7D70000u && c != 0x00000000u;
+
+        expect("gappy cruiser is flat yellow or black", !bad);
+        expect("gappy cruiser paint is yellow", (at(121, 40) & 0xFFFFFF00u) == 0xD7D70000u);
+        printf("  gappy=%06X\n", (c >> 8) & 0xFFFFFF);
+    }
+
+    /* White sprite on a white cloud must not stay white. */
+    clear_frame();
+    fill(80, 0, 200, 80, 0xE8F4FF00u, 0, 0, 0, 230, 3);
+    fill(120, 24, 136, 40, 0xFFFFFF00u, 1, 777, 0, 250, 3);
+    apply(3, 10);
+    {
+        uint32_t c = at(124, 28) & 0xFFFFFF00u;
+
+        expect("sprite avoids white clouds", c != 0xFFFFFF00u && c != 0xD7D7D700u);
+        printf("  cloud-sprite=%06X\n", (c >> 8) & 0xFFFFFF);
+    }
+
     /* Blue-grey scenery must keep a hue, not collapse to black and white. */
     clear_frame();
     fill(80, 64, 112, 96, 0x5A649600u, 0, 0, 0, 0, 4);

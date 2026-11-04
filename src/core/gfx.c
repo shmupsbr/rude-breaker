@@ -213,6 +213,10 @@ static void put_idx(RbGfx *gfx, int x, int y, uint8_t idx)
 
 void gfx_stamp_begin(uint16_t key)
 {
+    static uint16_t seen[8];
+    static int nseen;
+    int i;
+
     if (key >= 0xF000u) {
         key = (uint16_t)(key & 0x0FFFu);
     }
@@ -220,6 +224,15 @@ void gfx_stamp_begin(uint16_t key)
         key = 1;
     }
     g_stamp_key = key;
+    for (i = 0; i < nseen; i++) {
+        if (seen[i] == key) {
+            return;
+        }
+    }
+    if (nseen < 8) {
+        seen[nseen++] = key;
+        fprintf(stderr, "zx stamp key %u\n", (unsigned)key);
+    }
 }
 
 void gfx_stamp_end(void)
