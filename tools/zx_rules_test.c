@@ -266,6 +266,17 @@ int main(void)
     expect("cruiser core is not magenta", (at(140, 56) & 0xFFFFFF00u) != 0xD700D700u);
     expect("cruiser hull stays dark yellow", (at(110, 24) & 0xFFFFFF00u) == 0xD7D70000u);
 
+    /* Two stamp chunks of the first cruiser, a few tiles apart. Both
+     * stay dark yellow; a later separate ship is still cyan. */
+    clear_frame();
+    apply(1, 10);
+    clear_frame();
+    fill(120, 16, 200, 56, 0xC0C0C000u, 0, 0, 0, 180, 1);
+    fill(120, 76, 200, 156, 0xC0C0C000u, 0, 0, 0, 180, 1);
+    apply(2, 10);
+    expect("cruiser chunk top is yellow", (at(140, 30) & 0xFFFFFF00u) == 0xD7D70000u);
+    expect("cruiser chunk bottom is yellow", (at(140, 100) & 0xFFFFFF00u) == 0xD7D70000u);
+
     /* White sprite on a white cloud must not stay white. */
     clear_frame();
     fill(80, 0, 400, 160, 0x33445500u, 0, 0, 0, 80, 3);
@@ -327,6 +338,31 @@ int main(void)
         expect("scenery keeps a hue", hue > 0 && grey == 0);
         expect("scenery is one solid colour", hue > 0 && (at(86, 70) & 0xFFFFFF00u) == (at(90, 80) & 0xFFFFFF00u));
         printf("  hue=%d grey=%d sample=%06X\n", hue, grey, (at(90, 80) >> 8) & 0xFFFFFF);
+    }
+
+    /* White score glyph on a bright field keeps a black outline. */
+    {
+        static uint8_t txt[N];
+
+        memset(txt, 0, sizeof txt);
+        clear_frame();
+        fill(80, 0, 160, 40, 0xFFFFFFFFu, 0, 0, 0, 255, 0);
+        for (y = 8; y < 12; y++) {
+            for (x = 100; x < 104; x++) {
+                put(x, y, 0xFFFFFF00u, 0, 0, 0, 255, 0);
+                txt[(size_t)y * W + (size_t)x] = 1;
+            }
+        }
+        cfilter_set_world(sid, bgi, 0);
+        cfilter_set_kind(kind);
+        cfilter_set_text(txt, NULL);
+        cfilter_set_layer(NULL);
+        cfilter_set_stage(4);
+        cfilter_set_shade(shade);
+        cfilter_set_player(own, NULL, 10, 10);
+        cfilter_apply(px, W, H, CF_ZX);
+        expect("score glyph stays white", (at(100, 8) & 0xFFFFFF00u) == 0xFFFFFF00u);
+        expect("score glyph has a black outline", (at(98, 8) & 0xFFFFFF00u) == 0x00000000u);
     }
 
     if (fails) {

@@ -1347,6 +1347,7 @@ static int g_big_stage = -1;
 static int g_cr_n; /* how many stage-2 cruisers locked */
 static uint16_t g_cr_id[2]; /* sprite/stamp ids; [0] dark yellow, [1] cyan */
 static int g_hull_box[2][4]; /* page-space x0,y0,x1,y1 of a tile cruiser */
+static uint8_t g_hull_live[2];
 static uint32_t g_zw_palh;
 static uint8_t g_zw_tag[ZW_W * ZW_H]; /* 1 enemy, 2 item/shot, 3 enemy bullet */
 static uint8_t g_zw_bgc[ZW_W * ZW_H]; /* spectrum index behind this pixel */
@@ -1745,26 +1746,56 @@ static void zx_stage2_hull(void)
             nlab++;
             continue;
         }
-        if (saw1) {
-            slot = 1;
-        } else if (saw2) {
-            slot = 2;
-        }
+        /* Stamp chunks of one ship scroll in separately. A piece that
+         * shares the column and sits within a tile or two of a cruiser
+         * already seen is that cruiser, not the next one. */
         for (k = 0; k < g_cr_n && k < 2 && !slot; k++) {
-            if (g_hull_box[k][2] >= x0 && x1 >= g_hull_box[k][0] &&
-                g_hull_box[k][3] >= y0 && y1 >= g_hull_box[k][1]) {
+            int bx0 = g_hull_box[k][0], by0 = g_hull_box[k][1];
+            int bx1 = g_hull_box[k][2], by1 = g_hull_box[k][3];
+            int ov, gap;
+
+            if (!g_hull_live[k] || x1 < bx0 || bx1 < x0) {
+                continue;
+            }
+            ov = (x1 < bx1 ? x1 : bx1) - (x0 > bx0 ? x0 : bx0) + 1;
+            if (ov < 8) {
+                continue;
+            }
+            if (y1 >= by0 && by1 >= y0) {
+                gap = 0;
+            } else if (y1 < by0) {
+                gap = by0 - y1 - 1;
+            } else {
+                gap = y0 - by1 - 1;
+            }
+            if (gap <= 16) {
                 slot = k + 1;
             }
+        }
+        if (!slot && saw1) {
+            slot = 1;
+        } else if (!slot && saw2) {
+            slot = 2;
         }
         if (!slot) {
             /* the first mass is yellow; every later cruiser is cyan */
             slot = g_cr_n < 2 ? ++g_cr_n : 2;
         }
         if (slot) {
-            g_hull_box[slot - 1][0] = x0;
-            g_hull_box[slot - 1][1] = y0;
-            g_hull_box[slot - 1][2] = x1;
-            g_hull_box[slot - 1][3] = y1;
+            int *bx = g_hull_box[slot - 1];
+
+            if (!g_hull_live[slot - 1]) {
+                bx[0] = x0;
+                bx[1] = y0;
+                bx[2] = x1;
+                bx[3] = y1;
+                g_hull_live[slot - 1] = 1;
+            } else {
+                if (x0 < bx[0]) bx[0] = x0;
+                if (y0 < bx[1]) bx[1] = y0;
+                if (x1 > bx[2]) bx[2] = x1;
+                if (y1 > bx[3]) bx[3] = y1;
+            }
         }
         if (!slot) {
             nlab++;
@@ -1823,6 +1854,7 @@ static void zx_world(uint32_t *px, int w, int h)
         g_big_stage = g_cf_stage;
         g_cr_n = 0;
         g_cr_id[0] = g_cr_id[1] = 0;
+        g_hull_live[0] = g_hull_live[1] = 0;
         memset(g_hull_box, 0, sizeof g_hull_box);
     }
     {
@@ -2340,6 +2372,35 @@ static void zx_world(uint32_t *px, int w, int h)
                     uint32_t c = t == 2 ? 0xFFFFFFFFu : 0x000000FFu;
 
                     px[q] = px[q + 1] = px[q + (size_t)w] = px[q + (size_t)w + 1] = c;
+                }
+            }
+        }
+        /* A black machine pixel around each lit glyph, so the white
+         * score still reads on the white cloud dither. */
+        for (y = 0; y < 400; y += 2) {
+            for (x = 80; x < 560; x += 2) {
+                int mx = (x - 80) >> 1, my = y >> 1, d;
+
+                if (g_tblk[my * ZW_W + mx] != 2) {
+                    continue;
+                }
+                for (d = 0; d < 8; d++) {
+                    static const int dx[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+                    static const int dy[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+                    int nx = mx + dx[d], ny = my + dy[d];
+                    size_t nq;
+                    int sx, sy;
+
+                    if (nx < 0 || nx >= ZW_W || ny < 0 || ny >= ZW_H) {
+                        continue;
+                    }
+                    if (g_tblk[ny * ZW_W + nx]) {
+                        continue;
+                    }
+                    sx = 80 + nx * 2;
+                    sy = ny * 2;
+                    nq = (size_t)sy * w + sx;
+                    px[nq] = px[nq + 1] = px[nq + (size_t)w] = px[nq + (size_t)w + 1] = 0x000000FFu;
                 }
             }
         }
