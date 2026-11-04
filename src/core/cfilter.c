@@ -1361,30 +1361,44 @@ static int zx_dark_near(uint32_t rgb)
     return bj;
 }
 
-/* Nearest dark colour that keeps a tint. Black and grey lose when the
- * pixel is actually coloured, so a blue-grey field does not go grey. */
-static int zx_solid_ink(uint32_t rgb)
+/* Dark (non-BRIGHT) ink from the hue. Distance would paint a dark green
+ * or a dark blue black, and the old fallback then painted every dim cell
+ * cyan. A second channel counts only when it is close to the strongest,
+ * so a slate blue stays blue and a teal stays cyan. */
+static int zx_hue_ink(uint32_t rgb)
 {
-    const uint16_t *d = g_zc_d[K24_12(rgb)];
     int r = (int)(rgb >> 16), g = (int)((rgb >> 8) & 255), b = (int)(rgb & 255);
     int hi = r > g ? (r > b ? r : b) : (g > b ? g : b);
     int lo = r < g ? (r < b ? r : b) : (g < b ? g : b);
-    int j, bj = 0;
 
-    for (j = 1; j < 8; j++) {
-        if (d[j] < d[bj]) {
-            bj = j;
-        }
+    if (hi - lo <= 14) {
+        return LUM24(rgb) < 40 ? 0 : 7;
     }
-    if (hi - lo > 8 && (bj == 0 || bj == 7)) {
-        bj = 1;
-        for (j = 2; j < 7; j++) {
-            if (d[j] < d[bj]) {
-                bj = j;
-            }
+    if (g >= r && g >= b) {
+        if (b * 4 >= g * 3 && b >= r) {
+            return 5;
         }
+        if (r * 4 >= g * 3 && r >= b) {
+            return 6;
+        }
+        return 4;
     }
-    return bj;
+    if (r >= g && r >= b) {
+        if (b * 4 >= r * 3 && b >= g) {
+            return 3;
+        }
+        if (g * 4 >= r * 3 && g >= b) {
+            return 6;
+        }
+        return 2;
+    }
+    if (g * 4 >= b * 3 && g >= r) {
+        return 5;
+    }
+    if (r * 4 >= b * 3 && r >= g) {
+        return 3;
+    }
+    return 1;
 }
 
 /* Black backdrop plus white star dots. */
@@ -1439,9 +1453,10 @@ static const uint8_t k_bayer[64] = {
 
 /* Scenery is one solid dark colour. The clouds stage is the exception:
  * a blue sky stays solid cyan, and the near-white clouds are white with
- * a black dither. A dark green field (a city) stays dark green. Dim
- * scenery that would vanish in black stays one object colour (stage 1
- * asteroids dark magenta, later stages cyan) with its dark lines black.
+ * a black dither. The clouds-stage sky is the dark blue-grey field, and
+ * it is solid cyan. A dark green field (a city) stays dark green. Dim
+ * scenery keeps the dark colour of its own hue (stage 1 asteroids stay
+ * dark magenta) with its dark lines black.
  * Sprites are left alone. */
 static void zx_paint_scenery(void)
 {
@@ -1497,16 +1512,19 @@ static void zx_paint_scenery(void)
             /* a dark green field is closer to black than to #00D700 */
             sel = 4;
         } else if (g_cf_stage == 3) {
-            /* Coloured blue is the sky. Near-white pixels are the clouds. */
-            if (hi - lo >= 48) {
-                sel = l > 16 ? 5 : 0;
-            } else {
+            /* The real sky is a dark blue-grey, near black (about
+             * #243030). Nearest-colour paints that black, and a
+             * white/black dither of it turns the whole stage grey.
+             * Only the light cloud pixels dither; the rest is the sky. */
+            if (l >= 140 && hi - lo < 96) {
                 int t = l * 8 / 255;
 
                 if (t > 8) {
                     t = 8;
                 }
                 sel = (t * 8 > k_bayer[(my & 7) * 8 + (mx & 7)]) ? 15 : 0;
+            } else {
+                sel = 5;
             }
         } else if (g_zw_dim[c0]) {
             int bn = g_zw_n[i] - g_zw_sn[i];
@@ -1518,7 +1536,15 @@ static void zx_paint_scenery(void)
             if (my > 0) { m += LUM24(g_zw_col[i - ZW_W]); cnt++; }
             if (my < ZW_H - 1) { m += LUM24(g_zw_col[i + ZW_W]); cnt++; }
             m = cnt ? m / cnt : l;
-            sel = (!bd && l > 16 && l >= m - 24) ? (g_cf_stage == 1 ? 3 : 5) : 0;
+            /* stage 1 rocks are dark magenta; later stages keep their hue
+             * on the dark colours, not one forced cyan */
+            if (bd || l <= 16 || l < m - 24) {
+                sel = 0;
+            } else if (g_cf_stage == 1) {
+                sel = 3;
+            } else {
+                sel = zx_hue_ink(g_zw_col[i]);
+            }
         } else {
             int m = 0, cnt = 0;
 
@@ -1528,7 +1554,7 @@ static void zx_paint_scenery(void)
             if (my < ZW_H - 1) { m += LUM24(g_zw_col[i + ZW_W]); cnt++; }
             m = cnt ? m / cnt : l;
             /* a line darker than its neighbours stays black */
-            sel = (l <= 12 || l < m - 36) ? 0 : zx_solid_ink(g_zw_col[i]);
+            sel = (l <= 12 || l < m - 36) ? 0 : zx_hue_ink(g_zw_col[i]);
         }
         g_zw_out[i] = g_zw_scn[i] = k_zx16[sel];
         g_zw_bgc[i] = (uint8_t)sel;

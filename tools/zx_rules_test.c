@@ -133,9 +133,10 @@ int main(void)
     expect("option detail is black", (opt_lo & 0xFFFFFF00u) == 0x00000000u);
     expect("star stays white", (at(400, 40) & 0xFFFFFF00u) == 0xFFFFFF00u);
 
-    /* Clouds stage: the sky is solid cyan. The white clouds dither with black. */
+    /* Clouds stage: the real sky is a dark blue-grey, and it is solid cyan.
+     * The white clouds dither with black. */
     clear_frame();
-    fill(80, 0, 112, 32, 0xB4DCE800u, 0, 0, 0, 0, 3);
+    fill(80, 0, 112, 32, 0x24303000u, 0, 0, 0, 0, 3);
     apply(3, 10);
     white = blue = other = 0;
     for (y = 2; y < 30; y++) {
@@ -256,6 +257,27 @@ int main(void)
         expect("sprite avoids white clouds", c != 0xFFFFFF00u && c != 0xD7D7D700u);
         printf("  cloud-sprite=%06X\n", (c >> 8) & 0xFFFFFF);
     }
+
+    /* Stage 4/5 fields are dark. They keep that hue on the non-BRIGHT
+     * colours, and they are not the bright cyan. */
+    clear_frame();
+    fill(80, 120, 112, 152, 0x20302000u, 0, 0, 0, 40, 4);
+    apply(4, 10);
+    expect("stage 4 field is dark green", (at(90, 130) & 0xFFFFFF00u) == 0x00D70000u);
+    expect("stage 4 field is not bright cyan", (at(90, 130) & 0xFFFFFF00u) != 0x00FFFF00u);
+    clear_frame();
+    fill(80, 120, 112, 152, 0x35565800u, 0, 0, 0, 70, 4);
+    apply(4, 10);
+    expect("stage 4 teal is dark cyan", (at(90, 130) & 0xFFFFFF00u) == 0x00D7D700u);
+    clear_frame();
+    fill(80, 120, 112, 152, 0xA0A17D00u, 0, 0, 0, 150, 4);
+    apply(4, 10);
+    expect("stage 4 panel is dark yellow", (at(90, 130) & 0xFFFFFF00u) == 0xD7D70000u);
+    clear_frame();
+    fill(80, 120, 112, 152, 0x1F314500u, 0, 0, 0, 40, 5);
+    apply(5, 10);
+    expect("stage 5 field is dark blue", (at(90, 130) & 0xFFFFFF00u) == 0x0000D700u);
+    expect("stage 5 field is not bright cyan", (at(90, 130) & 0xFFFFFF00u) != 0x00FFFF00u);
 
     /* Blue-grey scenery must keep a hue, not collapse to black and white. */
     clear_frame();
