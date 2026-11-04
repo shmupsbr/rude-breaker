@@ -454,7 +454,7 @@ GRAPHICS
                    NO DEATH e um arcade stick que mostra os seus
                    comandos. O logo e a arte lateral vêm da sua
                    própria tela de título.
-                   OFF: o visual clássico. Uma janela 4:3 ou 5:4 (ou mais estreita que 16:10) não tem painéis; a imagem é 4:3 e as faixas que sobram são a chapa de metal, não preto.
+                   OFF: o visual clássico. Uma janela 4:3 ou 5:4 (ou mais estreita que 16:10) não tem painéis; a imagem é 4:3 e as faixas que sobram são só a chapa de metal cinza (sem widgets, sem texto).
                    LOADOUT mostra dois níveis, um bloco por nível,
                    incluindo o nível 1 (que enche o primeiro bloco).
                    SHOT é o tiro principal: 4 níveis, logo 4 blocos;

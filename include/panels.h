@@ -82,9 +82,14 @@ typedef struct RbPanelGeom {
 
 /* Host composite at an arbitrary window size. tate=0 is yoko. The metal
  * plate is sampled at 1:1 and cropped; widgets keep the 1920x1080
- * proportions inside the side area. out is w*h pixels, 0xRRGGBBAA. */
+ * proportions inside the side area. On a window narrower than 16:10 the
+ * bars around the 4:3 picture are that plate only: no widgets, no text.
+ * out is w*h pixels, 0xRRGGBBAA. */
 void panels_compose(uint32_t *out, int w, int h, int tate,
                     const uint32_t *game640, const RbPanelData *d,
                     RbPanelGeom *geom);
+
+/* The grey metal plate at window pixel (x, y), 1:1, 0xRRGGBBAA. */
+uint32_t panels_plate_at(int x, int y);
 
 #endif

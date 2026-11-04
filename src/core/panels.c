@@ -436,7 +436,7 @@ static void step_bar(uint32_t *o, int x, int y, int w, int h, int n, const int *
 
 /* Metal plate at 1:1. The same title-column tiling as the 1920 layout,
  * repeated, never stretched: a window just crops a bigger piece of it. */
-static uint32_t plate_at(int x, int y)
+uint32_t panels_plate_at(int x, int y)
 {
     int ax = x < 0 ? -x : x;
     int ay = y < 0 ? -y : y;
@@ -2114,7 +2114,7 @@ void panels_compose(uint32_t *out, int w, int h, int tate, const uint32_t *game,
         int x = i % w;
         int y = i / w;
 
-        out[i] = plate_at(x, y);
+        out[i] = panels_plate_at(x, y);
     }
     blit_game(out, w, fx, fy, fw, fh, game);
     if (geom) {
@@ -2124,6 +2124,7 @@ void panels_compose(uint32_t *out, int w, int h, int tate, const uint32_t *game,
         geom->field_h = fh;
         geom->widgets = 0;
     }
+    /* Narrower than 16:10 (4:3, 5:4): the bars stay the plate alone. */
     if (!wide && !tate) {
         return;
     }
@@ -2155,7 +2156,7 @@ void panels_compose(uint32_t *out, int w, int h, int tate, const uint32_t *game,
             if (x >= fx && x < fx + fw && y >= fy && y < fy + fh) {
                 continue;
             }
-            out[i] = plate_at(x, y);
+            out[i] = panels_plate_at(x, y);
         }
         if (top > 0) {
             blit_ink(out, w, h, ref_t, TW, NULL, 0, 0, TW, T_TOP, 0, 0, w, top);

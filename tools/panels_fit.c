@@ -81,8 +81,22 @@ static void one(int w, int h, int tate)
         expect(label, g.widgets && g.n > 0);
     }
     if (!tate && (long)w * 10 < (long)h * 16) {
+        int stray = 0;
+
         snprintf(label, sizeof label, "%dx%d no side widgets", w, h);
-        expect(label, !g.widgets);
+        expect(label, !g.widgets && g.n == 0);
+        for (y = 0; y < h; y++) {
+            for (x = 0; x < w; x++) {
+                int in = x >= g.field_x && x < g.field_x + g.field_w &&
+                         y >= g.field_y && y < g.field_y + g.field_h;
+
+                if (!in && out[(size_t)y * w + x] != panels_plate_at(x, y)) {
+                    stray++;
+                }
+            }
+        }
+        snprintf(label, sizeof label, "%dx%d bars are plate only", w, h);
+        expect(label, stray == 0);
     }
     for (i = 0; i < g.n; i++) {
         int ok = g.x[i] >= 0 && g.y[i] >= 0 && g.w[i] > 0 && g.h[i] > 0 &&

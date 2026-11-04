@@ -3341,7 +3341,7 @@ static int panels_active(const RbGame *g)
 }
 
 /* 4:3 and 5:4: no side panels. The picture stays 4:3 and the bars
- * around it are the metal plate, not black. */
+ * around it are only the grey metal plate: no widgets, no text. */
 static int plate_bars(const RbGame *g)
 {
     int w = 0, h = 0, hz = 0;
