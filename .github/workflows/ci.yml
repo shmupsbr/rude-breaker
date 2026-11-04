@@ -1,0 +1,47 @@
+name: ci
+
+# Build and checks on every push and pull request. Needs no game data:
+# the smoke test runs the program without SGM1.DAT / SONG.DAT / FPLAY.COM
+# and expects it to name the missing files and exit with status 1.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-check:
+    name: Build, vm-check, cfg-check, smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libsdl2-dev
+      - name: Build
+        run: make -j"$(nproc)"
+      - name: vm-check (compile)
+        run: make vm-check
+      - name: cfg-check
+        run: make cfg-check
+      - name: Version
+        run: ./build/rudebreaker --version
+      - name: Smoke test without game data
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_AUDIODRIVER: dummy
+        run: |
+          mkdir -p /tmp/nodata
+          set +e
+          timeout 30 ./build/rudebreaker /tmp/nodata 2> /tmp/smoke.err
+          rc=$?
+          set -e
+          cat /tmp/smoke.err
+          test "$rc" -eq 1
+          grep -qi "SGM1.DAT" /tmp/smoke.err
