@@ -52,7 +52,8 @@ def decode(path):
 
 
 def main():
-    small, big, folder = sys.argv[1:]
+    small, big, folder = sys.argv[1:4]
+    flat = sys.argv[4] if len(sys.argv) > 4 else None
     w, h, px = decode(small)
     if (w, h) != (3, 2):
         raise SystemExit("small geom")
@@ -85,6 +86,14 @@ def main():
     stem = names[0][: -len(".png")]
     if names[1] != stem + "_2.png":
         raise SystemExit("names %r" % names)
+    if flat:
+        w, h, px = decode(flat)
+        if (w, h) != (400, 200) or any(p != (0x10, 0x20, 0x30) for p in px):
+            raise SystemExit("flat pixels")
+        sz = os.path.getsize(flat)
+        if sz > 20000:
+            raise SystemExit("flat size %d" % sz)
+        print("flat", sz)
     print("png check ok", names[0], names[1])
 
 

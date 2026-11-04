@@ -2,9 +2,9 @@
  * PNG writer for F12 screenshots.
  *
  * The stream is a real PNG: signature, IHDR, one IDAT, IEND. The image
- * is zlib-wrapped deflate stored blocks (RFC 1950 / 1951), so the
- * encoder does not need zlib or any other library. Pixels in are
- * 0xRRGGBBAA; the file is 8-bit RGB with filter None.
+ * is zlib-wrapped deflate (LZ77 plus the fixed Huffman codes), written
+ * here with no third-party compressor. Pixels in are 0xRRGGBBAA; the
+ * file is 8-bit RGB with filter None.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -90,6 +90,306 @@ static int write_chunk(FILE *fp, const char type[4], const uint8_t *data, uint32
     return 0;
 }
 
+/* Fixed-Huffman deflate (RFC 1951) plus a zlib wrapper (RFC 1950). */
+static int g_sym_len[288];
+static int g_sym_rev[288];
+static int g_len_sym[259];
+static int g_len_ebits[259];
+static int g_len_extra[259];
+static int g_dist_ebits[30];
+static int g_dist_base[30];
+static int g_codes_ready;
+
+static int bitrev(int c, int n)
+{
+    int r = 0;
+    int i;
+
+    for (i = 0; i < n; i++) {
+        r = (r << 1) | ((c >> i) & 1);
+    }
+    return r;
+}
+
+static void init_codes(void)
+{
+    int bl[16];
+    int nextc[16];
+    int i;
+    int bits;
+    int code;
+    int length;
+    static const int len_eb[29] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2,
+                                    3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
+    static const int dist_eb[30] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
+                                     7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
+
+    if (g_codes_ready) {
+        return;
+    }
+    memset(bl, 0, sizeof bl);
+    for (i = 0; i <= 143; i++) {
+        g_sym_len[i] = 8;
+    }
+    for (i = 144; i <= 255; i++) {
+        g_sym_len[i] = 9;
+    }
+    for (i = 256; i <= 279; i++) {
+        g_sym_len[i] = 7;
+    }
+    for (i = 280; i <= 287; i++) {
+        g_sym_len[i] = 8;
+    }
+    for (i = 0; i < 288; i++) {
+        bl[g_sym_len[i]]++;
+    }
+    code = 0;
+    bl[0] = 0;
+    for (bits = 1; bits <= 15; bits++) {
+        code = (code + bl[bits - 1]) << 1;
+        nextc[bits] = code;
+    }
+    for (i = 0; i < 288; i++) {
+        int n = g_sym_len[i];
+
+        g_sym_rev[i] = bitrev(nextc[n]++, n);
+    }
+    length = 3;
+    for (code = 0; code < 29 && length <= 258; code++) {
+        int eb = len_eb[code];
+        int n = 1 << eb;
+        int base = length;
+
+        for (i = 0; i < n && length <= 258; i++, length++) {
+            g_len_sym[length] = 257 + code;
+            g_len_ebits[length] = eb;
+            g_len_extra[length] = length - base;
+        }
+    }
+    length = 1;
+    for (code = 0; code < 30; code++) {
+        int eb = dist_eb[code];
+
+        g_dist_ebits[code] = eb;
+        g_dist_base[code] = length;
+        length += 1 << eb;
+    }
+    g_codes_ready = 1;
+}
+
+typedef struct Bitw {
+    uint8_t *p;
+    size_t n;
+    size_t cap;
+    uint32_t acc;
+    int bits;
+} Bitw;
+
+static int bw_byte(Bitw *b, uint8_t v)
+{
+    if (b->n + 1 > b->cap) {
+        size_t nc = b->cap ? b->cap * 2u : 4096u;
+        uint8_t *q;
+
+        while (nc < b->n + 1) {
+            nc *= 2u;
+        }
+        q = (uint8_t *)realloc(b->p, nc);
+        if (!q) {
+            return -1;
+        }
+        b->p = q;
+        b->cap = nc;
+    }
+    b->p[b->n++] = v;
+    return 0;
+}
+
+static int bw_bits(Bitw *b, uint32_t v, int n)
+{
+    if (n <= 0) {
+        return 0;
+    }
+    b->acc |= (v & ((1u << n) - 1u)) << b->bits;
+    b->bits += n;
+    while (b->bits >= 8) {
+        if (bw_byte(b, (uint8_t)(b->acc & 0xFFu)) != 0) {
+            return -1;
+        }
+        b->acc >>= 8;
+        b->bits -= 8;
+    }
+    return 0;
+}
+
+static int bw_flush(Bitw *b)
+{
+    if (b->bits > 0) {
+        return bw_byte(b, (uint8_t)(b->acc & 0xFFu));
+    }
+    return 0;
+}
+
+static int emit_lit(Bitw *b, int sym)
+{
+    return bw_bits(b, (uint32_t)g_sym_rev[sym], g_sym_len[sym]);
+}
+
+static int emit_match(Bitw *b, int len, int dist)
+{
+    int dcode = 0;
+    int i;
+
+    if (emit_lit(b, g_len_sym[len]) != 0) {
+        return -1;
+    }
+    if (bw_bits(b, (uint32_t)g_len_extra[len], g_len_ebits[len]) != 0) {
+        return -1;
+    }
+    for (i = 0; i < 30; i++) {
+        if (g_dist_base[i] <= dist) {
+            dcode = i;
+        } else {
+            break;
+        }
+    }
+    if (bw_bits(b, (uint32_t)bitrev(dcode, 5), 5) != 0) {
+        return -1;
+    }
+    return bw_bits(b, (uint32_t)(dist - g_dist_base[dcode]), g_dist_ebits[dcode]);
+}
+
+/* LZ77, window 32K, then one fixed-Huffman block. Returns the zlib
+ * payload (header + deflate + adler32) or NULL. */
+static uint8_t *deflate_zlib(const uint8_t *raw, size_t n, size_t *out_n)
+{
+    enum { HASH = 32768, WIN = 32768, MAXL = 258, CHAIN = 96 };
+    uint32_t *head;
+    uint32_t *prev;
+    Bitw bw;
+    size_t i;
+    uint32_t a32 = 1;
+    uint32_t b32 = 0;
+
+    init_codes();
+    head = (uint32_t *)calloc(HASH, sizeof(uint32_t));
+    prev = (uint32_t *)calloc(n + 1u, sizeof(uint32_t));
+    memset(&bw, 0, sizeof bw);
+    if (!head || !prev) {
+        free(head);
+        free(prev);
+        return NULL;
+    }
+    if (bw_byte(&bw, 0x78) != 0 || bw_byte(&bw, 0x9C) != 0) {
+        free(head);
+        free(prev);
+        free(bw.p);
+        return NULL;
+    }
+    /* One fixed block, final. */
+    if (bw_bits(&bw, 1u, 1) != 0 || bw_bits(&bw, 1u, 2) != 0) {
+        free(head);
+        free(prev);
+        free(bw.p);
+        return NULL;
+    }
+    i = 0;
+    while (i < n) {
+        int best_l = 0;
+        int best_d = 0;
+        size_t left = n - i;
+
+        if (left >= 3) {
+            unsigned h = ((unsigned)raw[i] * 31u + raw[i + 1]) * 31u + raw[i + 2];
+            uint32_t hp = head[h & (HASH - 1u)];
+            int chain = 0;
+
+            h &= (HASH - 1u);
+            while (hp && chain < CHAIN) {
+                size_t p = (size_t)hp - 1u;
+                int dist = (int)(i - p);
+                int maxl;
+                int len;
+
+                if (dist <= 0 || dist > WIN) {
+                    break;
+                }
+                maxl = left > (size_t)MAXL ? MAXL : (int)left;
+                if (raw[p] == raw[i] && raw[p + 1] == raw[i + 1] && raw[p + 2] == raw[i + 2]) {
+                    len = 3;
+                    while (len < maxl && raw[p + (size_t)len] == raw[i + (size_t)len]) {
+                        len++;
+                    }
+                    if (len > best_l) {
+                        best_l = len;
+                        best_d = dist;
+                        if (len == maxl) {
+                            break;
+                        }
+                    }
+                }
+                hp = prev[p];
+                chain++;
+            }
+            prev[i] = head[h];
+            head[h] = (uint32_t)(i + 1u);
+        }
+        if (best_l >= 3) {
+            size_t k;
+
+            if (emit_match(&bw, best_l, best_d) != 0) {
+                free(head);
+                free(prev);
+                free(bw.p);
+                return NULL;
+            }
+            for (k = 1; k < (size_t)best_l && i + k + 2 < n; k++) {
+                unsigned h = ((unsigned)raw[i + k] * 31u + raw[i + k + 1]) * 31u + raw[i + k + 2];
+
+                h &= (HASH - 1u);
+                prev[i + k] = head[h];
+                head[h] = (uint32_t)(i + k + 1u);
+            }
+            i += (size_t)best_l;
+        } else {
+            if (emit_lit(&bw, raw[i]) != 0) {
+                free(head);
+                free(prev);
+                free(bw.p);
+                return NULL;
+            }
+            i++;
+        }
+    }
+    if (emit_lit(&bw, 256) != 0 || bw_flush(&bw) != 0) {
+        free(head);
+        free(prev);
+        free(bw.p);
+        return NULL;
+    }
+    for (i = 0; i < n; i++) {
+        a32 += raw[i];
+        if (a32 >= 65521u) {
+            a32 -= 65521u;
+        }
+        b32 += a32;
+        if (b32 >= 65521u) {
+            b32 %= 65521u;
+        }
+    }
+    if (bw_byte(&bw, (uint8_t)(b32 >> 8)) != 0 || bw_byte(&bw, (uint8_t)b32) != 0 ||
+        bw_byte(&bw, (uint8_t)(a32 >> 8)) != 0 || bw_byte(&bw, (uint8_t)a32) != 0) {
+        free(head);
+        free(prev);
+        free(bw.p);
+        return NULL;
+    }
+    free(head);
+    free(prev);
+    *out_n = bw.n;
+    return bw.p;
+}
+
 /* Byte i of the filtered RGB image (one filter byte, then w*3 pixels). */
 static uint8_t raw_at(const uint32_t *px, int w, size_t i)
 {
@@ -118,13 +418,9 @@ int rb_write_png(FILE *fp, const uint32_t *px, int w, int h)
 {
     static const uint8_t sig[8] = {137, 80, 78, 71, 13, 10, 26, 10};
     size_t raw_n;
-    size_t blocks;
-    size_t cap;
     uint8_t *idat;
-    size_t at;
+    size_t at = 0;
     size_t off;
-    uint32_t a32 = 1;
-    uint32_t b32 = 0;
     uint8_t ihdr[13];
     int rc = -1;
 
@@ -132,51 +428,21 @@ int rb_write_png(FILE *fp, const uint32_t *px, int w, int h)
         return -1;
     }
     raw_n = (size_t)h * (1u + (size_t)w * 3u);
-    blocks = (raw_n + 65535u) / 65535u;
-    cap = 2u + blocks * 5u + raw_n + 4u;
-    idat = (uint8_t *)malloc(cap);
+    {
+        uint8_t *raw = (uint8_t *)malloc(raw_n);
+
+        if (!raw) {
+            return -1;
+        }
+        for (off = 0; off < raw_n; off++) {
+            raw[off] = raw_at(px, w, off);
+        }
+        idat = deflate_zlib(raw, raw_n, &at);
+        free(raw);
+    }
     if (!idat) {
         return -1;
     }
-    idat[0] = 0x78;
-    idat[1] = 0x01;
-    at = 2;
-    off = 0;
-    while (off < raw_n) {
-        size_t n = raw_n - off;
-        size_t i;
-        uint16_t len;
-        uint16_t nlen;
-
-        if (n > 65535u) {
-            n = 65535u;
-        }
-        len = (uint16_t)n;
-        nlen = (uint16_t)~len;
-        idat[at++] = (off + n == raw_n) ? 1 : 0;
-        idat[at++] = (uint8_t)len;
-        idat[at++] = (uint8_t)(len >> 8);
-        idat[at++] = (uint8_t)nlen;
-        idat[at++] = (uint8_t)(nlen >> 8);
-        for (i = 0; i < n; i++) {
-            uint8_t by = raw_at(px, w, off + i);
-
-            idat[at++] = by;
-            a32 += by;
-            if (a32 >= 65521u) {
-                a32 -= 65521u;
-            }
-            b32 += a32;
-            if (b32 >= 65521u) {
-                b32 %= 65521u;
-            }
-        }
-        off += n;
-    }
-    idat[at++] = (uint8_t)(b32 >> 8);
-    idat[at++] = (uint8_t)b32;
-    idat[at++] = (uint8_t)(a32 >> 8);
-    idat[at++] = (uint8_t)a32;
     if (fwrite(sig, 1, 8, fp) != 8) {
         goto done;
     }

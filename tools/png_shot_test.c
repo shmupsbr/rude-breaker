@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 static int fail(const char *m)
 {
@@ -49,7 +50,27 @@ int main(void)
         return fail("big write");
     }
     fclose(fp);
+    for (y = 0; y < 200; y++) {
+        for (x = 0; x < 400; x++) {
+            big[y * 400 + x] = 0x102030FFu;
+        }
+    }
+    fp = fopen("/tmp/rb_png_flat.png", "wb");
+    if (!fp || rb_write_png(fp, big, 400, 200) != 0) {
+        free(big);
+        return fail("flat write");
+    }
+    fclose(fp);
     free(big);
+    {
+        struct stat st;
+
+        if (stat("/tmp/rb_png_flat.png", &st) != 0 || st.st_size > 20000) {
+            fprintf(stderr, "flat png size %ld\n", st.st_size);
+            return fail("flat should compress");
+        }
+        printf("flat png %ld bytes\n", (long)st.st_size);
+    }
 
     snprintf(cmd, sizeof cmd, "rm -rf %s && mkdir -p %s", dir, dir);
     if (system(cmd) != 0) {
@@ -62,7 +83,8 @@ int main(void)
         return fail("save 2");
     }
     snprintf(cmd, sizeof cmd,
-             "python3 tools/png_shot_check.py /tmp/rb_png_small.png /tmp/rb_png_big.png %s",
+             "python3 tools/png_shot_check.py /tmp/rb_png_small.png /tmp/rb_png_big.png %s "
+             "/tmp/rb_png_flat.png",
              dir);
     if (system(cmd) != 0) {
         return fail("check");
