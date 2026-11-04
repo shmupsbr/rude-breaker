@@ -5646,6 +5646,10 @@ static int kraken_keep_ent(const RbVm *vm, int i)
     if (t & 0x1000u) {
         return 1;
     }
+    /* Player shots on the ship sheet (draw code: type bit 0x0004, bank 26). */
+    if ((t & 0x0004u) && eu16(vm, i, 0x3A) == 26u) {
+        return 1;
+    }
     if (org >= 0x6200u && org <= 0x6700u) {
         return 1;
     }
@@ -5962,17 +5966,20 @@ static int sprite_at(const uint8_t *c, uint32_t n, uint32_t i,
     if (i + 5 >= n) {
         return 0;
     }
-    if (c[i] == 0x00u && c[i + 1] == 0x4Cu && c[i + 2] == 0x00u) {
+    /* Byte mov to width, or one word mov that writes width and height
+     * together (0x4C and 0x4D are adjacent). */
+    if (c[i] == 0x02u && c[i + 1] == 0x4Cu && c[i + 2] == 0x00u) {
         ww = c[i + 3];
-    } else if (c[i] == 0x02u && c[i + 1] == 0x4Cu && c[i + 2] == 0x00u) {
+        hh = c[i + 4];
+    } else if (c[i] == 0x00u && c[i + 1] == 0x4Cu && c[i + 2] == 0x00u) {
         ww = c[i + 3];
     } else {
         return 0;
     }
-    if (ww < 3 || ww > 24) {
+    if (ww < 2 || ww > 24) {
         return 0;
     }
-    for (k = i; k < i + 80u && k + 5u < n; k++) {
+    for (k = i; k < i + 96u && k + 5u < n; k++) {
         if (c[k] == 0x00u && c[k + 1] == 0x4Du && c[k + 2] == 0x00u) {
             hh = c[k + 3];
         } else if (c[k] == 0x02u && c[k + 1] == 0x4Du && c[k + 2] == 0x00u) {
@@ -5981,12 +5988,14 @@ static int sprite_at(const uint8_t *c, uint32_t n, uint32_t i,
             pp = (int)c[k + 3] | ((int)c[k + 4] << 8);
         } else if (c[k] == 0x00u && c[k + 1] == 0x3Au && c[k + 2] == 0x00u) {
             ss = c[k + 3];
+        } else if (c[k] == 0x02u && c[k + 1] == 0x3Au && c[k + 2] == 0x00u) {
+            ss = c[k + 3];
         }
     }
-    if (hh < 4 || hh > 24 || pp < 0 || (uint32_t)pp >= n) {
+    if (hh < 3 || hh > 24 || pp < 0 || (uint32_t)pp >= n) {
         return 0;
     }
-    if (ww * hh < 16) {
+    if (ww * hh < 12) {
         return 0;
     }
     *w = ww;
@@ -6013,6 +6022,13 @@ static int bind_seg(RbVm *vm, const uint8_t *c, uint32_t n, int seg)
         }
     }
     return 0;
+}
+
+static char s_halb_why[160];
+
+const char *vm_halb_why(void)
+{
+    return s_halb_why;
 }
 
 static int cell_draws(RbVm *vm, int seg, int index)
@@ -6043,8 +6059,11 @@ int vm_load_halb(RbVm *vm, uint8_t *cells, int max, int *w, int *h, int *seg)
     int chunk;
     int best_score = -1;
     int bw = 0, bh = 0, bs = 0, bc = 0, bp = 0;
+    int hits = 0;
 
+    s_halb_why[0] = 0;
     if (!vm || !cells || max < 16 || !w || !h || !seg) {
+        snprintf(s_halb_why, sizeof s_halb_why, "bad args");
         return 0;
     }
     memset(ntop, 0, sizeof ntop);
@@ -6065,6 +6084,7 @@ int vm_load_halb(RbVm *vm, uint8_t *cells, int max, int *w, int *h, int *seg)
             if (!sprite_at(c, n, i, &ww, &hh, &pat, &ss)) {
                 continue;
             }
+            hits++;
             if ((uint32_t)pat + (uint32_t)ww * (uint32_t)hh > n) {
                 continue;
             }
@@ -6135,6 +6155,8 @@ int vm_load_halb(RbVm *vm, uint8_t *cells, int max, int *w, int *h, int *seg)
         }
     }
     if (best_score < 0 || bw * bh > max || bc < 2) {
+        snprintf(s_halb_why, sizeof s_halb_why,
+                 "no sprite shared by 2 stages (setups=%d)", hits);
         return 0;
     }
     if (bs < 0 || !bind_seg(vm, vm->chunk[bc], vm->clen[bc], bs)) {
@@ -6160,6 +6182,9 @@ int vm_load_halb(RbVm *vm, uint8_t *cells, int max, int *w, int *h, int *seg)
             }
         }
         if (!found) {
+            snprintf(s_halb_why, sizeof s_halb_why,
+                     "bank for %dx%d pat=%d chunk=%d drew nothing",
+                     bw, bh, bp, bc);
             return 0;
         }
     } else {
@@ -6167,9 +6192,14 @@ int vm_load_halb(RbVm *vm, uint8_t *cells, int max, int *w, int *h, int *seg)
 
         if (cell_draws(vm, bs, index) < 8 &&
             cell_draws(vm, bs, vm->chunk[bc][bp]) < 8) {
+            snprintf(s_halb_why, sizeof s_halb_why,
+                     "seg=%d cell=%d pat=%d %dx%d chunk=%d is empty",
+                     bs, index, bp, bw, bh, bc);
             return 0;
         }
     }
+    snprintf(s_halb_why, sizeof s_halb_why,
+             "seg=%d %dx%d pat=%d chunk=%d", bs, bw, bh, bp, bc);
     memcpy(cells, vm->chunk[bc] + bp, (size_t)bw * (size_t)bh);
     *w = bw;
     *h = bh;

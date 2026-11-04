@@ -4405,9 +4405,9 @@ void game_update(RbGame *g)
 
             vm_info(g_vm, &kinfo);
             if (kinfo.chunk < 2 || kinfo.chunk > 6) {
-                /* Stage 1 is the path a normal start uses. Stage 5 from
-                 * a cold reset stays black and never shows the ship. */
-                begin_stage(g, 1, 1);
+                /* Stage 5 so the fight has that starfield behind it.
+                 * Enter once; resetting every frame left a black HUD. */
+                begin_stage(g, 5, 1);
                 g->state = RB_STATE_PLAY;
                 g_loop = 2;
                 dbg_stage = 1;
