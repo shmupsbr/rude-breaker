@@ -51,6 +51,8 @@ void gfx_set_bullet_color(int preset);
 /* One 16x16 sprite of a bound sheet as RGBA (0 = transparent), in the
  * palette and grade on screen now. Returns 0 when the slot is empty. */
 int gfx_sprite_rgba(const RbGfx *gfx, uint8_t slot, int index, uint32_t out[256]);
+/* How many sampled background pixels are not the empty index. */
+int gfx_bg_lit(const RbGfx *gfx);
 /* One palette index as it would be drawn now (grade included). 0 index
  * is still a colour; callers treat their own 0 as transparent. */
 uint32_t gfx_index_rgba(const RbGfx *gfx, int idx);

@@ -116,6 +116,7 @@ int  vm_ensure_record(RbVm *vm, int rec);
 /* Central recurring mid-boss sprite, decoded from the stage chunks
  * directly. cells holds w*h indices. Returns 0 when it is not there. */
 int  vm_load_halb(RbVm *vm, uint8_t *cells, int max, int *w, int *h, int *seg);
+const char *vm_halb_why(void);
 /* Load the ending (record 1 header 3) on a fresh slot. Loop redirect
  * is forced off for this load. */
 void vm_force_ending(RbVm *vm);
