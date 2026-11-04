@@ -1292,10 +1292,11 @@ static void zx_clash(uint32_t *px, int w, int h)
  * so the scenery's colours move with it and never crawl. Each scenery
  * cell gets INK + PAPER from the 8 base colours with one BRIGHT bit
  * (black paper preferred), worked out once from the cell's art and
- * kept until that art (or the palette) changes. Every sprite family
- * gets one ink colour, voted over its first frames and then fixed for
- * good; its pixels are that ink or black, whatever it overlaps, so a
- * sprite never changes colour. */
+ * kept until that art (or the palette) changes. Scenery stays on the
+ * dark (non-BRIGHT) colours. Every sprite family gets one BRIGHT ink,
+ * voted over its first frames and then fixed for good; its pixels are
+ * that ink or black, whatever it overlaps, so a sprite never changes
+ * colour. Stars stay white (a later pass). */
 static const uint16_t *g_w_sid;
 static const uint8_t *g_w_bgi;
 static int g_w_scroll;
@@ -1336,7 +1337,68 @@ static uint8_t g_tblk[ZW_W * ZW_H];
 static uint8_t g_sf_ink[65536];
 static uint8_t g_sf_state[65536];     /* 0 new, 1..12 voting, 13 locked */
 static uint16_t g_sf_vote[65536][8];
+static uint8_t g_sf_big[65536];       /* stage 2 cruiser, sticky this stage */
+static int g_big_stage = -1;
 static uint32_t g_zw_palh;
+static uint8_t g_zw_tag[ZW_W * ZW_H]; /* 1 enemy, 2 item/shot, 3 enemy bullet */
+static uint8_t g_zw_bgc[ZW_W * ZW_H]; /* spectrum index behind this pixel */
+static int g_zx_space;
+
+/* Nearest non-BRIGHT Spectrum colour, 0..7. */
+static int zx_dark_near(uint32_t rgb)
+{
+    const uint16_t *d = g_zc_d[K24_12(rgb)];
+    int j, bj = 0;
+
+    for (j = 1; j < 8; j++) {
+        if (d[j] < d[bj]) {
+            bj = j;
+        }
+    }
+    return bj;
+}
+
+/* Black backdrop plus white star dots. */
+static int zx_is_space(uint32_t idx0)
+{
+    int r = (int)(idx0 >> 24), g = (int)((idx0 >> 16) & 255), b = (int)((idx0 >> 8) & 255);
+    int y = (r * 77 + g * 150 + b * 29) >> 8;
+    int stars = 0, dark = 0, i;
+
+    if (idx0 && y > 36) {
+        return 0;
+    }
+    for (i = 0; i < ZW_W * ZW_H; i++) {
+        int l, rr, gg, bb, hi, lo, mx;
+
+        if (g_zw_spr[i] || !g_zw_n[i]) {
+            continue;
+        }
+        l = LUM24(g_zw_col[i]);
+        if (l < 24) {
+            dark++;
+            continue;
+        }
+        /* a 1 px star averaged into a 2x2 is only mid-grey, and neutral */
+        if (l < 40 || l > 210) {
+            continue;
+        }
+        rr = (int)(g_zw_col[i] >> 16);
+        gg = (int)((g_zw_col[i] >> 8) & 255);
+        bb = (int)(g_zw_col[i] & 255);
+        hi = rr > gg ? (rr > bb ? rr : bb) : (gg > bb ? gg : bb);
+        lo = rr < gg ? (rr < bb ? rr : bb) : (gg < bb ? gg : bb);
+        if (hi - lo > 36) {
+            continue;
+        }
+        mx = i % ZW_W;
+        if ((mx > 0 && LUM24(g_zw_col[i - 1]) + 24 < l) ||
+            (mx + 1 < ZW_W && LUM24(g_zw_col[i + 1]) + 24 < l)) {
+            stars++;
+        }
+    }
+    return dark > 350 && stars >= 4;
+}
 
 static void zx_world(uint32_t *px, int w, int h)
 {
@@ -1360,6 +1422,12 @@ static void zx_world(uint32_t *px, int w, int h)
     memset(g_zw_sn, 0, sizeof g_zw_sn);
     memset(g_zw_bd, 0, sizeof g_zw_bd);
     memset(g_zw_id, 0, sizeof g_zw_id);
+    memset(g_zw_tag, 0, sizeof g_zw_tag);
+    memset(g_zw_bgc, 0, sizeof g_zw_bgc);
+    if (g_big_stage != g_cf_stage) {
+        memset(g_sf_big, 0, sizeof g_sf_big);
+        g_big_stage = g_cf_stage;
+    }
     {
         static uint32_t hsh[ZW_CW * ZW_CH];
 
@@ -1397,6 +1465,9 @@ static void zx_world(uint32_t *px, int w, int h)
                     g_zw_sum[q][0] += (p >> 24) << 16;
                     g_zw_sum[q][1] += ((p >> 16) & 0xFF) << 16;
                     g_zw_sum[q][2] += ((p >> 8) & 0xFF) << 16;
+                    if (g_kind && g_kind[at] > g_zw_tag[q]) {
+                        g_zw_tag[q] = g_kind[at];
+                    }
                 }
             }
         }
@@ -1449,7 +1520,8 @@ static void zx_world(uint32_t *px, int w, int h)
                 }
                 continue;   /* all sprite: keep, look again later */
             }
-            for (br = 0; br < 2; br++) {
+            /* scenery: the 8 dark colours only; sprites take the bright set */
+            for (br = 0; br < 1; br++) {
                 int base = br * 8;
 
                 for (pp = 0; pp < 8; pp++) {
@@ -1472,12 +1544,13 @@ static void zx_world(uint32_t *px, int w, int h)
                     }
                 }
             }
-            g_zw_pap[i] = (uint8_t)bA;   /* pp <= qq: black (0/8) when it is in */
+            g_zw_pap[i] = (uint8_t)bA;   /* pp <= qq: black (0) when it is in */
             g_zw_ink[i] = (uint8_t)bB;
             g_zw_hash[i] = hsh[i];
             g_zw_ok[i] = 1;
         }
         g_zw_palh = palh;
+        g_zx_space = zx_is_space(idxrgb[0]);
     }
     /* dim scenery (stage 1's asteroids and the like): its best ink and
      * paper are both near black, so it would vanish; such cells are
@@ -1508,36 +1581,97 @@ static void zx_world(uint32_t *px, int w, int h)
         if (g_zw_spr[i]) {
             continue;
         }
-        if (g_zw_dim[c]) {
-            int l = LUM24(g_zw_col[i]), m = 0, cnt = 0;
-            int bd = g_zw_bd[i] * 2 >= g_zw_n[i] - g_zw_sn[i];
-
-            if (mx > 0) { m += LUM24(g_zw_col[i - 1]); cnt++; }
-            if (mx < ZW_W - 1) { m += LUM24(g_zw_col[i + 1]); cnt++; }
-            if (my > 0) { m += LUM24(g_zw_col[i - ZW_W]); cnt++; }
-            if (my < ZW_H - 1) { m += LUM24(g_zw_col[i + ZW_W]); cnt++; }
-            m = cnt ? m / cnt : l;
-            g_zw_out[i] = (!bd && l > 16 && l >= m - 24) ? k_zx16[g_cf_stage == 1 ? 3 : 5] : 0;
-            continue;
-        }
         {
-            const uint16_t *d = g_zc_d[K24_12(g_zw_col[i])];
-            int side = d[B] < d[A], l = LUM24(g_zw_col[i]), m = 0, cnt = 0;
-            int lA = LUM24(k_zx16[A]), lB = LUM24(k_zx16[B]);
+            int bn = g_zw_n[i] - g_zw_sn[i];
+            int bd = bn > 0 && g_zw_bd[i] * 2 >= bn;
+            int ci;
 
-            if (A != B) {
+            if (g_zw_dim[c]) {
+                int l = LUM24(g_zw_col[i]), m = 0, cnt = 0;
+
                 if (mx > 0) { m += LUM24(g_zw_col[i - 1]); cnt++; }
                 if (mx < ZW_W - 1) { m += LUM24(g_zw_col[i + 1]); cnt++; }
                 if (my > 0) { m += LUM24(g_zw_col[i - ZW_W]); cnt++; }
                 if (my < ZW_H - 1) { m += LUM24(g_zw_col[i + ZW_W]); cnt++; }
                 m = cnt ? m / cnt : l;
-                if (l < m - 36) {
-                    side = lA > lB;
-                } else if (l > m + 36) {
-                    side = lB >= lA;
+                ci = (!bd && l > 16 && l >= m - 24) ? (g_cf_stage == 1 ? 3 : 5) : 0;
+                if (g_cf_stage == 3 && bd && l < 170) {
+                    ci = 4;   /* city field: dark green */
+                }
+            } else {
+                const uint16_t *d = g_zc_d[K24_12(g_zw_col[i])];
+                int side = d[B] < d[A], l = LUM24(g_zw_col[i]), m = 0, cnt = 0;
+                int lA = LUM24(k_zx16[A]), lB = LUM24(k_zx16[B]);
+
+                if (A != B) {
+                    if (mx > 0) { m += LUM24(g_zw_col[i - 1]); cnt++; }
+                    if (mx < ZW_W - 1) { m += LUM24(g_zw_col[i + 1]); cnt++; }
+                    if (my > 0) { m += LUM24(g_zw_col[i - ZW_W]); cnt++; }
+                    if (my < ZW_H - 1) { m += LUM24(g_zw_col[i + ZW_W]); cnt++; }
+                    m = cnt ? m / cnt : l;
+                    if (l < m - 36) {
+                        side = lA > lB;
+                    } else if (l > m + 36) {
+                        side = lB >= lA;
+                    }
+                }
+                ci = side ? B : A;
+                if (g_cf_stage == 3 && bd && l < 170) {
+                    ci = 4;
                 }
             }
-            g_zw_out[i] = k_zx16[side ? B : A];
+            g_zw_out[i] = k_zx16[ci];
+            g_zw_bgc[i] = (uint8_t)ci;
+        }
+    }
+    /* background under sprites: the scenery that pixel covered, else the cell */
+    {
+        static uint8_t mode[ZW_CW * ZW_CH];
+        static int hist[ZW_CW * ZW_CH][8];
+        int c;
+
+        memset(hist, 0, sizeof hist);
+        for (i = 0; i < ZW_W * ZW_H; i++) {
+            int mx = i % ZW_W, my = i / ZW_W, c0;
+
+            if (g_zw_spr[i] || !g_zw_n[i]) {
+                continue;
+            }
+            c0 = (my >> 3) * ZW_CW + (mx >> 3);
+            hist[c0][g_zw_bgc[i] & 7]++;
+        }
+        for (c = 0; c < ZW_CW * ZW_CH; c++) {
+            int j, b = g_zw_pap[c] & 7, best = -1;
+
+            for (j = 0; j < 8; j++) {
+                if (hist[c][j] > best) {
+                    best = hist[c][j];
+                    b = j;
+                }
+            }
+            mode[c] = (uint8_t)b;
+        }
+        for (i = 0; i < ZW_W * ZW_H; i++) {
+            int mx = i % ZW_W, my = i / ZW_W, c0 = (my >> 3) * ZW_CW + (mx >> 3);
+            int bn = g_zw_n[i] - g_zw_sn[i];
+            int bg;
+
+            if (!g_zw_spr[i]) {
+                continue;
+            }
+            if (bn > 0) {
+                unsigned r = (g_zw_sum[i][0] & 0xFFFFu) / (unsigned)bn;
+                unsigned g = (g_zw_sum[i][1] & 0xFFFFu) / (unsigned)bn;
+                unsigned b = (g_zw_sum[i][2] & 0xFFFFu) / (unsigned)bn;
+
+                bg = zx_dark_near((uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b);
+            } else {
+                bg = mode[c0];
+            }
+            if (g_cf_stage == 3 && bg == 0 && (g_zw_bd[i] > 0 || mode[c0] == 4)) {
+                bg = 4;
+            }
+            g_zw_bgc[i] = (uint8_t)bg;
         }
     }
     /* sprites: one fixed ink per family, dark pixels black */
@@ -1596,16 +1730,133 @@ static void zx_world(uint32_t *px, int w, int h)
             }
         }
     }
+    /* Stage 2 cruisers: one large enemy family, then kept for the stage. */
+    if (g_cf_stage == 2) {
+        static uint16_t fid[512];
+        static int fx0[512], fy0[512], fx1[512], fy1[512], fn[512];
+        static uint8_t ftag[512];
+        int nf = 0, k;
+
+        for (i = 0; i < ZW_W * ZW_H; i++) {
+            uint16_t id = g_zw_id[i];
+            int mx, my, f;
+
+            if (!g_zw_spr[i] || !id || id >= 0xFFF0u) {
+                continue;
+            }
+            for (f = 0; f < nf; f++) {
+                if (fid[f] == id) {
+                    break;
+                }
+            }
+            if (f == nf) {
+                if (nf == 512) {
+                    continue;
+                }
+                fid[nf] = id;
+                fx0[nf] = fy0[nf] = 9999;
+                fx1[nf] = fy1[nf] = -1;
+                fn[nf] = 0;
+                ftag[nf] = 0;
+                nf++;
+            }
+            mx = i % ZW_W;
+            my = i / ZW_W;
+            if (mx < fx0[f]) {
+                fx0[f] = mx;
+            }
+            if (my < fy0[f]) {
+                fy0[f] = my;
+            }
+            if (mx > fx1[f]) {
+                fx1[f] = mx;
+            }
+            if (my > fy1[f]) {
+                fy1[f] = my;
+            }
+            fn[f]++;
+            if (g_zw_tag[i] == 1) {
+                ftag[f] = 1;
+            }
+        }
+        for (k = 0; k < nf; k++) {
+            int wdt = fx1[k] - fx0[k] + 1, hgt = fy1[k] - fy0[k] + 1;
+
+            if (ftag[k] == 1 && fn[k] >= 90 && (wdt >= 16 || hgt >= 16)) {
+                g_sf_big[fid[k]] = 1;
+            }
+        }
+    }
     for (i = 0; i < ZW_W * ZW_H; i++) {
         uint16_t id = g_zw_id[i];
-        int ink;
+        int ink, col, l, tag, bg, big;
+        static const int alt[6] = {10, 14, 11, 12, 9, 13}; /* bright, not white */
 
         if (!g_zw_spr[i]) {
             continue;
         }
-        ink = id >= 0xFFF1u && id <= 0xFFF5u ? (id == 0xFFF1u ? 10 : id == 0xFFF3u ? 7 : 9)
-            : id && g_sf_ink[id] ? g_sf_ink[id] : 15;   /* capsules: weapon colour; else white until locked */
-        g_zw_out[i] = LUM24(g_zw_col[i]) > 48 ? k_zx16[ink] : 0;
+        l = LUM24(g_zw_col[i]);
+        tag = g_zw_tag[i];
+        bg = g_zw_bgc[i] & 7;
+        big = id && g_sf_big[id];
+        if (id >= 0xFFF1u && id <= 0xFFF5u) {
+            ink = id == 0xFFF1u ? 10 : id == 0xFFF3u ? 14 : 9; /* V red, M yellow, L blue */
+        } else if (big) {
+            ink = 14;
+        } else if (id && g_sf_ink[id]) {
+            ink = g_sf_ink[id];
+        } else {
+            ink = 15;
+        }
+        if (!big && g_zx_space && tag == 1 && id < 0xFFF0u && (ink & 7) == 7) {
+            ink = (id % 3) == 0 ? 14 : (id % 3) == 1 ? 11 : 12; /* yellow, magenta, green */
+        }
+        if (big) {
+            int m = l, d, mx = i % ZW_W, my = i / ZW_W;
+
+            for (d = 0; d < 4; d++) {
+                int nx = mx + (d == 0 ? -1 : d == 1 ? 1 : 0);
+                int ny = my + (d == 2 ? -1 : d == 3 ? 1 : 0);
+                int n, ln;
+
+                if (nx < 0 || nx >= ZW_W || ny < 0 || ny >= ZW_H) {
+                    continue;
+                }
+                n = ny * ZW_W + nx;
+                if (g_zw_id[n] != id) {
+                    continue;
+                }
+                ln = LUM24(g_zw_col[n]);
+                if (ln > m) {
+                    m = ln;
+                }
+            }
+            /* bright yellow, with more of the shading kept as black lines */
+            col = (m - l > 18 || l <= 100) ? 0 : 14;
+        } else if (tag == 3) {
+            col = l > 36 ? ink : 0;
+            if ((col & 7) == bg) {
+                int a, s;
+
+                if (ink && (ink & 7) != bg) {
+                    col = ink;
+                } else {
+                    col = 10;
+                    s = (int)(id % 6);
+                    for (a = 0; a < 6; a++) {
+                        int c2 = alt[(s + a) % 6];
+
+                        if ((c2 & 7) != bg) {
+                            col = c2;
+                            break;
+                        }
+                    }
+                }
+            }
+        } else {
+            col = l > 48 ? ink : 0;
+        }
+        g_zw_out[i] = k_zx16[col];
     }
     if (g_w_txt) {
         for (y = 0; y < 400; y += 2) {
@@ -2321,6 +2572,11 @@ static void zx_detail(uint32_t *px, int w)
             if (g_w_txt && (g_w_txt[q] || g_w_txt[q + 1] || g_w_txt[q + w] || g_w_txt[q + w + 1])) {
                 continue;
             }
+            /* enemy bullets keep the colour chosen against the background */
+            if (g_kind && (g_kind[q] == 3 || g_kind[q + 1] == 3 ||
+                           g_kind[q + w] == 3 || g_kind[q + w + 1] == 3)) {
+                continue;
+            }
             for (k = 0; k < 4; k++) {
                 int v = g_zd_l[y * 240 + x + nb[k]];
 
@@ -2328,25 +2584,32 @@ static void zx_detail(uint32_t *px, int w)
                     mx = v;
                 }
             }
-            if (g_zd_m[y * 240 + x] >= 90 && g_zd_l[y * 240 + x - 1] < 40 && g_zd_l[y * 240 + x + 1] < 40) {
-                c = 0xFFFFFFFFu;                 /* a star: always white */
-            } else if (mx - l > 48 && l * 5 < mx * 3) {
-                c = 0x000000FFu;                 /* outline / detail: black */
-            } else if (g_kind && (g_kind[q] || g_kind[q + 1] || g_kind[q + w] || g_kind[q + w + 1]) &&
-                       mx - l > 18 && l * 5 < mx * 4) {
-                c = 0x000000FFu;                 /* sprites: finer inner detail too */
-            } else {
-                continue;
+            {
+                int spr = g_kind && (g_kind[q] || g_kind[q + 1] || g_kind[q + w] || g_kind[q + w + 1]);
+
+                /* stars are scenery: a bright sprite must not be turned white */
+                if (!spr && g_zd_m[y * 240 + x] >= 90 && g_zd_l[y * 240 + x - 1] < 40 &&
+                    g_zd_l[y * 240 + x + 1] < 40) {
+                    c = 0xFFFFFFFFu;
+                } else if (!spr && mx - l > 48 && l * 5 < mx * 3) {
+                    c = 0x000000FFu;             /* scenery outline / detail */
+                } else if (spr && mx - l > 18 && l * 5 < mx * 4) {
+                    c = 0x000000FFu;             /* sprite inner detail */
+                } else {
+                    continue;
+                }
             }
             px[q] = px[q + 1] = px[q + (size_t)w] = px[q + (size_t)w + 1] = c;
         }
     }
 }
 
-/* ZX: the player's own pixels (from the sprite draw) after the clash
- * pass: the ship and options always white, except where the I-FRAMES
- * aura painted them (its mode colour); the shots in the colour of the
- * weapon held. Dark source pixels stay black. */
+/* ZX: the player's own pixels after the clash pass. The ship is bright
+ * white with its black detail lines kept; a wing tip (one source pixel
+ * at the end of the silhouette) fills its whole machine pixel so it
+ * stays legible in straight flight. Options and shots use the weapon
+ * colour (red, blue or yellow). Where the I-FRAMES aura painted, that
+ * mode colour replaces the ship, as before. */
 static const uint8_t *g_pl_own, *g_pl_aura;
 static int g_pl_aink = 10, g_pl_sink = 10;
 
@@ -2360,49 +2623,119 @@ void cfilter_set_player(const uint8_t *own, const uint8_t *aura, int aura_ink, i
 
 static void zx_player(uint32_t *px, int w)
 {
-    int x, y;
+    static uint8_t role[200 * 240];
+    static uint8_t litn[200 * 240];
+    static uint8_t maxl[200 * 240];
+    static uint8_t aura[200 * 240];
+    int by, bx;
 
     if (!g_pl_own) {
         return;
     }
-    /* per 2x2 machine pixel: lit when ANY of the player's own pixels in
-     * it is lit (thin wing tips are 1 px wide in straight flight and an
-     * average lost them); only blocks whose own pixels are all dark stay
-     * black, so the white outline is solid and the ship always bright */
-    for (y = 0; y < 400; y += 2) {
-        for (x = 80; x < 560; x += 2) {
-            size_t q = (size_t)y * w + x;
+    memset(role, 0, sizeof role);
+    for (by = 0; by < 200; by++) {
+        for (bx = 0; bx < 240; bx++) {
+            size_t q = (size_t)(by * 2) * w + 80 + (size_t)bx * 2;
             const size_t k4[4] = {q, q + 1, q + (size_t)w, q + (size_t)w + 1};
-            int k, o = 0, a = 0, mx = 0;
-            uint32_t c;
+            int k, n1 = 0, n2 = 0, n3 = 0, a = 0, r = 0, mx = 0, lit = 0;
 
+            if (g_w_txt && (g_w_txt[k4[0]] || g_w_txt[k4[1]] || g_w_txt[k4[2]] || g_w_txt[k4[3]])) {
+                continue;
+            }
             for (k = 0; k < 4; k++) {
                 int v = g_pl_own[k4[k]];
 
-                if (v && (!o || v < o)) {
-                    o = v;
-                }
                 if (g_pl_aura && g_pl_aura[k4[k]]) {
                     a = 1;
                 }
-                if (v) {
-                    int l = LUM24(g_zd_src[k4[k]] >> 8);
-
-                    if (l > mx) {
-                        mx = l;
-                    }
+                if (v == 1) {
+                    n1++;
+                } else if (v == 2) {
+                    n2++;
+                } else if (v == 3) {
+                    n3++;
                 }
             }
-            if (!o || (g_w_txt && (g_w_txt[k4[0]] || g_w_txt[k4[1]] || g_w_txt[k4[2]] || g_w_txt[k4[3]]))) {
+            if (n1 >= n2 && n1 > 0) {
+                r = 1;
+            } else if (n2 > 0) {
+                r = 2;
+            } else if (n3 > 0) {
+                r = 3;
+            } else {
                 continue;
             }
-            if (!a && mx < 40) {
-                c = 0x000000FFu;
-            } else {
-                c = k_zx16[a ? g_pl_aink : o == 3 ? g_pl_sink : 15] << 8 | 0xFFu;
-            }
             for (k = 0; k < 4; k++) {
-                px[k4[k]] = c;
+                int v = g_pl_own[k4[k]];
+                int l;
+
+                if ((r == 1 && v != 1) || (r == 2 && v != 2) || (r == 3 && v != 3)) {
+                    continue;
+                }
+                l = LUM24(g_zd_src[k4[k]] >> 8);
+                if (l > mx) {
+                    mx = l;
+                }
+                if (l >= 40) {
+                    lit++;
+                }
+            }
+            role[by * 240 + bx] = (uint8_t)r;
+            litn[by * 240 + bx] = (uint8_t)lit;
+            maxl[by * 240 + bx] = (uint8_t)(mx > 255 ? 255 : mx);
+            aura[by * 240 + bx] = (uint8_t)a;
+        }
+    }
+    for (by = 0; by < 200; by++) {
+        for (bx = 0; bx < 240; bx++) {
+            int ix = by * 240 + bx, r = role[ix], nb = 0, ink, tip;
+            size_t q = (size_t)(by * 2) * w + 80 + (size_t)bx * 2;
+            uint32_t c;
+
+            if (!r) {
+                continue;
+            }
+            if (bx > 0 && role[ix - 1] == r) {
+                nb++;
+            }
+            if (bx < 239 && role[ix + 1] == r) {
+                nb++;
+            }
+            if (by > 0 && role[ix - 240] == r) {
+                nb++;
+            }
+            if (by < 199 && role[ix + 240] == r) {
+                nb++;
+            }
+            ink = r == 1 ? 15 : g_pl_sink;
+            /* I-FRAMES: the whole machine pixel takes the mode colour. */
+            if (aura[ix] && r != 3) {
+                c = k_zx16[g_pl_aink] << 8 | 0xFFu;
+                px[q] = px[q + 1] = px[q + (size_t)w] = px[q + (size_t)w + 1] = c;
+                continue;
+            }
+            /* Straight-flight wing tip: one lit pixel at the silhouette
+             * end. Fill the 2x2 so it does not vanish into the black. */
+            tip = r != 3 && nb <= 1 && litn[ix] > 0 && maxl[ix] >= 28;
+            if (r == 3 || tip) {
+                c = maxl[ix] >= (r == 3 ? 40 : 28) ? (k_zx16[ink] << 8 | 0xFFu) : 0x000000FFu;
+                px[q] = px[q + 1] = px[q + (size_t)w] = px[q + (size_t)w + 1] = c;
+                continue;
+            }
+            {
+                const size_t k4[4] = {q, q + 1, q + (size_t)w, q + (size_t)w + 1};
+                int k;
+
+                for (k = 0; k < 4; k++) {
+                    int v = g_pl_own[k4[k]];
+                    int l;
+
+                    if ((r == 1 && v != 1) || (r == 2 && v != 2)) {
+                        continue;
+                    }
+                    l = LUM24(g_zd_src[k4[k]] >> 8);
+                    px[k4[k]] = (l >= 40 ? k_zx16[ink] : 0) << 8 | 0xFFu;
+                }
             }
         }
     }

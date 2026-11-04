@@ -802,8 +802,10 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
         /* Enemy bullets (0x0080) that cannot be shot (no 0x0020 or
          * 0x0040 bit, which the player's shots test). */
         /* 0x0080 enemy bullets, 0x0100 shootable bullets, 0x0010 items,
-         * 0x1000 the player's shots. */
-        gfx->kind_cur = (type & 0x1190u) ? 2 : 1;
+         * 0x1000 the player's shots. Kind 3 is an enemy bullet, so the
+         * ZX filter can keep it off the colour of the background. */
+        gfx->kind_cur = ((type & 0x0180u) && !(type & 0x1000u)) ? 3 :
+                        (type & 0x1190u) ? 2 : 1;
         /* one id per sprite family (entity type and sheet), the same
          * for all its animation frames */
         gfx->sid_cur = (int)(((unsigned)type * 40503u ^ (unsigned)seg * 2654435761u) >> 8 & 0xFFFFu) | 1;

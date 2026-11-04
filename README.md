@@ -30,8 +30,7 @@ This program exists to build changes on top of a game I am a huge fan of, made b
 - **Weapon change during the game** (SHIP SELECT OFF) is now the default: pick up V, L or M capsules to switch weapon.
 - **Escape** pauses only during a game.
 - The final boss's homing shot now points its trail in the direction it flies, as in the original.
-- A short 30th AE card ("Rude Breaker - 30th Anniversary Edition by ShmupsBR 2026") before the Compile logo; trigger or Start skips it.
-- New title screen with the 30th AE mark and the © ShmupsBR 2026 credit, and a 30th AE credit line in the ending. The ranking screen keeps its original look.
+- New title screen with the 30th AE mark and the © ShmupsBR 2026 credit, and a 30th AE credit line in the ending. The ranking screen keeps its original look. The game starts on the Compile logo, as in the original.
 
 ### Why the game files are not included
 This repository contains **only the engine** (the code written for this port). It does **not** include any of the original game's files, and never will:
