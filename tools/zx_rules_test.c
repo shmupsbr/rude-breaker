@@ -83,13 +83,6 @@ static void apply(int stage, int shot)
     cfilter_apply(px, W, H, CF_ZX);
 }
 
-static int is_blueish(uint32_t c)
-{
-    c &= 0xFFFFFF00u;
-    return c == 0x0000D700u || c == 0x0000FF00u || c == 0x00D7D700u || c == 0x00FFFF00u ||
-           c == 0xD7D7D700u || c == 0xFFFFFF00u;
-}
-
 int main(void)
 {
     int x, y, white = 0, blue = 0, green = 0, other = 0;
@@ -102,8 +95,9 @@ int main(void)
     /* ship: light body, mid grey panel, dark line, 1 px wing tip */
     fill(300, 300, 332, 332, 0xFFFFFF00u, 1, 0xFFF8, 1, 240, 0);
     for (y = 304; y < 328; y++) {
-        put(316, y, 0x88888800u, 1, 0xFFF8, 1, 120, 0);
+        put(316, y, 0x33333300u, 1, 0xFFF8, 1, 50, 0);
     }
+    put(338, 316, 0xC0C0C000u, 1, 0xFFF8, 1, 160, 0);
     for (x = 304; x < 328; x++) {
         put(x, 316, 0x44444400u, 1, 0xFFF8, 1, 40, 0);
     }
@@ -127,6 +121,7 @@ int main(void)
     expect("ship light is white", (ship_hi & 0xFFFFFF00u) == 0xFFFFFF00u);
     expect("ship grey is black", (ship_mid & 0xFFFFFF00u) == 0x00000000u);
     expect("ship dark line is black", (ship_lo & 0xFFFFFF00u) == 0x00000000u);
+    expect("side cannon stays white", (at(338, 316) & 0xFFFFFF00u) == 0xFFFFFF00u);
     expect("wing tip stays white", (tip & 0xFFFFFF00u) == 0xFFFFFF00u);
     opt_hi = at(252, 310);
     opt_lo = at(258, 314);
@@ -142,9 +137,9 @@ int main(void)
         for (x = 82; x < 110; x++) {
             uint32_t c = at(x, y) & 0xFFFFFF00u;
 
-            if (c == 0xFFFFFF00u) {
+            if (c == 0xFFFFFF00u || c == 0xD7D7D700u) {
                 white++;
-            } else if (is_blueish(c)) {
+            } else if (c == 0x00D7D700u || c == 0x00FFFF00u || c == 0x0000D700u || c == 0x0000FF00u) {
                 blue++;
             } else {
                 other++;
@@ -189,6 +184,38 @@ int main(void)
         }
         expect("sprite stays a single colour", same && s0 != 0xFFFFFF00u && s0 != 0x00D7D700u);
         printf("  sprite=%06X\n", (s0 >> 8) & 0xFFFFFF);
+    }
+
+    /* Background cruisers: no sprite id, the way a page stamp looks. */
+    clear_frame();
+    apply(1, 10);
+    clear_frame();
+    fill(100, 8, 180, 100, 0xB0B0B000u, 0, 0, 0, 180, 1);
+    fill(100, 160, 180, 250, 0xB0B0B000u, 0, 0, 0, 180, 1);
+    apply(2, 10);
+    expect("tile cruiser 1 is dark yellow", (at(120, 40) & 0xFFFFFF00u) == 0xD7D70000u);
+    expect("tile cruiser 2 is cyan", (at(120, 190) & 0xFFFFFF00u) == 0x00FFFF00u);
+
+    /* Blue-grey scenery must keep a hue, not collapse to black and white. */
+    clear_frame();
+    fill(80, 64, 112, 96, 0x5A649600u, 0, 0, 0, 0, 4);
+    apply(4, 10);
+    {
+        int hue = 0, grey = 0;
+
+        for (y = 68; y < 92; y++) {
+            for (x = 84; x < 108; x++) {
+                uint32_t c = at(x, y) & 0xFFFFFF00u;
+
+                if (c == 0x00000000u || c == 0xD7D7D700u || c == 0xFFFFFF00u) {
+                    grey++;
+                } else {
+                    hue++;
+                }
+            }
+        }
+        expect("scenery keeps a hue", hue > 0);
+        printf("  hue=%d grey=%d sample=%06X\n", hue, grey, (at(90, 80) >> 8) & 0xFFFFFF);
     }
 
     if (fails) {

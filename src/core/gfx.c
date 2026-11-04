@@ -29,6 +29,8 @@ static uint8_t g_kind[RB_GFX_W * RB_GFX_H];
 /* luma of the background under each sprite pixel (ZX SPECTRUM filter) */
 static uint8_t g_bgl[RB_GFX_W * RB_GFX_H];
 static uint8_t g_shade[RB_GFX_W * RB_GFX_H]; /* pre-grade luma, screen space */
+static uint16_t g_stamp[RB_GFX_W * RB_GFX_H]; /* page: sprite-grid baked into the bg */
+static uint16_t g_stamp_key;
 static uint16_t g_sidm[RB_GFX_W * RB_GFX_H];  /* sprite id per shown pixel */
 static uint8_t g_ownm[RB_GFX_W * RB_GFX_H];   /* player ship / option pixels shown */
 static uint8_t g_bgim[RB_GFX_W * RB_GFX_H];   /* background index per shown pixel */
@@ -205,7 +207,24 @@ static void put_idx(RbGfx *gfx, int x, int y, uint8_t idx)
     }
     if (gfx->paint_bg) {
         gfx->bg[at] = idx;
+        g_stamp[at] = g_stamp_key;
     }
+}
+
+void gfx_stamp_begin(uint16_t key)
+{
+    if (key >= 0xF000u) {
+        key = (uint16_t)(key & 0x0FFFu);
+    }
+    if (!key) {
+        key = 1;
+    }
+    g_stamp_key = key;
+}
+
+void gfx_stamp_end(void)
+{
+    g_stamp_key = 0;
 }
 
 /* GRCG read-modify-write of one pixel. `planes` is the index bits. */
@@ -230,6 +249,7 @@ static void rmw_idx(RbGfx *gfx, int x, int y, uint8_t planes, int set)
     gfx->own[at] = (uint8_t)gfx->own_cur;
     if (gfx->paint_bg) {
         gfx->bg[at] = v;
+        g_stamp[at] = g_stamp_key;
     }
 }
 
@@ -3420,12 +3440,20 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
             idx = gfx->pix[at];
             g_layer[(size_t)y * RB_GFX_W + (size_t)x] =
                 (uint8_t)(!tail && idx != gfx->bg[at]);
-            g_kind[(size_t)y * RB_GFX_W + (size_t)x] =
-                g_layer[(size_t)y * RB_GFX_W + (size_t)x] ? (gfx->kind[at] ? gfx->kind[at] : 1) : 0;
-            g_ownm[(size_t)y * RB_GFX_W + (size_t)x] =
-                g_layer[(size_t)y * RB_GFX_W + (size_t)x] ? gfx->own[at] : 0;
-            g_sidm[(size_t)y * RB_GFX_W + (size_t)x] =
-                g_layer[(size_t)y * RB_GFX_W + (size_t)x] ? gfx->sid[at] : 0;
+            {
+                /* Sprite cells stamped into the page (0x38/0x39) share the
+                 * background index, so they are not a live sprite. Keep
+                 * their stamp id or the filter dithers the cruiser. */
+                uint16_t st = g_stamp[at];
+                int live = g_layer[(size_t)y * RB_GFX_W + (size_t)x];
+
+                g_kind[(size_t)y * RB_GFX_W + (size_t)x] =
+                    live ? (gfx->kind[at] ? gfx->kind[at] : 1) : (st ? 1 : 0);
+                g_ownm[(size_t)y * RB_GFX_W + (size_t)x] =
+                    live ? gfx->own[at] : 0;
+                g_sidm[(size_t)y * RB_GFX_W + (size_t)x] =
+                    live ? gfx->sid[at] : st;
+            }
             g_bgim[(size_t)y * RB_GFX_W + (size_t)x] = tail ? gfx->hold[at] : gfx->bg[at];
             if (tail && idx == gfx->bg[at]) {
                 idx = gfx->hold[at];
