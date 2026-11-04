@@ -98,6 +98,10 @@ static int s_hx, s_hy;
 static int s_khp, s_khp_max;
 static int s_thp[KR_TENT];
 static int s_tmax;
+static int s_hit;
+static uint8_t s_pshot[256];
+static int16_t s_px0[256];
+static int16_t s_py0[256];
 static int s_slot[KR_TENT][KR_SEGS];
 static int s_hull_slot;
 static int s_ang[KR_TENT][KR_SEGS];
@@ -889,7 +893,11 @@ static int is_player_shot(const RbEntView *v)
     if (!v || v->kind == 0x0012u || v->kind == 0x0014u) {
         return 0;
     }
-    if (v->origin == 0x62E3u || v->origin == 0x62E9u) {
+    if (v->origin == KR_SENT || v->origin == 0x62E3u || v->origin == 0x62E9u) {
+        return 0;
+    }
+    /* Enemy bullets. A player shot can still carry 0x1000. */
+    if ((v->type & 0x0080u) && !(v->type & 0x1000u)) {
         return 0;
     }
     if (v->type & 0x1000u) {
@@ -899,155 +907,254 @@ static int is_player_shot(const RbEntView *v)
         v->origin == 0x6337u || v->origin == 0x649Eu) {
         return 1;
     }
-    if ((v->type & 0x0004u) && v->seg == 26u) {
+    if ((v->type & 0x0004u) && (v->kind == 0 || v->seg == 26u)) {
         return 1;
     }
-    if (v->origin >= 0x6300u && v->origin < 0x6700u && (v->type & 0x00FFu) != 0) {
+    if (v->kind == 0 && v->seg == 26u && v->w && v->h && (int)v->w * (int)v->h <= 8) {
+        return 1;
+    }
+    if (v->origin >= 0x6200u && v->origin < 0x6800u && (v->type & 0x00FFu) != 0 &&
+        !(v->type & 0x00E0u)) {
         return 1;
     }
     return 0;
 }
 
-static int near_seg(int x, int y, int cx, int cy, int r)
+static void note_shots(RbVm *vm)
 {
-    int dx = x - cx;
-    int dy = y - cy;
+    int i;
 
-    return dx * dx + dy * dy <= r * r;
-}
-
-static int overlap(const RbEntView *a, const RbEntView *b)
-{
-    int al = a->x + a->bl;
-    int ar = a->x + a->br;
-    int at = a->y + a->bt;
-    int ab = a->y + a->bb;
-    int bl = b->x + b->bl;
-    int br = b->x + b->br;
-    int bt = b->y + b->bt;
-    int bb = b->y + b->bb;
-
-    if (al >= br || ar < bl || at >= bb || ab < bt) {
-        return 0;
+    memset(s_pshot, 0, sizeof s_pshot);
+    if (!vm) {
+        return;
     }
-    return 1;
+    for (i = 0; i < 256; i++) {
+        RbEntView v;
+
+        if (!vm_ent_view(vm, i, &v) || !is_player_shot(&v)) {
+            continue;
+        }
+        s_pshot[i] = 1;
+        s_px0[i] = v.x;
+        s_py0[i] = v.y;
+    }
 }
 
-static void apply_damage(RbVm *vm)
+/* Distance from a point to a segment, squared. */
+static int seg_dist2(int px, int py, int ax, int ay, int bx, int by)
 {
-    int credited[KR_TENT][KR_SEGS];
-    int hull_hit = 0;
+    int abx = bx - ax;
+    int aby = by - ay;
+    int apx = px - ax;
+    int apy = py - ay;
+    int ab2 = abx * abx + aby * aby;
+    int t;
+    int dx;
+    int dy;
+
+    if (ab2 <= 0) {
+        return apx * apx + apy * apy;
+    }
+    t = apx * abx + apy * aby;
+    if (t < 0) {
+        t = 0;
+    } else if (t > ab2) {
+        t = ab2;
+    }
+    dx = apx - (int)(((long)abx * t) / ab2);
+    dy = apy - (int)(((long)aby * t) / ab2);
+    return dx * dx + dy * dy;
+}
+
+static int path_arm(int x0, int y0, int x1, int y1)
+{
+    int best = -1;
+    int best_d = 0x3fffffff;
     int i;
     int s;
-    int sh;
+    int k;
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    int steps = dx < 0 ? -dx : dx;
+    int sy = dy < 0 ? -dy : dy;
 
-    memset(credited, 0, sizeof credited);
+    if (sy > steps) {
+        steps = sy;
+    }
+    steps /= 6;
+    if (steps < 1) {
+        steps = 1;
+    }
+    if (steps > 16) {
+        steps = 16;
+    }
     for (i = 0; i < KR_TENT; i++) {
         if (s_thp[i] <= 0) {
             continue;
         }
         for (s = 0; s < KR_SEGS; s++) {
-            RbEntView v;
-            int id = s_slot[i][s];
+            int ax = s == 0 ? s_hx + SOCK_X[i] : s_px[i][s - 1];
+            int ay = s == 0 ? s_hy + SOCK_Y[i] : s_py[i][s - 1];
+            int bx = s_px[i][s];
+            int by = s_py[i][s];
+            int rad = (s + 1 == KR_SEGS) ? 22 : 16;
 
-            if (id < 0 || !vm_ent_view(vm, id, &v)) {
-                continue;
-            }
-            if (v.hp < KR_HOLD) {
-                int d = KR_HOLD - (int)v.hp;
+            for (k = 0; k <= steps; k++) {
+                int x = x0 + dx * k / steps;
+                int y = y0 + dy * k / steps;
+                int d = seg_dist2(x, y, ax, ay, bx, by);
 
-                if (d > 48) {
-                    d = 8;
+                if (d <= rad * rad && d < best_d) {
+                    best_d = d;
+                    best = i;
                 }
-                s_thp[i] -= d;
-                credited[i][s] = 1;
             }
-            vm_ent_set_hp(vm, id, KR_HOLD);
         }
     }
-    if (s_hull_slot >= 0) {
-        RbEntView v;
+    return best;
+}
 
-        if (vm_ent_view(vm, s_hull_slot, &v) && v.hp < KR_HOLD) {
-            int d = KR_HOLD - (int)v.hp;
+static int on_core(int x, int y)
+{
+    return x >= s_hx - 16 && x <= s_hx + 16 && y >= s_hy - 52 && y <= s_hy + 44;
+}
 
-            if (d > 48) {
-                d = 8;
-            }
-            s_khp -= d;
-            hull_hit = 1;
-        }
-        if (s_hull_slot >= 0) {
-            vm_ent_set_hp(vm, s_hull_slot, KR_HOLD);
-        }
+static void note_arm_hit(RbVm *vm, int arm)
+{
+    int d = s_hit > 0 ? s_hit : 8;
+
+    s_thp[arm] -= d;
+    if (s_thp[arm] < 0) {
+        s_thp[arm] = 0;
     }
+    vm_add_score(vm, 10);
+#if KRAKEN_DEBUG
+    fprintf(stderr, "kraken hit arm=%d hp=%d/%d\n", arm, s_thp[arm], s_tmax);
+    fflush(stderr);
+#else
+    (void)arm;
+#endif
+}
+
+static void apply_damage(RbVm *vm)
+{
+    int i;
+    int s;
+    int sh;
+    int hull_hit = 0;
+
     for (sh = 0; sh < 256; sh++) {
         RbEntView shot;
-        int hit_i = -1;
-        int hit_s = -1;
+        int alive = vm_ent_view(vm, sh, &shot);
+        int x0;
+        int y0;
+        int x1;
+        int y1;
+        int arm;
+        int k;
+        int steps;
 
-        if (!vm_ent_view(vm, sh, &shot) || !is_player_shot(&shot)) {
+        if (alive && !is_player_shot(&shot)) {
             continue;
         }
-        for (i = 0; i < KR_TENT && hit_i < 0; i++) {
-            if (s_thp[i] <= 0) {
-                continue;
-            }
-            for (s = 0; s < KR_SEGS; s++) {
-                int rad = (s + 1 == KR_SEGS) ? 18 : 12;
-                RbEntView part;
-                int id = s_slot[i][s];
-
-                if (near_seg(shot.x, shot.y, s_px[i][s], s_py[i][s], rad)) {
-                    hit_i = i;
-                    hit_s = s;
-                    break;
-                }
-                if (id >= 0 && vm_ent_view(vm, id, &part) && overlap(&shot, &part)) {
-                    hit_i = i;
-                    hit_s = s;
-                    break;
-                }
-            }
-        }
-        if (hit_i >= 0) {
-            if (!credited[hit_i][hit_s]) {
-                s_thp[hit_i] -= 12;
-                credited[hit_i][hit_s] = 1;
-                vm_add_score(vm, 10);
-            }
-            vm_ent_clear(vm, sh);
+        if (!alive && !s_pshot[sh]) {
             continue;
         }
-        if (s_hull_slot >= 0 && tent_alive_n() == 0) {
-            RbEntView hull;
-
-            if (vm_ent_view(vm, s_hull_slot, &hull) && overlap(&shot, &hull)) {
-                if (!hull_hit) {
-                    s_khp -= 6;
-                    hull_hit = 1;
-                }
+        if (alive) {
+            x1 = shot.x;
+            y1 = shot.y;
+            if (s_pshot[sh]) {
+                x0 = s_px0[sh];
+                y0 = s_py0[sh];
+            } else {
+                x0 = x1;
+                y0 = y1;
+            }
+        } else {
+            x0 = x1 = s_px0[sh];
+            y0 = y1 = s_py0[sh];
+        }
+        arm = path_arm(x0, y0, x1, y1);
+        if (arm >= 0) {
+            note_arm_hit(vm, arm);
+            if (alive) {
                 vm_ent_clear(vm, sh);
             }
+            continue;
+        }
+        if (tent_alive_n() > 0 || hull_hit) {
+            continue;
+        }
+        steps = 1;
+        {
+            int adx = x1 - x0;
+            int ady = y1 - y0;
+            int n = adx < 0 ? -adx : adx;
+            int m = ady < 0 ? -ady : ady;
+
+            if (m > n) {
+                n = m;
+            }
+            steps = n / 6;
+            if (steps < 1) {
+                steps = 1;
+            }
+        }
+        for (k = 0; k <= steps; k++) {
+            int x = x0 + (x1 - x0) * k / steps;
+            int y = y0 + (y1 - y0) * k / steps;
+
+            if (!on_core(x, y)) {
+                continue;
+            }
+            s_khp -= s_hit > 0 ? s_hit : 8;
+            if (s_khp < 0) {
+                s_khp = 0;
+            }
+            vm_add_score(vm, 10);
+            hull_hit = 1;
+#if KRAKEN_DEBUG
+            fprintf(stderr, "kraken hit hull hp=%d/%d\n", s_khp, s_khp_max);
+            fflush(stderr);
+#endif
+            if (alive) {
+                vm_ent_clear(vm, sh);
+            }
+            break;
         }
     }
     for (i = 0; i < KR_TENT; i++) {
-        if (s_thp[i] <= 0 && s_slot[i][0] >= 0) {
-            s_boom[i] = 18;
-            s_bx[i] = s_px[i][KR_SEGS - 1];
-            s_by[i] = s_py[i][KR_SEGS - 1];
-            for (s = 0; s < KR_SEGS; s++) {
-                if (s_slot[i][s] >= 0) {
-                    vm_ent_clear(vm, s_slot[i][s]);
-                    s_slot[i][s] = -1;
-                }
-            }
-            vm_add_score(vm, 200);
-            sys_play_sound(0x25, 160);
-            if (s_dash && s_dash_i == i) {
-                s_dash = 0;
+        int any = 0;
+
+        if (s_thp[i] > 0) {
+            continue;
+        }
+        for (s = 0; s < KR_SEGS; s++) {
+            if (s_slot[i][s] >= 0) {
+                any = 1;
             }
         }
+        if (!any) {
+            continue;
+        }
+        s_boom[i] = 18;
+        s_bx[i] = s_px[i][KR_SEGS - 1];
+        s_by[i] = s_py[i][KR_SEGS - 1];
+        for (s = 0; s < KR_SEGS; s++) {
+            if (s_slot[i][s] >= 0) {
+                vm_ent_clear(vm, s_slot[i][s]);
+                s_slot[i][s] = -1;
+            }
+        }
+        vm_add_score(vm, 200);
+        sys_play_sound(0x25, 160);
+        if (s_dash && s_dash_i == i) {
+            s_dash = 0;
+        }
+#if KRAKEN_DEBUG
+        fprintf(stderr, "kraken arm=%d down\n", i);
+        fflush(stderr);
+#endif
     }
 }
 
@@ -1163,12 +1270,22 @@ static void start_fight(RbVm *vm)
     vm_kraken_isolate(vm);
     vm_redraw(vm);
     slots_init();
-    base = s_boss_hp >= 64 ? s_boss_hp : 480;
+    /* Half of Kraken's life per arm, and a hit is a fixed slice of that
+     * so the arm can actually be shot down. A raw boss word in the
+     * tens of thousands made the arms unkillable. */
+    base = 480;
+    if (s_boss_hp >= 64 && s_boss_hp <= 960) {
+        base = s_boss_hp;
+    }
     s_khp_max = base;
     s_khp = base;
     s_tmax = base / 2;
     if (s_tmax < 32) {
         s_tmax = 32;
+    }
+    s_hit = s_tmax / 16;
+    if (s_hit < 8) {
+        s_hit = 8;
     }
     for (i = 0; i < KR_TENT; i++) {
         s_thp[i] = s_tmax;
@@ -1185,6 +1302,9 @@ static void start_fight(RbVm *vm)
     sys_play_music(8);
 #if KRAKEN_DEBUG
     s_arm = 0;
+    fprintf(stderr, "kraken hull: silver stand-in\n");
+    fprintf(stderr, "kraken hp core=%d arm=%d hit=%d\n", s_khp, s_tmax, s_hit);
+    fflush(stderr);
 #endif
 }
 
@@ -1249,6 +1369,7 @@ void kraken_before(RbVm *vm, int deaths, int fair, int loop, int stage, int paus
         pose_at(shipx, shipy, stretch);
     }
     if (s_phase == PH_FIGHT) {
+        note_shots(vm);
         place_parts(vm);
         if (s_gen >= 0) {
             RbEntView v;
@@ -1411,11 +1532,11 @@ static void put_px(uint32_t *px, int w, int h, int x, int y, uint32_t c)
     px[(size_t)y * (size_t)w + (size_t)x] = c;
 }
 
-#define METAL_OUT 0xA8B0BCFFu
-#define METAL_SH  0xD5DCE6FFu
-#define METAL_LIT 0xF7F9FCFF
+#define METAL_OUT 0x5A6570FFu
+#define METAL_SH  0xD8E0E8FFu
+#define METAL_LIT 0xF5F8FCFF
 #define METAL_HI  0xFFFFFFFF
-#define JOINT_RED 0xE02820FFu
+#define JOINT_RED 0xE03830FFu
 #define ORB_HALO  0xFF58C8FFu
 #define ORB_BODY  0xFF8AD8FFu
 #define ORB_CORE  0xFFF8FFFFu
@@ -1447,54 +1568,84 @@ static void blit_hull(uint32_t *px, int w, int h, int cx, int cy)
 }
 
 static void draw_seg(uint32_t *px, int w, int h, int x0, int y0, int x1, int y1,
-                     int thick, int joint)
+                     int thick)
 {
     int dx = x1 - x0;
     int dy = y1 - y0;
     int steps = dx < 0 ? -dx : dx;
     int sy = dy < 0 ? -dy : dy;
     int s;
+    int rad = thick / 2;
+    int stop;
+
     if (sy > steps) {
         steps = sy;
     }
     if (steps < 1) {
         steps = 1;
     }
-    for (s = 0; s <= steps; s++) {
+    if (rad < 3) {
+        rad = 3;
+    }
+    /* Stop short of the next joint so a dark gap separates the plates. */
+    stop = steps - (rad / 2 + 2);
+    if (stop < steps / 2) {
+        stop = steps / 2;
+    }
+    for (s = 0; s <= stop; s++) {
         int x = x0 + dx * s / steps;
         int y = y0 + dy * s / steps;
-        int rad = thick / 2;
         int oy;
         int ox;
 
-        if (rad < 2) {
-            rad = 2;
-        }
         for (oy = -rad - 1; oy <= rad + 1; oy++) {
             for (ox = -rad - 1; ox <= rad + 1; ox++) {
                 int d2 = ox * ox + oy * oy;
-                int side;
                 uint32_t col;
 
                 if (d2 > (rad + 1) * (rad + 1)) {
                     continue;
                 }
-                /* Upper-left of each disc is the white band. A direction
-                 * test collapsed to 0 here and the whole arm went flat. */
-                side = ox + oy;
                 if (d2 > rad * rad) {
                     col = METAL_OUT;
-                } else if (joint && s >= steps - 2) {
-                    col = JOINT_RED;
-                } else if (side < -(rad / 2)) {
+                } else if (oy < -(rad / 5)) {
                     col = METAL_HI;
-                } else if (side > rad - 1) {
+                } else if (oy > rad / 2) {
                     col = METAL_SH;
                 } else {
                     col = METAL_LIT;
                 }
                 put_px(px, w, h, x + ox, y + oy, col);
             }
+        }
+    }
+}
+
+static void draw_joint(uint32_t *px, int w, int h, int cx, int cy, int rad)
+{
+    int y;
+    int x;
+    int outer = rad / 3 + 2;
+    int inner;
+
+    if (outer < 3) {
+        outer = 3;
+    }
+    if (outer > 5) {
+        outer = 5;
+    }
+    inner = outer - 2;
+    if (inner < 1) {
+        inner = 1;
+    }
+    for (y = -outer; y <= outer; y++) {
+        for (x = -outer; x <= outer; x++) {
+            int d2 = x * x + y * y;
+
+            if (d2 > outer * outer || d2 < inner * inner) {
+                continue;
+            }
+            put_px(px, w, h, cx + x, cy + y, d2 > (outer - 1) * (outer - 1) ? METAL_OUT : JOINT_RED);
         }
     }
 }
@@ -1603,16 +1754,16 @@ static void draw_arm(uint32_t *px, int w, int h, int ti)
     for (s = 0; s < KR_SEGS; s++) {
         int x1 = s_px[ti][s];
         int y1 = s_py[ti][s];
-        int thick = 30 - s * 2;
+        int thick = 20 - s;
 
-        if (thick < 16) {
-            thick = 16;
+        if (thick < 11) {
+            thick = 11;
         }
+        draw_seg(px, w, h, x0, y0, x1, y1, thick);
         if (s + 1 == KR_SEGS) {
-            draw_seg(px, w, h, x0, y0, x1, y1, thick, 1);
             draw_orb(px, w, h, x1, y1);
         } else {
-            draw_seg(px, w, h, x0, y0, x1, y1, thick, 1);
+            draw_joint(px, w, h, x1, y1, thick);
         }
         x0 = x1;
         y0 = y1;

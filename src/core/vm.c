@@ -5647,8 +5647,13 @@ static int kraken_keep_ent(const RbVm *vm, int i)
         return 1;
     }
     /* Player shots on the ship sheet (draw code: type bit 0x0004, bank 26). */
-    /* Player shots: bit 0x1000, or a kind-0 sprite on the ship sheet. */
+    /* Player shots: bit 0x1000, or a kind-0 sprite on the ship sheet.
+     * A shot whose type also has 0x0020/0x0040 must stay, or the fight
+     * deletes the bullet before it can reach an arm. */
     if ((t & 0x0004u) && (kind == 0 || eu16(vm, i, 0x3A) == 26u)) {
+        return 1;
+    }
+    if (kind == 0 && eu16(vm, i, 0x3A) == 26u && !(t & 0x0080u)) {
         return 1;
     }
     /* Stage foes (0x0020/0x0040, the bits a player shot tests) and
