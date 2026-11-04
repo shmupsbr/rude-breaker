@@ -29,6 +29,7 @@ static uint8_t g_kind[RB_GFX_W * RB_GFX_H];
 /* luma of the background under each sprite pixel (ZX SPECTRUM filter) */
 static uint8_t g_bgl[RB_GFX_W * RB_GFX_H];
 static uint16_t g_sidm[RB_GFX_W * RB_GFX_H];  /* sprite id per shown pixel */
+static uint8_t g_ownm[RB_GFX_W * RB_GFX_H];   /* player ship / option pixels shown */
 static uint8_t g_bgim[RB_GFX_W * RB_GFX_H];   /* background index per shown pixel */
 static int g_world_scroll;
 /* Enemy bullet colour: 0 original, then PINK, LILAC, HOT PINK. Row 0
@@ -98,7 +99,9 @@ struct RbGfx {
     uint8_t kind[RB_GFX_W * RB_GFX_H];
     int kind_cur;
     uint16_t sid[RB_GFX_W * RB_GFX_H];  /* sprite family id (ZX filter) */
+    uint8_t own[RB_GFX_W * RB_GFX_H];   /* 1 player ship, 2 its options */
     int sid_cur;
+    int own_cur;
     int tint_cur;          /* sprite being stamped: 1 enemy bullet, 2 player shot */
     int tint_gold;         /* orange/gold pixels in the bullet being drawn */
     int tint_red;          /* red pixels (8, 9, 11) in it */
@@ -186,6 +189,7 @@ static void put_idx(RbGfx *gfx, int x, int y, uint8_t idx)
     gfx->pix[at] = idx;
     gfx->kind[at] = (uint8_t)gfx->kind_cur;
     gfx->sid[at] = (uint16_t)gfx->sid_cur;
+    gfx->own[at] = (uint8_t)gfx->own_cur;
     gfx->tint[at] = 0;
     if (gfx->tint_cur == 1) {
         /* Every pixel of a bullet that cannot be shot is recoloured,
@@ -222,6 +226,7 @@ static void rmw_idx(RbGfx *gfx, int x, int y, uint8_t planes, int set)
     gfx->pix[at] = v;
     gfx->kind[at] = (uint8_t)gfx->kind_cur;
     gfx->sid[at] = (uint16_t)gfx->sid_cur;
+    gfx->own[at] = (uint8_t)gfx->own_cur;
     if (gfx->paint_bg) {
         gfx->bg[at] = v;
     }
@@ -716,6 +721,7 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
                        int blank_sides)
 {
     int i;
+    int plx, ply;
 
     if (!gfx || !ent || !chunk || !clen || !cof) {
         return;
@@ -726,12 +732,30 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
     memcpy(gfx->pix, gfx->bg, (size_t)RB_GFX_W * (size_t)RB_GFX_H);
     memset(gfx->tint, 0, sizeof gfx->tint);
     memset(gfx->kind, 0, sizeof gfx->kind);
+    memset(gfx->own, 0, sizeof gfx->own);
     gfx->paint_bg = 0;
     if (g_bulletlog < 0) {
         g_bulletlog = ((char *)0) ? atoi(((char *)0)) : 0;
     }
     if (g_bulletlog) {
         bulletlog_frame();
+    }
+    {
+        /* the player's ship position, so its own extra parts (same sheet,
+         * right on it) count as the ship and not as shots */
+        int k;
+
+        ply = -32768;
+        plx = 0;
+        for (k = 0; k < ent_n; k++) {
+            const uint8_t *e = ent + (size_t)k * (size_t)stride;
+
+            if ((e[4] | e[5] << 8) == 0x0012 && (e[0] | e[1] << 8) != 0) {
+                plx = (int16_t)(e[0x22] | e[0x23] << 8);
+                ply = (int16_t)(e[0x24] | e[0x25] << 8);
+                break;
+            }
+        }
     }
     for (i = 0; i < ent_n; i++) {
         const uint8_t *slot = ent + (size_t)i * (size_t)stride;
@@ -796,6 +820,22 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
                 gfx->sid_cur = (int)(0xFFF1u + ((c0 - 122u) & ~1u));  /* FFF1 V, FFF3 M, FFF5 L */
             }
         }
+        /* the player's ship (state word 0x0012) and its options (0x0014,
+         * type 0x0010, same sheet): the I-FRAMES aura paints only these */
+        {
+            uint16_t st = (uint16_t)slot[4] | ((uint16_t)slot[5] << 8);
+
+            int ex = (int16_t)(slot[0x22] | slot[0x23] << 8), ey = (int16_t)(slot[0x24] | slot[0x25] << 8);
+            int near = ply != -32768 && abs(ex - plx) <= 24 && abs(ey - ply) <= 20;
+
+            gfx->own_cur = st == 0x0012u ? 1 : (st == 0x0014u && (type & 0x0010u) && seg == 26u) ? 2 :
+                           ((type & 0x1000u) || (st == 0u && (type & 0x0004u) && seg == 26u)) ? (near ? 1 : 3) : 0;
+            if (gfx->own_cur) {
+                /* fixed ids: the ZX filter keeps the ship white and the
+                 * shots in the weapon colour */
+                gfx->sid_cur = gfx->own_cur == 3 ? 0xFFF9 : 0xFFF8;
+            }
+        }
         gfx->tint_cur = g_bullet && (type & 0x0080u) && !(type & 0x0060u) ? 1 : 0;
         gfx->tint_gold = 0;
         gfx->tint_red = 0;
@@ -841,6 +881,7 @@ void gfx_draw_entities(RbGfx *gfx, const uint8_t *ent, int ent_n, int stride,
         gfx->tint_cur = 0;
         gfx->kind_cur = 0;
         gfx->sid_cur = 0;
+        gfx->own_cur = 0;
     }
     gfx->tint_cur = 0;
     gfx->paint_bg = 1;
@@ -3219,6 +3260,11 @@ const uint8_t *gfx_kind_mask(void)
     return g_layer_ok ? g_kind : NULL;
 }
 
+const uint8_t *gfx_own_mask(void)
+{
+    return g_layer_ok ? g_ownm : NULL;
+}
+
 const uint8_t *gfx_layer_mask(void)
 {
     return g_layer_ok ? g_layer : NULL;
@@ -3358,6 +3404,7 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
                 rgba[(size_t)y * (size_t)w + (size_t)x] = 0x000000FFu;
                 g_layer[(size_t)y * RB_GFX_W + (size_t)x] = 0;
                 g_kind[(size_t)y * RB_GFX_W + (size_t)x] = 0;
+                g_ownm[(size_t)y * RB_GFX_W + (size_t)x] = 0;
                 continue;
             }
             at = (size_t)src * RB_GFX_W + (size_t)x;
@@ -3366,6 +3413,8 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
                 (uint8_t)(!tail && idx != gfx->bg[at]);
             g_kind[(size_t)y * RB_GFX_W + (size_t)x] =
                 g_layer[(size_t)y * RB_GFX_W + (size_t)x] ? (gfx->kind[at] ? gfx->kind[at] : 1) : 0;
+            g_ownm[(size_t)y * RB_GFX_W + (size_t)x] =
+                g_layer[(size_t)y * RB_GFX_W + (size_t)x] ? gfx->own[at] : 0;
             g_sidm[(size_t)y * RB_GFX_W + (size_t)x] =
                 g_layer[(size_t)y * RB_GFX_W + (size_t)x] ? gfx->sid[at] : 0;
             g_bgim[(size_t)y * RB_GFX_W + (size_t)x] = tail ? gfx->hold[at] : gfx->bg[at];

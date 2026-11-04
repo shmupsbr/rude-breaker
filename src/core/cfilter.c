@@ -254,74 +254,6 @@ void cfilter_set_layer(const uint8_t *mask)
     g_layer = mask;
 }
 
-/* VIC-II multicolour sprites: 12x21 wide pixels (48x42 host), 3
- * colours each: two shared by every sprite ($D025/$D026) and one of
- * its own ($D027+), plus transparent. Sprite pixels arrive already on
- * the 16 colours; this restricts them to those rules. */
-static void c64_sprites(uint32_t *px, int w, int h)
-{
-    long all[16] = {0};
-    int s1 = -1, s2 = -1, x, y, i;
-
-    if (!g_layer || !g_ix_ready) {
-        return;
-    }
-    for (y = 0; y < h; y += 2) {
-        for (x = 0; x < w; x += 4) {
-            if (g_layer[(size_t)y * w + x]) {
-                uint32_t p = px[(size_t)y * w + x];
-                int k = g_ix_c64[(CR(p) >> 4) << 8 | (CG(p) >> 4) << 4 | (CB(p) >> 4)];
-
-                if (k) all[k]++;
-            }
-        }
-    }
-    for (i = 1; i < 16; i++) {
-        if (all[i] && (s1 < 0 || all[i] > all[s1])) s1 = i;
-    }
-    for (i = 1; i < 16; i++) {
-        if (i != s1 && all[i] && (s2 < 0 || all[i] > all[s2])) s2 = i;
-    }
-    for (y = 0; y < h; y += 42) {
-        for (x = 0; x < w; x += 48) {
-            long c[16] = {0};
-            int own = -1, xx, yy, any = 0;
-            uint32_t pal[4];
-            int np = 0;
-
-            for (yy = y; yy < y + 42 && yy < h; yy += 2) {
-                for (xx = x; xx < x + 48 && xx < w; xx += 4) {
-                    if (g_layer[(size_t)yy * w + xx]) {
-                        uint32_t p = px[(size_t)yy * w + xx];
-                        int k = g_ix_c64[(CR(p) >> 4) << 8 | (CG(p) >> 4) << 4 | (CB(p) >> 4)];
-
-                        c[k]++;
-                        any = 1;
-                    }
-                }
-            }
-            if (!any) continue;
-            for (i = 1; i < 16; i++) {
-                if (i != s1 && i != s2 && c[i] && (own < 0 || c[i] > c[own])) own = i;
-            }
-            pal[np++] = k_c64[0];
-            if (s1 > 0) pal[np++] = k_c64[s1];
-            if (s2 > 0) pal[np++] = k_c64[s2];
-            if (own > 0) pal[np++] = k_c64[own];
-            for (yy = y; yy < y + 42 && yy < h; yy++) {
-                for (xx = x; xx < x + 48 && xx < w; xx++) {
-                    if (g_layer[(size_t)yy * w + xx]) {
-                        uint32_t *p = &px[(size_t)yy * w + xx];
-                        uint32_t q = nearest(CR(*p), CG(*p), CB(*p), pal, np);
-
-                        *p = (q << 8) | (*p & 0xFFu);
-                    }
-                }
-            }
-        }
-    }
-}
-
 static void clash(uint32_t *px, int w, int h, int mode)
 {
     int bw, bh, cw, ch;
@@ -329,9 +261,9 @@ static void clash(uint32_t *px, int w, int h, int mode)
     MPix mp[64];
 
     (void)mode;  /* COMMODORE 64 */
-    /* Multicolour mode: 160x200 wide pixels (2:1, here 4x2 host
-     * pixels), cells of 4x8 of them (the 8x8 hires character). */
-    bw = 4; bh = 2; cw = 4; ch = 8;
+    /* pr9zj look (restored in 0.10.1): 2x2 host pixels per machine
+     * pixel, 8x8 cells of them, sprites free of the cell clash. */
+    bw = 2; bh = 2; cw = 8; ch = 8;
     if (!g_ix_ready) {
         build_ix();
     }
@@ -528,6 +460,7 @@ static void persistence(uint32_t *px, size_t n, int mode, int keep)
 
 
 #define GGB 2   /* GAME GEAR dot size in host pixels */
+#define LUMP(p) ((int)CR(p) * 77 + (int)CG(p) * 150 + (int)CB(p) * 29)
 static void flaws(uint32_t *px, int w, int h, int mode)
 {
     int x, y;
@@ -535,14 +468,16 @@ static void flaws(uint32_t *px, int w, int h, int mode)
 
     switch (mode) {
     case CF_GAMEBOY:
-        /* DMG LCD: slow liquid crystal, then the dot grid (lighter gaps
-         * between the 2x2 dots, pale green like the bare glass). */
+        /* DMG LCD: the picture keeps its own pixels (no blocks), on the
+         * DMG greens, with slow liquid crystal; over it a fixed grid of
+         * square dots at the real LCD pitch (160 dots across the 480 px
+         * playfield: one every 3 px), its dark lines clearly visible. */
         persistence(px, (size_t)w * h, mode, 9);
         for (y = 0; y < h; y++) {
             for (x = 0; x < w; x++) {
-                if ((x & 1) && (y & 1)) {
+                if ((x + 3 - 80 % 3) % 3 == 2 || y % 3 == 2) {
                     uint32_t *p = &px[(size_t)y * w + x];
-                    *p = CPK((CR(*p) * 3 + 0x8B) >> 2, (CG(*p) * 3 + 0xAC) >> 2, (CB(*p) * 3 + 0x0F) >> 2);
+                    *p = CPK(CR(*p) * 140 >> 8, CG(*p) * 140 >> 8, CB(*p) * 140 >> 8);
                 }
             }
         }
@@ -601,13 +536,16 @@ static void flaws(uint32_t *px, int w, int h, int mode)
         break;
     }
     case CF_VIRTUALBOY:
-        /* Red LED scanning mirror: a short glow that fades, and the
-         * column gaps of the LED line. */
+        /* Red LED scanning mirror: a short glow that fades, then the
+         * same clean square dot grid as GAME BOY / GAME GEAR (the last
+         * column and row of every 2x2 dot a little darker). */
         persistence(px, (size_t)w * h, mode, 6);
         for (y = 0; y < h; y++) {
-            for (x = 2; x < w; x += 3) {
-                uint32_t *p = &px[(size_t)y * w + x];
-                *p = CPK(CR(*p) * 3 >> 2, 0, 0);
+            for (x = 0; x < w; x++) {
+                if (x % GGB == GGB - 1 || y % GGB == GGB - 1) {
+                    uint32_t *p = &px[(size_t)y * w + x];
+                    *p = CPK(CR(*p) * 5 >> 3, 0, 0);
+                }
             }
         }
         break;
@@ -621,6 +559,19 @@ static void flaws(uint32_t *px, int w, int h, int mode)
          * pixels, from the playfield's left edge (x 80). */
         int tx, ty, t = 16, sc = 32, x0 = w >= 560 ? 80 : 0, x1 = w >= 560 ? 560 : w;
         size_t i, n = (size_t)w * h;
+
+        /* same grid as MEGA DRIVE: 240 columns of two host pixels over
+         * the playfield, all 400 lines (no resampling, no wobble) */
+        for (y = 0; y < h; y++) {
+            uint32_t *r = px + (size_t)y * w;
+
+            for (x = x0; x + 1 < x1; x += 2) {
+                uint32_t p = r[x], q = r[x + 1];
+                uint32_t m = CPK((CR(p) + CR(q) + 1) >> 1, (CG(p) + CG(q) + 1) >> 1, (CB(p) + CB(q) + 1) >> 1);
+
+                r[x] = r[x + 1] = m;
+            }
+        }
 
         g_lc_mask = g_layer;
         g_lc_want = 0;
@@ -778,7 +729,8 @@ static int zx_otsu(const long *hist, long n)
 
 static const uint8_t *g_kind;
 void cfilter_set_kind(const uint8_t *kind) { g_kind = kind; }
-void cfilter_set_stage(int stage) { (void)stage; }
+static int g_cf_stage = 1;
+void cfilter_set_stage(int stage) { g_cf_stage = stage; }
 
 static __attribute__((unused)) void zx_apply(uint32_t *px, int w, int h)
 {
@@ -1370,6 +1322,8 @@ void cfilter_set_world(const uint16_t *sid, const uint8_t *bgi, int scroll)
 #define ZW_CH 25
 static uint32_t g_zw_sum[ZW_W * ZW_H][3];
 static uint8_t g_zw_n[ZW_W * ZW_H], g_zw_sn[ZW_W * ZW_H];
+static uint8_t g_zw_bd[ZW_W * ZW_H];   /* backdrop (index 0) pixels */
+static uint8_t g_zw_dim[ZW_CW * ZW_CH];
 static uint16_t g_zw_id[ZW_W * ZW_H];
 static uint32_t g_zw_hash[ZW_CW * ZW_CH];
 static uint8_t g_zw_ink[ZW_CW * ZW_CH], g_zw_pap[ZW_CW * ZW_CH];
@@ -1404,6 +1358,7 @@ static void zx_world(uint32_t *px, int w, int h)
     memset(g_zw_sum, 0, sizeof g_zw_sum);
     memset(g_zw_n, 0, sizeof g_zw_n);
     memset(g_zw_sn, 0, sizeof g_zw_sn);
+    memset(g_zw_bd, 0, sizeof g_zw_bd);
     memset(g_zw_id, 0, sizeof g_zw_id);
     {
         static uint32_t hsh[ZW_CW * ZW_CH];
@@ -1429,6 +1384,9 @@ static void zx_world(uint32_t *px, int w, int h)
                     g_zw_sn[q]++;
                     g_zw_id[q] = id;
                 } else {
+                    if ((bi & 15) == 0) {
+                        g_zw_bd[q]++;
+                    }
                     g_zw_sum[q][0] += p >> 24;
                     g_zw_sum[q][1] += (p >> 16) & 0xFF;
                     g_zw_sum[q][2] += (p >> 8) & 0xFF;
@@ -1521,12 +1479,45 @@ static void zx_world(uint32_t *px, int w, int h)
         }
         g_zw_palh = palh;
     }
+    /* dim scenery (stage 1's asteroids and the like): its best ink and
+     * paper are both near black, so it would vanish; such cells are
+     * drawn as one object colour on black paper instead (dark magenta;
+     * cyan on later stages), dark inner lines kept black. */
+    {
+        static int dsum[ZW_CW * ZW_CH], dn[ZW_CW * ZW_CH];
+
+        memset(dsum, 0, sizeof dsum);
+        memset(dn, 0, sizeof dn);
+        for (i = 0; i < ZW_W * ZW_H; i++) {
+            int mx = i % ZW_W, my = i / ZW_W, c = (my >> 3) * ZW_CW + (mx >> 3);
+
+            if (!g_zw_spr[i] && g_zw_n[i] && g_zw_bd[i] * 2 < g_zw_n[i] - g_zw_sn[i]) {
+                dsum[c] += LUM24(g_zw_col[i]);
+                dn[c]++;
+            }
+        }
+        for (i = 0; i < ZW_CW * ZW_CH; i++) {
+            g_zw_dim[i] = dn[i] >= 4 && dsum[i] < dn[i] * 110;
+        }
+    }
     /* scenery pixels: ink or paper by distance, local contrast kept */
     for (i = 0; i < ZW_W * ZW_H; i++) {
         int mx = i % ZW_W, my = i / ZW_W, c = (my >> 3) * ZW_CW + (mx >> 3);
         int A = g_zw_pap[c], B = g_zw_ink[c];
 
         if (g_zw_spr[i]) {
+            continue;
+        }
+        if (g_zw_dim[c]) {
+            int l = LUM24(g_zw_col[i]), m = 0, cnt = 0;
+            int bd = g_zw_bd[i] * 2 >= g_zw_n[i] - g_zw_sn[i];
+
+            if (mx > 0) { m += LUM24(g_zw_col[i - 1]); cnt++; }
+            if (mx < ZW_W - 1) { m += LUM24(g_zw_col[i + 1]); cnt++; }
+            if (my > 0) { m += LUM24(g_zw_col[i - ZW_W]); cnt++; }
+            if (my < ZW_H - 1) { m += LUM24(g_zw_col[i + ZW_W]); cnt++; }
+            m = cnt ? m / cnt : l;
+            g_zw_out[i] = (!bd && l > 16 && l >= m - 24) ? k_zx16[g_cf_stage == 1 ? 3 : 5] : 0;
             continue;
         }
         {
@@ -2108,7 +2099,6 @@ static void cf_apply_screen(uint32_t *px, int w, int h, int mode)
     }
     if (mode == CF_C64) {
         clash(px, w, h, mode);
-        c64_sprites(px, w, h);
     } else {
         cfilter_apply_flat(px, (size_t)w * h, mode);
     }
@@ -2219,17 +2209,235 @@ static void cf_apply_inner(uint32_t *px, int w, int h, int mode)
     }
 }
 
+static void cfilter_apply2(uint32_t *px, int w, int h, int mode);
+/* In-screen text (HUD line, stage captions) for every filter, the ZX
+ * SPECTRUM rule: outside the machine's colour and resolution rules,
+ * read from the frame before the filter in 2x2 blocks and drawn over
+ * the scene at that size, lit pixels in the filter's brightest colour
+ * (white; the lightest LCD green on GAME BOY, the brightest red on
+ * VIRTUAL BOY) and the dark outline in its darkest, so it stays
+ * readable. ZX SPECTRUM does this inside its own pass. */
+static uint8_t g_hud_blk[240 * 200];
+
+static int hud_read(const uint32_t *px, int w, int h)
+{
+    int x, y, any = 0;
+
+    if (!g_w_txt || w != 640 || h != 400) {
+        return 0;
+    }
+    for (y = 0; y < 400; y += 2) {
+        for (x = 80; x < 560; x += 2) {
+            size_t q = (size_t)y * w + x;
+            const size_t k4[4] = {q, q + 1, q + (size_t)w, q + (size_t)w + 1};
+            int k, lit = 0, dark = 0;
+
+            for (k = 0; k < 4; k++) {
+                if (g_w_txt[k4[k]]) {
+                    if (LUM24(px[k4[k]] >> 8) > 60) {
+                        lit++;
+                    } else {
+                        dark++;
+                    }
+                }
+            }
+            g_hud_blk[(y >> 1) * 240 + ((x - 80) >> 1)] = (uint8_t)(lit ? 2 : dark ? 1 : 0);
+            any |= lit | dark;
+        }
+    }
+    return any;
+}
+
+static void hud_write(uint32_t *px, int w, int mode)
+{
+    uint32_t lit = 0xFFFFFFFFu, dark = 0x000000FFu;
+    int x, y;
+
+    if (mode == CF_GAMEBOY) {
+        lit = k_gb[5] << 8 | 0xFFu;
+        dark = k_gb[0] << 8 | 0xFFu;
+    } else if (mode == CF_VIRTUALBOY) {
+        lit = k_vb[5] << 8 | 0xFFu;
+        dark = k_vb[0] << 8 | 0xFFu;
+    }
+    for (y = 0; y < 400; y += 2) {
+        for (x = 80; x < 560; x += 2) {
+            uint8_t t = g_hud_blk[(y >> 1) * 240 + ((x - 80) >> 1)];
+
+            if (t) {
+                size_t q = (size_t)y * w + x;
+                uint32_t c = t == 2 ? lit : dark;
+
+                px[q] = px[q + 1] = px[q + (size_t)w] = px[q + (size_t)w + 1] = c;
+            }
+        }
+    }
+}
+
+/* ZX SPECTRUM detail pass, on 2x2 machine pixels in screen space, read
+ * from the frame before the filter: a block clearly darker than a
+ * neighbour (an outline, an edge, an inner detail line) is drawn black
+ * so shapes read through the attribute colours, and the background
+ * stars (small bright scenery dots and streaks with dark on both
+ * sides) are always white. The text keeps its own rule. */
+static uint32_t g_zd_src[640 * 400];
+static uint8_t g_zd_l[240 * 200], g_zd_m[240 * 200];
+
+static void zx_detail(uint32_t *px, int w)
+{
+    int x, y;
+
+    for (y = 0; y < 200; y++) {
+        for (x = 0; x < 240; x++) {
+            size_t q = (size_t)(y * 2) * w + 80 + x * 2;
+            uint32_t a = g_zd_src[q] >> 8, b = g_zd_src[q + 1] >> 8, c = g_zd_src[q + w] >> 8, d = g_zd_src[q + w + 1] >> 8;
+
+            g_zd_l[y * 240 + x] = (uint8_t)((LUM24(a) + LUM24(b) + LUM24(c) + LUM24(d)) >> 2);
+            {
+                uint32_t v[4] = {a, b, c, d};
+                int k, m = 0, grey = 1;
+
+                for (k = 0; k < 4; k++) {
+                    int r = (int)(v[k] >> 16 & 255), g = (int)(v[k] >> 8 & 255), bb = (int)(v[k] & 255);
+                    int hi = r > g ? (r > bb ? r : bb) : (g > bb ? g : bb), lo = r < g ? (r < bb ? r : bb) : (g < bb ? g : bb);
+                    int l = LUM24(v[k]);
+
+                    if (l > m) {
+                        m = l;
+                        grey = hi - lo < 64;
+                    }
+                }
+                g_zd_m[y * 240 + x] = (uint8_t)(grey ? m : 0);
+            }
+        }
+    }
+    for (y = 1; y < 199; y++) {
+        for (x = 1; x < 239; x++) {
+            int l = g_zd_l[y * 240 + x], k, mx = 0;
+            const int nb[4] = {-1, 1, -240, 240};
+            size_t q = (size_t)(y * 2) * w + 80 + x * 2;
+            uint32_t c;
+
+            if (g_w_txt && (g_w_txt[q] || g_w_txt[q + 1] || g_w_txt[q + w] || g_w_txt[q + w + 1])) {
+                continue;
+            }
+            for (k = 0; k < 4; k++) {
+                int v = g_zd_l[y * 240 + x + nb[k]];
+
+                if (v > mx) {
+                    mx = v;
+                }
+            }
+            if (g_zd_m[y * 240 + x] >= 90 && g_zd_l[y * 240 + x - 1] < 40 && g_zd_l[y * 240 + x + 1] < 40) {
+                c = 0xFFFFFFFFu;                 /* a star: always white */
+            } else if (mx - l > 48 && l * 5 < mx * 3) {
+                c = 0x000000FFu;                 /* outline / detail: black */
+            } else if (g_kind && (g_kind[q] || g_kind[q + 1] || g_kind[q + w] || g_kind[q + w + 1]) &&
+                       mx - l > 18 && l * 5 < mx * 4) {
+                c = 0x000000FFu;                 /* sprites: finer inner detail too */
+            } else {
+                continue;
+            }
+            px[q] = px[q + 1] = px[q + (size_t)w] = px[q + (size_t)w + 1] = c;
+        }
+    }
+}
+
+/* ZX: the player's own pixels (from the sprite draw) after the clash
+ * pass: the ship and options always white, except where the I-FRAMES
+ * aura painted them (its mode colour); the shots in the colour of the
+ * weapon held. Dark source pixels stay black. */
+static const uint8_t *g_pl_own, *g_pl_aura;
+static int g_pl_aink = 10, g_pl_sink = 10;
+
+void cfilter_set_player(const uint8_t *own, const uint8_t *aura, int aura_ink, int shot_ink)
+{
+    g_pl_own = own;
+    g_pl_aura = aura;
+    g_pl_aink = aura_ink & 15;
+    g_pl_sink = shot_ink & 15;
+}
+
+static void zx_player(uint32_t *px, int w)
+{
+    int x, y;
+
+    if (!g_pl_own) {
+        return;
+    }
+    /* per 2x2 machine pixel: lit when ANY of the player's own pixels in
+     * it is lit (thin wing tips are 1 px wide in straight flight and an
+     * average lost them); only blocks whose own pixels are all dark stay
+     * black, so the white outline is solid and the ship always bright */
+    for (y = 0; y < 400; y += 2) {
+        for (x = 80; x < 560; x += 2) {
+            size_t q = (size_t)y * w + x;
+            const size_t k4[4] = {q, q + 1, q + (size_t)w, q + (size_t)w + 1};
+            int k, o = 0, a = 0, mx = 0;
+            uint32_t c;
+
+            for (k = 0; k < 4; k++) {
+                int v = g_pl_own[k4[k]];
+
+                if (v && (!o || v < o)) {
+                    o = v;
+                }
+                if (g_pl_aura && g_pl_aura[k4[k]]) {
+                    a = 1;
+                }
+                if (v) {
+                    int l = LUM24(g_zd_src[k4[k]] >> 8);
+
+                    if (l > mx) {
+                        mx = l;
+                    }
+                }
+            }
+            if (!o || (g_w_txt && (g_w_txt[k4[0]] || g_w_txt[k4[1]] || g_w_txt[k4[2]] || g_w_txt[k4[3]]))) {
+                continue;
+            }
+            if (!a && mx < 40) {
+                c = 0x000000FFu;
+            } else {
+                c = k_zx16[a ? g_pl_aink : o == 3 ? g_pl_sink : 15] << 8 | 0xFFu;
+            }
+            for (k = 0; k < 4; k++) {
+                px[k4[k]] = c;
+            }
+        }
+    }
+}
+
 void cfilter_apply(uint32_t *px, int w, int h, int mode)
 {
+    int zxd = px && mode == CF_ZX && w == 640 && h == 400;
+
+    if (zxd) {
+        memcpy(g_zd_src, px, sizeof g_zd_src);
+    }
+    cfilter_apply2(px, w, h, mode);
+    if (zxd) {
+        zx_detail(px, w);
+        zx_player(px, w);
+    }
+}
+
+static void cfilter_apply2(uint32_t *px, int w, int h, int mode)
+{
     int sc = g_w_bgi && g_w_scroll > 0 && g_w_scroll < h ? g_w_scroll : 0;
+    int hud = px && mode != CF_ORIGINAL && mode != CF_ZX && hud_read(px, w, h);
 
     cf_apply_inner(px, w, h, mode);
     if (!px) {
         return;
     }
-    if (mode == CF_PCENGINE) {
-        hw_grid(px, w, h, 256, 224, sc);   /* 256-dot mode, 224 lines */
-    } else if (mode == CF_MSX2) {
+    /* PC ENGINE: no 256x224 point grid since 0.10.1 (back to the look
+     * before it: the game's own pixels, tiles of 8x8 of them), which
+     * also keeps sprites and the HUD from shimmering. */
+    if (mode == CF_MSX2) {
         hw_grid(px, w, h, 256, 212, sc);   /* SCREEN 5: 256x212 */
+    }
+    if (hud) {
+        hud_write(px, w, mode);
     }
 }
