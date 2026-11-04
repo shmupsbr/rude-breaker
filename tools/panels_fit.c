@@ -76,11 +76,11 @@ static void one(int w, int h, int tate)
     snprintf(label, sizeof label, "%dx%d%s field inside", w, h, tate ? " tate" : "");
     expect(label, g.field_w > 0 && g.field_h > 0 && g.field_x >= 0 && g.field_y >= 0 &&
                       g.field_x + g.field_w <= w && g.field_y + g.field_h <= h);
-    if ((long)w * 3 > (long)h * 4 && !tate) {
+    if (!tate && (long)w * 10 >= (long)h * 16) {
         snprintf(label, sizeof label, "%dx%d widgets on", w, h);
         expect(label, g.widgets && g.n > 0);
     }
-    if ((long)w * 3 <= (long)h * 4 && !tate) {
+    if (!tate && (long)w * 10 < (long)h * 16) {
         snprintf(label, sizeof label, "%dx%d no side widgets", w, h);
         expect(label, !g.widgets);
     }

@@ -3300,6 +3300,39 @@ static void pt_update(const RbGame *g, int died, uint16_t flags)
     }
 }
 
+/* True when w/h is within about 3% of aw/ah. */
+static int aspect_near(int w, int h, int aw, int ah)
+{
+    long d = (long)w * ah - (long)h * aw;
+
+    if (d < 0) {
+        d = -d;
+    }
+    return d * 100 < (long)h * aw * 3;
+}
+
+/* 4:3 and 5:4 monitors use the 4:3 picture. There is no 5:4 aspect
+ * mode; 5:4 is treated as 4:3. Other shapes keep the saved setting. */
+static void aspect_follow_display(void)
+{
+    int w = 0, h = 0, hz = 0;
+    static int lw, lh;
+
+    if (sys_display(&w, &h, &hz) != 0) {
+        return;
+    }
+    if (w == lw && h == lh) {
+        return;
+    }
+    lw = w;
+    lh = h;
+    if (aspect_near(w, h, 4, 3) || aspect_near(w, h, 5, 4)) {
+        g_aspect43 = 1;
+        sys_set_aspect(1);
+        panels_set_aspect(1);
+    }
+}
+
 static int panels_active(const RbGame *g)
 {
     return g_vm && g_panels_on && g_live && g->state == RB_STATE_PLAY &&
@@ -4729,6 +4762,7 @@ void game_render(const RbGame *g)
             }
         }
     }
+    aspect_follow_display();
     gfx_set_hud_inset(panels_active(g));
     if (panels_active(g)) {
         panels_draw(g, sys_frame_pixels());

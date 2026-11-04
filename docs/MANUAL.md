@@ -432,14 +432,14 @@ GRAPHICS
                    Best with FULLSCREEN ON. SCALING and ASPECT apply as
                    usual. Saved in rudebreaker.cfg as orientation.
 
-  SIDE PANELS      ON (default) or OFF. ON: in a 16:9 window or full screen, the
+  SIDE PANELS      ON (default) or OFF. ON: in a window that is 16:10 or wider, or full screen on such a display, the
                    playfield sits in the middle with info panels on
                    both sides: rank graph, loadout, extends, i-frames,
                    speed, score, hit ratio, medals, level, time, NO
                    DEATH and an arcade stick that shows your input.
                    The logo and side art are taken from your own
                    title screen.
-                   OFF, or a 4:3 / 16:10 window: the classic look.
+                   OFF, or a 4:3 or 5:4 window (or anything narrower than 16:10): the classic look.
                    LOADOUT shows two levels, one block per level, level
                    1 included (it fills the first block). SHOT is the
                    main shot: 4 levels, so 4 blocks; levels 2, 3 and 4

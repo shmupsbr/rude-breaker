@@ -213,9 +213,9 @@ int sys_window_wide(void)
     if (!g_rb_renderer || SDL_GetRendererOutputSize(g_rb_renderer, &w, &h) != 0 || h <= 0) {
         return 0;
     }
-    /* Wider than 4:3. 16:9, 16:10 and ultrawide get panels; 4:3 and
-     * narrower do not (the playfield already fills the window). */
-    return w * 3 > h * 4;
+    /* 16:10 or wider (16:9, ultrawide). 4:3 and 5:4 stay on the classic
+     * picture: there is no side strip for the panels. */
+    return (long)w * 10 >= (long)h * 16;
 }
 
 int sys_display(int *w, int *h, int *hz)

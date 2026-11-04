@@ -2106,7 +2106,7 @@ void panels_compose(uint32_t *out, int w, int h, int tate, const uint32_t *game,
     }
     tate = tate ? 1 : 0;
     fit_field(w, h, &fx, &fy, &fw, &fh);
-    wide = !tate && (long)w * 3 > (long)h * 4 && fx >= 32;
+    wide = !tate && (long)w * 10 >= (long)h * 16 && fx >= 32;
     if (g_back_ok != g_have_title) {
         build_back();
     }
