@@ -1,10 +1,10 @@
 RUDE BREAKER 30th AE - PC PORT - USER MANUAL
 ============================================
 
-Version 0.10.0 - 2026-11-03
+Version 0.10.1 - 2026-11-04
 
 The program shows the same number: rudebreaker --version, the window
-title, and the top line of the CONFIG page (VER 0.10.0).
+title, and the top line of the CONFIG page (VER 0.10.1).
 
 Also in: Portuguese (MANUAL.pt-BR.md / .txt), Japanese (MANUAL.ja.md / .txt).
 
@@ -261,8 +261,10 @@ spread across the width of the logo, with one soft glow once it has
 landed) and the credit line slide up from below; after about 2.5
 seconds in all the
 card fades out and the original Compile logo
-and its music start. Any key or gamepad button skips the card and
-goes straight to the Compile logo. With SIDE
+and its music start. Any key or gamepad fire/menu button skips the card and
+goes straight to the Compile logo (not during its first quarter
+second, and not the D-PAD or stick, so a key still held from
+launching the game or a drifting stick cannot skip it by accident). With SIDE
 PANELS on, the top score line of the playfield is inset a few pixels
 on each side so it is not clipped by the panel frames.
 The title screen shows "30TH ANNIVERSARY EDITION" in white, centred
@@ -353,19 +355,25 @@ GAMEPLAY
                    then the Compile logo again. OFF: no demo. Saved in
                    rudebreaker.cfg.
 
-  I-FRAMES         CLASSIC (default) or NEW. CLASSIC: the ship's
-                   invulnerability after a hit or a power-up looks as
-                   in the original (the red outline). NEW: red light
-                   also runs over the ship itself in waves, from its
-                   centre outward, and stops at the edge of the sprite;
-                   the options get it too while they are docked. It
-                   uses the reds of the original effect, pulses, and
-                   thins out as the time left runs down, so you can see
-                   when it is about to end. Drawn by the port over the
+  I-FRAMES         CLASSIC, NEW - FIRE, NEW - LIME or
+                   NEW - BLUE (default). CLASSIC: the ship's invulnerability
+                   after a hit or a power-up looks as in the original
+                   (the red outline). NEW: light in the chosen colour
+                   (FIRE: warm reds and orange, LIME: greens, BLUE:
+                   blues, all picked to sit with the game's PC-98
+                   colours) also runs over the ship itself in waves,
+                   from its centre outward, and stops at the edge of
+                   the sprite; the options get it too while they are
+                   docked. The waves start with the invulnerability
+                   itself, and one frame in six the whole ship flashes
+                   as a silhouette in that colour. It pulses and thins
+                   out as the time left runs down, so you can see when
+                   it is about to end. Drawn by the port over the
                    picture as plain pixels (no smoothing); the color
                    filters and CRT options apply to it too. Only the
                    look changes: the invulnerability time is the same.
-                   Saved in rudebreaker.cfg (iframes=classic / new).
+                   Saved in rudebreaker.cfg (iframes=classic / fire /
+                   lime / blue; the old value new means fire).
 
   BACK
 
@@ -382,7 +390,7 @@ GRAPHICS
                    rudebreaker.cfg.
 
   SCALING          How the picture is scaled to the window or monitor.
-                   AUTO (default): INTEGER when it fills at least 80%
+                   AUTO: INTEGER when it fills at least 80%
                    of the screen height, otherwise SHARP. That gives
                    SHARP at 720p and 1080p, INTEGER at 1440p, 4K and
                    800x480.
@@ -392,7 +400,7 @@ GRAPHICS
                    same size. With ASPECT 4:3 the height is a whole
                    multiple (2x = 800 lines, 3x = 1200) and the width
                    is set to close the 4:3 shape.
-                   SHARP: fills as much of the screen as possible
+                   SHARP (default): fills as much of the screen as possible
                    keeping the proportions, without blur (some pixels
                    come out one screen pixel bigger). SMOOTH: fills
                    the same way with soft (bilinear) filtering. If the
@@ -547,17 +555,17 @@ GRAPHICS
                    underneath. These filters are for fun: each one
                    exaggerates its machine's look. GAME BOY: DMG greens by
                    brightness, with the slow LCD (moving things leave a
-                   ghost) and the visible dot grid. VIRTUAL BOY: shades of
+                   ghost), the picture's own pixels (no blocks) under a fixed grid of square LCD dots at the real DMG pitch (160 across the playfield), its dark lines clearly visible, as on GAME GEAR. VIRTUAL BOY: shades of
                    red on black, with the short glow of the LEDs and the
-                   dark gaps between LED columns. COMMODORE 64: the 16 C64
-                   colours (Pepto), multicolour mode with 2:1 wide pixels (160x200), 3 colours plus the shared black per 4x8 cell for the scenery; sprites, bullets and items follow the VIC-II sprite rule (two colours shared by all sprites plus one of their own), and PAL blending (each line mixes with
+                   the same clean square dot grid. COMMODORE 64: the 16 C64
+                   colours (Pepto), 2x2 machine pixels, 3 colours plus black per 8x8 cell for the scenery; sprites, bullets and items keep their own colours, and PAL blending (each line mixes with
                    the one above). GAME GEAR: colour version of the GAME BOY
                    look: 4096-colour palette (4 bits per channel) with at
                    most 31 colours on screen (16 background + 15 sprite, sprite colour 0 is transparent),
                    chosen each frame, big crisp pixels (about 240x200
                    detail), no LCD smear, sharp edges, a clearly visible LCD dot grid and boosted contrast and saturation so sprites and bullets stand out from the scenery. PC ENGINE: strong,
-                   saturated and bright colours (HuC6260 VCE: 3 bits per channel, 512 colours, levels v x 255 / 7), 16 colours per 8x8 background tile and 15 plus transparent per 16x16 sprite cell, no dithering, only a slight composite softness, at the console's 256x224 resolution: the scenery's pixels are fixed to the scrolling scenery and the sprites' and score line's pixels to the screen, as on the hardware, so nothing changes shape while the stage scrolls.
-                   ZX SPECTRUM: the real machine's limits, attribute clash included: the Spectrum's 192-line scale with big square pixels, and every 8x8 cell has just two colours, one INK and one PAPER out of the 8 base colours, sharing one BRIGHT bit; each pixel is one or the other. Black paper is preferred, as in most Spectrum games, and outlines and detail are kept. The scenery's cells are fixed to the scenery itself and scroll with it, so its colours never crawl or flicker; each kind of sprite has one ink colour of its own that never changes, drawn in that ink and black over whatever is behind it; power-up capsules take their weapon's colour (VULCAN red, LASER blue, MISSILE white). The on-screen text (score line at the top, stage captions) ignores the cells: it is drawn low-res, monochrome and opaque on top of the scenery so it never disappears. MSX2: SCREEN 5 style, 256x212 (scenery pixels fixed to the scenery, sprite and score-line pixels to the screen, so nothing shimmers), 16 colours at a time picked for the scene from the MSX2's 512 (3 bits per red, green and blue); the set changes slowly so it does not flicker; every pixel takes the nearest of the 16, no colour clash. MEGA DRIVE: interlace mode, 240 columns across the playfield on the game's own line count (a 320x224 grid made everything, sprites included, seem to wobble as the scenery scrolled), the Mega Drive's 512 colours (3 bits per channel, real DAC levels) in 4 lines of 15 colours plus the black backdrop: two lines for the scenery, two for sprites; each 8x16 tile uses one line, and the lines change slowly so they do not flicker.
+                   saturated and bright colours (HuC6260 VCE: 3 bits per channel, 512 colours, levels v x 255 / 7), 16 colours per 8x8 background tile and 15 plus transparent per 16x16 sprite cell, no dithering, only a slight composite softness, on the same grid as MEGA DRIVE (240 columns over the playfield, all the game's lines; no resampling, so nothing shimmers while the stage scrolls).
+                   ZX SPECTRUM: the real machine's limits, attribute clash included: the Spectrum's 192-line scale with big square pixels, and every 8x8 cell has just two colours, one INK and one PAPER out of the 8 base colours, sharing one BRIGHT bit; each pixel is one or the other. Black paper is preferred, as in most Spectrum games, and outlines and detail are kept. The scenery's cells are fixed to the scenery itself and scroll with it, so its colours never crawl or flicker; each kind of sprite has one ink colour of its own that never changes, drawn in that ink and black over whatever is behind it; power-up capsules take their weapon's colour (VULCAN red, LASER blue, MISSILE white); your ship and options are always bright white with a crisp outline, wing tips included (during invulnerability only the I-FRAMES glow and flash take that mode's colour), and your shots take the colour of the weapon you hold. Dark outlines, edges and inner detail lines of sprites and scenery are kept in black so shapes read, and the background stars are always white. Dark scenery that would vanish in black is drawn in one solid colour per object (the stage 1 asteroids dark magenta, other dim scenery cyan). The on-screen text (score line at the top, stage captions) ignores the cells: it is drawn low-res, monochrome and opaque on top of the scenery so it never disappears. The same rule applies under every COLOR FILTER: the score line and stage captions are drawn low-res (2x2) and opaque on top, in white and black (on GAME BOY the lightest and darkest LCD greens, on VIRTUAL BOY the brightest red and black), so they stay readable. MSX2: SCREEN 5 style, 256x212 (scenery pixels fixed to the scenery, sprite and score-line pixels to the screen, so nothing shimmers), 16 colours at a time picked for the scene from the MSX2's 512 (3 bits per red, green and blue); the set changes slowly so it does not flicker; every pixel takes the nearest of the 16, no colour clash. MEGA DRIVE: interlace mode, 240 columns across the playfield on the game's own line count (a 320x224 grid made everything, sprites included, seem to wobble as the scenery scrolled), the Mega Drive's 512 colours (3 bits per channel, real DAC levels) in 4 lines of 15 colours plus the black backdrop: two lines for the scenery, two for sprites; each 8x16 tile uses one line, and the lines change slowly so they do not flicker.
                    Not saved: every launch, and the end of every game, goes back to ORIGINAL (old color_filter values in rudebreaker.cfg are ignored and removed).
 
   CRT effects: six separate ON/OFF switches, all OFF by default. Like
@@ -620,7 +628,7 @@ SOUND
                    The distorted guitar gets a whole chip of its own (on VIRTUAL BOY and SID, each guitar part gets one),
                    using all its voices as one guitar (SID: sync/ring and
                    filter; GAME BOY: two pulses, a distorted wave and a
-                   noise pick; PSG: three squares and a noise pick; PC ENGINE and VIRTUAL BOY: wavetables and a noise pick; ZX SPECTRUM: the envelope as a buzzing saw, a power-chord fifth and octave and a noise pick; MSX2: two SCC saws on the root and the fifth, a PSG square an octave down and a PSG noise pick; MEGA DRIVE: an overdriven FM chain on the root and the fifth with a noise pick),
+                   noise pick; PSG: three squares and a noise pick; PC ENGINE and VIRTUAL BOY: wavetables and a noise pick; ZX SPECTRUM: a square on the root (the envelope's buzzing saw only where its coarse period hits the note in tune), a power-chord fifth and octave and a noise pick; MSX2: two SCC saws on the root and the fifth, a PSG square an octave down and a PSG noise pick; MEGA DRIVE: an overdriven FM chain on the root and the fifth with a noise pick),
                    then amp and
                    cabinet colouring. Another chip plays the rest, with bass
                    and drums kept at the original's balance, and a second guitar part plays there too: two chips in all (VIRTUAL BOY and SID: up to three).
@@ -714,9 +722,12 @@ SOUND TEST (opened from SOUND)
                    here with left/right; the track playing switches at
                    once. Like there, not saved: back to ORIGINAL at the
                    next start and after a match.
+  VU               LEVEL (default) or SPECTRUM: the style of the meter
+                   at the bottom. Saved in rudebreaker.cfg (vu=).
   The top line shows the track and its state. The meter at the
-  bottom is a VU of what is playing, in LED segments from green to
-  red, with a held peak.
+  bottom shows what is playing: LEVEL is a VU in LED segments from
+  green to red with a held peak; SPECTRUM is a hi-fi style analyser,
+  frequency bars and a line with peak dots.
   (Some numbers are silent: they are empty in the original data.)
 
 RANKING            Opens the original hi-score table.

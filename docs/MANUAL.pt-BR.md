@@ -1,10 +1,10 @@
 RUDE BREAKER 30th AE - PORT PARA PC - MANUAL DO USUÁRIO
 =======================================================
 
-Versão 0.10.0 - 03/11/2026
+Versão 0.10.1 - 04/11/2026
 
 O programa mostra o mesmo número: rudebreaker --version, o título da
-janela e a linha de cima da página CONFIG (VER 0.10.0).
+janela e a linha de cima da página CONFIG (VER 0.10.1).
 
 Também em: inglês (MANUAL.md / .txt), japonês (MANUAL.ja.md / .txt).
 
@@ -264,8 +264,11 @@ formam o logo do Rude Breaker, ele fica um instante, e então
 "30TH ANNIVERSARY EDITION" (em branco, espalhado pela largura do logo,
 com um brilho suave quando assenta) e a linha de crédito sobem de
 baixo; depois de uns 2,5 segundos ao todo o cartão some e começam o
-logo original da Compile e a música dele. Qualquer tecla ou botão do
-controle pula o cartão e vai direto para o logo da Compile. Com SIDE
+logo original da Compile e a música dele. Qualquer tecla ou botão de tiro/menu do
+controle pula o cartão e vai direto para o logo da Compile (não no
+primeiro quarto de segundo, nem o D-PAD ou o analógico, para que
+uma tecla ainda apertada ao abrir o jogo ou um analógico com drift
+não pulem sem querer). Com SIDE
 PANELS ligado, a linha de pontuação no alto da área de jogo fica uns
 pixels para dentro de cada lado, para não ser cortada pelas molduras
 dos painéis.
@@ -363,20 +366,26 @@ GAMEPLAY
                    sonoros) e depois o logo da Compile de novo. OFF: sem
                    demo. Salvo no rudebreaker.cfg.
 
-  I-FRAMES         CLASSIC (padrão) ou NEW. CLASSIC: a invencibilidade
-                   da nave depois de um golpe ou de um power-up aparece
-                   como no original (o contorno vermelho). NEW: uma luz
-                   vermelha também percorre a própria nave em ondas, do
-                   centro para fora, e para na borda do sprite; os
-                   options também recebem enquanto estão acoplados. Usa
-                   os vermelhos do efeito original, pulsa e vai
-                   afinando conforme o tempo restante acaba, então dá
-                   para ver quando está para terminar. É desenhada pelo
-                   port por cima da imagem, em pixels puros (sem
-                   suavização); os filtros de cor e as opções de CRT
-                   valem para ela também. Só muda o visual: o tempo de
-                   invencibilidade é o mesmo. Salvo no rudebreaker.cfg
-                   (iframes=classic / new).
+  I-FRAMES         CLASSIC, NEW - FIRE, NEW - LIME ou
+                   NEW - BLUE (padrão). CLASSIC: a invencibilidade da nave
+                   depois de um golpe ou de um power-up aparece como
+                   no original (o contorno vermelho). NEW: uma luz na
+                   cor escolhida (FIRE: vermelhos quentes e laranja,
+                   LIME: verdes, BLUE: azuis, todas escolhidas para
+                   combinar com as cores PC-98 do jogo) também
+                   percorre a própria nave em ondas, do centro para
+                   fora, e para na borda do sprite; os options também
+                   recebem enquanto estão acoplados. As ondas começam
+                   junto com a invencibilidade, e em um quadro a cada
+                   seis a nave inteira pisca como silhueta nessa cor.
+                   Pulsa e vai afinando conforme o tempo restante
+                   acaba, então dá para ver quando está para terminar.
+                   É desenhada pelo port por cima da imagem, em pixels
+                   puros (sem suavização); os filtros de cor e as
+                   opções de CRT valem para ela também. Só muda o
+                   visual: o tempo de invencibilidade é o mesmo. Salvo
+                   no rudebreaker.cfg (iframes=classic / fire / lime /
+                   blue; o valor antigo new vale fire).
 
   BACK
 
@@ -393,7 +402,7 @@ GRAPHICS
                    momento. Salvo no rudebreaker.cfg.
 
   SCALING          Como a imagem é ampliada para a janela ou o
-                   monitor. AUTO (padrão): usa INTEGER quando ele
+                   monitor. AUTO: usa INTEGER quando ele
                    ocupa pelo menos 80% da altura da tela; se não,
                    SHARP. Fica SHARP em 720p e 1080p, e INTEGER em
                    1440p, 4K e 800x480.
@@ -403,7 +412,7 @@ GRAPHICS
                    todos do mesmo tamanho. Com ASPECT 4:3 a altura é
                    um múltiplo inteiro (2x = 800 linhas, 3x = 1200) e
                    a largura é ajustada pra fechar o formato 4:3.
-                   SHARP: ocupa o máximo da tela mantendo a
+                   SHARP (padrão): ocupa o máximo da tela mantendo a
                    proporção, sem borrar (alguns pixels saem um pixel
                    de tela maiores). SMOOTH: ocupa do mesmo jeito, com
                    filtro suave (bilinear). Se a janela for pequena
@@ -557,15 +566,15 @@ GRAPHICS
                    PALETTE continua valendo por baixo. Os filtros são para
                    diversão: cada um exagera o visual da sua máquina. GAME
                    BOY: verdes do DMG pelo brilho, com o LCD lento (o que se
-                   move deixa rastro) e a grade de pontos visível. VIRTUAL
+                   move deixa rastro) os pixels da própria imagem (sem blocos) sob uma grade fixa de pontos quadrados do LCD no passo real do DMG (160 na largura do campo de jogo), com as linhas escuras bem visíveis, como no GAME GEAR. VIRTUAL
                    BOY: tons de vermelho no preto, com o brilho curto dos
-                   LEDs e as faixas escuras entre as colunas de LED.
-                   COMMODORE 64: as 16 cores do C64 (Pepto), modo multicolor com pixels largos 2:1 (160x200), 3 cores mais o preto comum por célula 4x8 no cenário; sprites, tiros e itens seguem a regra de sprites do VIC-II (duas cores comuns a todos os sprites mais uma própria), e a mistura PAL (cada
+                   LEDs e a mesma grade de pontos quadrada e limpa.
+                   COMMODORE 64: as 16 cores do C64 (Pepto), pixels de máquina 2x2, 3 cores mais preto por célula 8x8 no cenário; sprites, tiros e itens mantêm as próprias cores, e a mistura PAL (cada
                    linha se mistura com a de cima). GAME GEAR: a versão
                    colorida do visual GAME BOY: paleta de 4096 cores (4 bits
                    por canal) com no máximo 31 na tela (16 de fundo + 15 de sprite, a cor 0 dos sprites é transparente), escolhidas a cada quadro, pixels grandes e
                    nítidos (detalhe de cerca de 240x200), sem rastro de LCD, bordas nítidas, grade de pontos do LCD bem visível e contraste e saturação reforçados para sprites e tiros se destacarem do cenário. PC ENGINE: cores fortes,
-                   saturadas e claras (VCE HuC6260: 3 bits por canal, 512 cores, níveis v x 255 / 7), 16 cores por tile 8x8 de fundo e 15 mais transparente por célula 16x16 de sprite, sem dithering, só uma leve suavidade de composto, na resolução 256x224 do console: os pixels do cenário ficam presos ao cenário que rola e os dos sprites e da linha de pontos à tela, como no hardware, então nada muda de forma enquanto a fase rola. ZX SPECTRUM: os limites da máquina real, incluindo o color clash: a escala de 192 linhas do Spectrum com pixels grandes e quadrados, e cada célula 8x8 tem só duas cores, uma INK e uma PAPER entre as 8 cores básicas, com um único bit BRIGHT para as duas; cada pixel é uma ou a outra. O PAPER preto é o preferido, como na maioria dos jogos do Spectrum, e contornos e detalhes são mantidos. As células do cenário ficam presas ao próprio cenário e rolam com ele, então as cores não se arrastam nem piscam; cada tipo de sprite tem uma cor de INK própria que nunca muda, desenhada nessa cor e em preto sobre o que estiver atrás; as cápsulas de power-up ficam da cor da arma (VULCAN vermelho, LASER azul, MISSILE branco). O texto na tela (linha de pontos no topo, legendas entre as fases) ignora as células: é desenhado em baixa resolução, monocromático e opaco por cima do cenário, para nunca sumir. MSX2: estilo SCREEN 5, 256x212 (pixels do cenário presos ao cenário, os dos sprites e da linha de pontos à tela, então nada treme), 16 cores por vez escolhidas para a cena entre as 512 do MSX2 (3 bits por vermelho, verde e azul); o conjunto muda devagar para não piscar; cada pixel fica com a mais próxima das 16, sem color clash. MEGA DRIVE: modo entrelaçado, 240 colunas no campo de jogo com as linhas do próprio jogo (uma grade de 320x224 fazia tudo, sprites inclusos, parecer se mexer quando o cenário rolava), as 512 cores do Mega Drive (3 bits por canal, níveis reais do DAC) em 4 linhas de 15 cores mais o fundo preto: duas linhas para o cenário e duas para os sprites; cada tile 8x16 usa uma linha, e as linhas mudam devagar para não piscar. Não é salvo: toda vez que o jogo abre, e ao fim de cada partida, volta para ORIGINAL (valores antigos de color_filter no rudebreaker.cfg são ignorados e removidos).
+                   saturadas e claras (VCE HuC6260: 3 bits por canal, 512 cores, níveis v x 255 / 7), 16 cores por tile 8x8 de fundo e 15 mais transparente por célula 16x16 de sprite, sem dithering, só uma leve suavidade de composto, na mesma grade do MEGA DRIVE (240 colunas no campo de jogo, todas as linhas do jogo; sem reamostrar, então nada treme enquanto a fase rola). ZX SPECTRUM: os limites da máquina real, incluindo o color clash: a escala de 192 linhas do Spectrum com pixels grandes e quadrados, e cada célula 8x8 tem só duas cores, uma INK e uma PAPER entre as 8 cores básicas, com um único bit BRIGHT para as duas; cada pixel é uma ou a outra. O PAPER preto é o preferido, como na maioria dos jogos do Spectrum, e contornos e detalhes são mantidos. As células do cenário ficam presas ao próprio cenário e rolam com ele, então as cores não se arrastam nem piscam; cada tipo de sprite tem uma cor de INK própria que nunca muda, desenhada nessa cor e em preto sobre o que estiver atrás; as cápsulas de power-up ficam da cor da arma (VULCAN vermelho, LASER azul, MISSILE branco); a sua nave e as options são sempre de um branco forte com contorno nítido, pontas das asas incluídas (na invencibilidade só o brilho e o piscar do I-FRAMES ficam da cor do modo), e os seus tiros ficam da cor da arma que você tem. Contornos escuros, bordas e linhas de detalhe internas dos sprites e do cenário ficam em preto para as formas aparecerem, e as estrelas do fundo são sempre brancas. Cenário escuro que sumiria no preto é desenhado numa só cor por objeto (os asteroides da fase 1 em magenta escuro, outro cenário escuro em ciano). O texto na tela (linha de pontos no topo, legendas entre as fases) ignora as células: é desenhado em baixa resolução, monocromático e opaco por cima do cenário, para nunca sumir. A mesma regra vale em todos os COLOR FILTER: a linha de pontos e as legendas das fases são desenhadas em baixa resolução (2x2) e opacas por cima, em branco e preto (no GAME BOY o verde mais claro e o mais escuro do LCD, no VIRTUAL BOY o vermelho mais forte e o preto), para continuarem legíveis. MSX2: estilo SCREEN 5, 256x212 (pixels do cenário presos ao cenário, os dos sprites e da linha de pontos à tela, então nada treme), 16 cores por vez escolhidas para a cena entre as 512 do MSX2 (3 bits por vermelho, verde e azul); o conjunto muda devagar para não piscar; cada pixel fica com a mais próxima das 16, sem color clash. MEGA DRIVE: modo entrelaçado, 240 colunas no campo de jogo com as linhas do próprio jogo (uma grade de 320x224 fazia tudo, sprites inclusos, parecer se mexer quando o cenário rolava), as 512 cores do Mega Drive (3 bits por canal, níveis reais do DAC) em 4 linhas de 15 cores mais o fundo preto: duas linhas para o cenário e duas para os sprites; cada tile 8x16 usa uma linha, e as linhas mudam devagar para não piscar. Não é salvo: toda vez que o jogo abre, e ao fim de cada partida, volta para ORIGINAL (valores antigos de color_filter no rudebreaker.cfg são ignorados e removidos).
 
   Efeitos de CRT: seis chaves ON/OFF separadas, todas OFF por padrão.
   Como o COLOR FILTER, só afetam o playfield durante o jogo (e o demo),
@@ -630,7 +639,7 @@ SOUND
                    as vozes formando uma guitarra (SID: sync/ring e filtro;
                    GAME BOY: dois pulsos, onda distorcida e palhetada no
                    ruído; PSG: três quadradas e palhetada no ruído; PC
-                   ENGINE e VIRTUAL BOY: wavetables e palhetada no ruído; ZX SPECTRUM: o envelope como serra zumbindo, quinta e oitava de power chord e palhetada no ruído; MSX2: duas serras do SCC na tônica e na quinta, uma quadrada do PSG uma oitava abaixo e palhetada no ruído do PSG; MEGA DRIVE: uma cadeia FM saturada na tônica e na quinta com palhetada no ruído),
+                   ENGINE e VIRTUAL BOY: wavetables e palhetada no ruído; ZX SPECTRUM: uma quadrada na tônica (a serra zumbindo do envelope só quando o período grosso dele acerta a nota afinada), quinta e oitava de power chord e palhetada no ruído; MSX2: duas serras do SCC na tônica e na quinta, uma quadrada do PSG uma oitava abaixo e palhetada no ruído do PSG; MEGA DRIVE: uma cadeia FM saturada na tônica e na quinta com palhetada no ruído),
                    depois
                    coloração de amplificador e caixa. Outro chip toca o
                    resto, com baixo e bateria no equilíbrio do original, e uma segunda parte de guitarra também toca nele: dois chips no total (VIRTUAL BOY e SID: até três).
@@ -724,9 +733,13 @@ SOUND TEST (aberto pelo SOUND)
                    aqui com esquerda/direita; a faixa tocando muda na
                    hora. Como lá, não são salvos: voltam para ORIGINAL
                    na próxima abertura e depois de uma partida.
-  A linha de cima mostra a faixa e o estado. O medidor embaixo é um
-  VU do que está tocando, em segmentos de LED do verde ao vermelho,
-  com pico retido.
+  VU               LEVEL (padrão) ou SPECTRUM: o estilo do medidor
+                   embaixo. Salvo no rudebreaker.cfg (vu=).
+  A linha de cima mostra a faixa e o estado. O medidor embaixo mostra
+  o que está tocando: LEVEL é um VU em segmentos de LED do verde ao
+  vermelho com pico retido; SPECTRUM é um analisador de espectro no
+  estilo de micro system, com barras de frequência e uma linha com
+  pontos de pico.
   (Alguns números são mudos: estão vazios nos dados originais.)
 
 RANKING            Abre a tabela de recordes original.
