@@ -1348,6 +1348,10 @@ static int g_cr_n; /* how many stage-2 cruisers locked */
 static uint16_t g_cr_id[2]; /* sprite/stamp ids; [0] dark yellow, [1] cyan */
 static int g_hull_box[2][4]; /* page-space x0,y0,x1,y1 of a tile cruiser */
 static uint8_t g_hull_live[2];
+static uint16_t g_slot1_ids[16];
+static int g_slot1_n;
+static int g_slot1_parts; /* chunks joined into the first cruiser */
+static int g_slot1_gap;   /* largest empty gap inside that cruiser */
 static uint32_t g_zw_palh;
 static uint8_t g_zw_tag[ZW_W * ZW_H]; /* 1 enemy, 2 item/shot, 3 enemy bullet */
 static uint8_t g_zw_bgc[ZW_W * ZW_H]; /* spectrum index behind this pixel */
@@ -1634,6 +1638,28 @@ static void zx_stage2_hull(void)
     }
     memset(lab, 0, sizeof lab);
     memset(den, 0, sizeof den);
+    /* The first cruiser's stamp ids. Once none of them are on the page,
+     * it has scrolled off: the stored box must not swallow the next ship. */
+    if (g_slot1_n > 0) {
+        int alive = 0, p;
+
+        for (p = 0; p < ZW_W * ZW_H && !alive; p++) {
+            int s;
+
+            if (!g_zw_id[p]) {
+                continue;
+            }
+            for (s = 0; s < g_slot1_n; s++) {
+                if (g_zw_id[p] == g_slot1_ids[s]) {
+                    alive = 1;
+                    break;
+                }
+            }
+        }
+        if (!alive) {
+            g_hull_live[0] = 0;
+        }
+    }
     for (i = 0; i < ZW_W * ZW_H; i++) {
         int x, y, c, d;
 
@@ -1746,30 +1772,48 @@ static void zx_stage2_hull(void)
             nlab++;
             continue;
         }
-        /* Stamp chunks of one ship scroll in separately. A piece that
-         * shares the column and sits within a tile or two of a cruiser
-         * already seen is that cruiser, not the next one. */
+        /* A later stamp chunk of the same ship shares its column and
+         * the empty rows between them are no taller than the gaps
+         * already inside that ship. A ship beside it, or one that
+         * shows up after a taller gap, or after the first has left
+         * the page, is the next cruiser. */
         for (k = 0; k < g_cr_n && k < 2 && !slot; k++) {
             int bx0 = g_hull_box[k][0], by0 = g_hull_box[k][1];
             int bx1 = g_hull_box[k][2], by1 = g_hull_box[k][3];
-            int ov, gap;
+            int ov, gap, yov, allow, cx, bcx, narrow;
 
             if (!g_hull_live[k] || x1 < bx0 || bx1 < x0) {
                 continue;
             }
             ov = (x1 < bx1 ? x1 : bx1) - (x0 > bx0 ? x0 : bx0) + 1;
-            if (ov < 8) {
+            narrow = (x1 - x0) < (bx1 - bx0) ? (x1 - x0) : (bx1 - bx0);
+            narrow += 1;
+            if (ov * 2 < narrow) {
                 continue;
             }
+            yov = 0;
             if (y1 >= by0 && by1 >= y0) {
                 gap = 0;
+                yov = (y1 < by1 ? y1 : by1) - (y0 > by0 ? y0 : by0) + 1;
             } else if (y1 < by0) {
                 gap = by0 - y1 - 1;
             } else {
                 gap = y0 - by1 - 1;
             }
-            if (gap <= 16) {
+            cx = (x0 + x1) / 2;
+            bcx = (bx0 + bx1) / 2;
+            /* beside the ship, not a chunk stacked on it */
+            if (yov > 8 && (cx > bcx ? cx - bcx : bcx - cx) > narrow) {
+                continue;
+            }
+            /* still assembling: a couple of tiles. after that, only
+             * gaps no bigger than the ones already inside the ship */
+            allow = (k == 0 && g_slot1_parts >= 2 && g_slot1_gap >= 0) ? g_slot1_gap : 16;
+            if (gap <= allow) {
                 slot = k + 1;
+                if (k == 0 && gap > 0 && gap > g_slot1_gap) {
+                    g_slot1_gap = gap;
+                }
             }
         }
         if (!slot && saw1) {
@@ -1796,6 +1840,9 @@ static void zx_stage2_hull(void)
                 if (x1 > bx[2]) bx[2] = x1;
                 if (y1 > bx[3]) bx[3] = y1;
             }
+            if (slot == 1) {
+                g_slot1_parts++;
+            }
         }
         if (!slot) {
             nlab++;
@@ -1815,6 +1862,18 @@ static void zx_stage2_hull(void)
                 ink = slot == 1 ? 6 : 13;
                 g_zw_out[q] = k_zx16[l < 28 ? 0 : ink];
                 g_zw_spr[q] = 1;
+                if (slot == 1 && g_zw_id[q] && g_slot1_n < 16) {
+                    int s, seen = 0;
+
+                    for (s = 0; s < g_slot1_n; s++) {
+                        if (g_slot1_ids[s] == g_zw_id[q]) {
+                            seen = 1;
+                        }
+                    }
+                    if (!seen) {
+                        g_slot1_ids[g_slot1_n++] = g_zw_id[q];
+                    }
+                }
             }
         }
         nlab++;
@@ -1855,6 +1914,9 @@ static void zx_world(uint32_t *px, int w, int h)
         g_cr_n = 0;
         g_cr_id[0] = g_cr_id[1] = 0;
         g_hull_live[0] = g_hull_live[1] = 0;
+        g_slot1_n = 0;
+        g_slot1_parts = 0;
+        g_slot1_gap = -1;
         memset(g_hull_box, 0, sizeof g_hull_box);
     }
     {

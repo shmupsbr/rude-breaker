@@ -277,6 +277,18 @@ int main(void)
     expect("cruiser chunk top is yellow", (at(140, 30) & 0xFFFFFF00u) == 0xD7D70000u);
     expect("cruiser chunk bottom is yellow", (at(140, 100) & 0xFFFFFF00u) == 0xD7D70000u);
 
+    /* The next cruiser, after the first has left the page, is cyan. */
+    clear_frame();
+    apply(1, 10);
+    clear_frame();
+    fill(120, 40, 200, 120, 0xC0C0C000u, 1, 3001, 0, 180, 0);
+    apply(2, 10);
+    expect("held cruiser is yellow", (at(140, 60) & 0xFFFFFF00u) == 0xD7D70000u);
+    clear_frame();
+    fill(120, 40, 200, 120, 0xC0C0C000u, 1, 3002, 0, 180, 0);
+    apply(2, 10);
+    expect("cruiser after the first left is cyan", (at(140, 60) & 0xFFFFFF00u) == 0x00FFFF00u);
+
     /* White sprite on a white cloud must not stay white. */
     clear_frame();
     fill(80, 0, 400, 160, 0x33445500u, 0, 0, 0, 80, 3);
