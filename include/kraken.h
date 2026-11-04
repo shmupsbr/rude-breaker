@@ -7,8 +7,9 @@
  * hurt until those arms are gone.
  *
  * KRAKEN_DEBUG (off unless the debug make target defines it) adds an
- * F9 shortcut. Delete the debug target and the KRAKEN_DEBUG blocks to
- * drop that shortcut before a release build.
+ * F9 shortcut and an F10 dump of every live object's sprite ids.
+ * Delete the debug target and the KRAKEN_DEBUG blocks to drop both
+ * before a release build.
  */
 #ifndef RUDEBREAKER_KRAKEN_H
 #define RUDEBREAKER_KRAKEN_H
@@ -25,6 +26,8 @@ int  kraken_active(void);
 #if KRAKEN_DEBUG
 void kraken_debug_arm(void);
 int  kraken_debug_armed(void);
+/* F10 in the debug build: one stderr line per live object. */
+void kraken_dump_screen(const RbVm *vm);
 #endif
 
 #endif
