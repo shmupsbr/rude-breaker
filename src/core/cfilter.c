@@ -1511,21 +1511,19 @@ static void zx_paint_scenery(void)
         if (green_cell[c0]) {
             /* a dark green field is closer to black than to #00D700 */
             sel = 4;
-        } else if (g_cf_stage == 3) {
-            /* The real sky is a dark blue-grey, near black (about
-             * #243030). Nearest-colour paints that black, and a
-             * white/black dither of it turns the whole stage grey.
-             * Only the light cloud pixels dither; the rest is the sky. */
-            if (l >= 140 && hi - lo < 96) {
-                int t = l * 8 / 255;
+        } else if ((g_cf_stage == 3 || g_cf_stage == 4) &&
+                   ((l >= 58 && b >= g && b >= r && b > g + 6 && hi - lo < 56) ||
+                    (g_cf_stage == 3 && l >= 168 && hi - lo < 40))) {
+            /* Real clouds are the blue-greys around #4D5669 and #56687C,
+             * not near-white. They dither white with black. A near-white
+             * highlight does too. The dark sky stays cyan below. */
+            int t = l >= 180 ? 7 : 6;
 
-                if (t > 8) {
-                    t = 8;
-                }
-                sel = (t * 8 > k_bayer[(my & 7) * 8 + (mx & 7)]) ? 15 : 0;
-            } else {
-                sel = 5;
-            }
+            sel = (t * 8 > k_bayer[(my & 7) * 8 + (mx & 7)]) ? 15 : 0;
+        } else if (g_cf_stage == 3 ||
+                   (g_cf_stage == 4 && l < 58 && b >= g && b >= r && g >= r && hi - lo < 28)) {
+            /* Sky, including the dark blue-grey that opens stage 4. */
+            sel = 5;
         } else if (g_zw_dim[c0]) {
             int bn = g_zw_n[i] - g_zw_sn[i];
             int bd = bn > 0 && g_zw_bd[i] * 2 >= bn;
@@ -1567,6 +1565,7 @@ static void zx_paint_scenery(void)
 static void zx_stage2_hull(void)
 {
     static uint16_t lab[ZW_W * ZW_H];
+    static uint8_t hat[ZW_W * ZW_H];
     static int stk[ZW_W * ZW_H];
     int i, nlab = 1;
 
@@ -1574,6 +1573,7 @@ static void zx_stage2_hull(void)
         return;
     }
     memset(lab, 0, sizeof lab);
+    memset(hat, 0, sizeof hat);
     for (i = 0; i < ZW_W * ZW_H; i++) {
         int sp, cnt, x0, y0, x1, y1, mx, my, k;
         int slot = 0;
@@ -1672,10 +1672,58 @@ static void zx_stage2_hull(void)
                 ink = slot == 1 ? 6 : 13;
                 g_zw_out[q] = k_zx16[l < 28 ? 0 : ink];
                 g_zw_spr[q] = 1;
+                hat[q] = (uint8_t)slot;
             }
         }
         nlab++;
         (void)k;
+    }
+    /* A pink core sits inside the hull, split off by panel lines, so the
+     * flood never reaches it and its own hue is magenta. Anything enclosed
+     * by a slot on all four sides is that cruiser: dark yellow or cyan,
+     * and only the darkest pixels black. */
+    for (i = 1; i <= g_cr_n && i <= 2; i++) {
+        int x0 = g_hull_box[i - 1][0], y0 = g_hull_box[i - 1][1];
+        int x1 = g_hull_box[i - 1][2], y1 = g_hull_box[i - 1][3];
+        int yy, xx, ink = i == 1 ? 6 : 13;
+
+        for (yy = y0; yy <= y1; yy++) {
+            for (xx = x0; xx <= x1; xx++) {
+                int q = yy * ZW_W + xx, x, y, L = 0, R = 0, U = 0, D = 0;
+
+                if (hat[q] || g_zw_spr[q] || !g_zw_n[q] || LUM24(g_zw_col[q]) < 28) {
+                    continue;
+                }
+                for (x = xx - 1; x >= x0; x--) {
+                    if (hat[yy * ZW_W + x] == (uint8_t)i) {
+                        L = 1;
+                        break;
+                    }
+                }
+                for (x = xx + 1; x <= x1; x++) {
+                    if (hat[yy * ZW_W + x] == (uint8_t)i) {
+                        R = 1;
+                        break;
+                    }
+                }
+                for (y = yy - 1; y >= y0; y--) {
+                    if (hat[y * ZW_W + xx] == (uint8_t)i) {
+                        U = 1;
+                        break;
+                    }
+                }
+                for (y = yy + 1; y <= y1; y++) {
+                    if (hat[y * ZW_W + xx] == (uint8_t)i) {
+                        D = 1;
+                        break;
+                    }
+                }
+                if (L && R && U && D) {
+                    g_zw_out[q] = k_zx16[ink];
+                    g_zw_spr[q] = 1;
+                }
+            }
+        }
     }
 }
 

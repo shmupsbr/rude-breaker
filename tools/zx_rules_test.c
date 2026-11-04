@@ -173,6 +173,47 @@ int main(void)
     expect("clouds use black", blue > 0);
     expect("clouds are only white and black", other == 0);
     printf("  clouds white=%d black=%d other=%d\n", white, blue, other);
+    /* Real cloud bodies are blue-grey, well below a near-white cut. */
+    clear_frame();
+    fill(80, 0, 112, 32, 0x4D566900u, 0, 0, 0, 0, 3);
+    fill(120, 0, 152, 32, 0x56687C00u, 0, 0, 0, 0, 3);
+    apply(3, 10);
+    white = blue = other = 0;
+    for (y = 2; y < 30; y++) {
+        for (x = 82; x < 110; x++) {
+            uint32_t c = at(x, y) & 0xFFFFFF00u;
+
+            if (c == 0xFFFFFF00u) {
+                white++;
+            } else if (c == 0x00000000u) {
+                blue++;
+            } else {
+                other++;
+            }
+        }
+    }
+    expect("real cloud is white and black", white > 0 && blue > 0 && other == 0);
+    expect("real cloud is not solid cyan", (at(90, 16) & 0xFFFFFF00u) != 0x00D7D700u);
+    white = blue = other = 0;
+    for (y = 2; y < 30; y++) {
+        for (x = 122; x < 150; x++) {
+            uint32_t c = at(x, y) & 0xFFFFFF00u;
+
+            if (c == 0xFFFFFF00u || c == 0x00000000u) {
+                white++;
+            } else {
+                other++;
+            }
+        }
+    }
+    expect("lighter real cloud dithers", white > 0 && other == 0);
+    /* The same blue-grey still dithers at the start of stage 4. Teal metal does not. */
+    clear_frame();
+    fill(80, 0, 112, 32, 0x4D566900u, 0, 0, 0, 0, 4);
+    apply(4, 10);
+    expect("stage 4 cloud is not solid cyan", (at(90, 16) & 0xFFFFFF00u) != 0x00D7D700u);
+    expect("stage 4 cloud is white or black",
+           (at(90, 16) & 0xFFFFFF00u) == 0xFFFFFF00u || (at(90, 16) & 0xFFFFFF00u) == 0x00000000u);
 
     /* Stage 1 asteroids: dim rock, solid dark magenta, not black. */
     clear_frame();
@@ -245,6 +286,19 @@ int main(void)
         expect("gappy cruiser paint is yellow", (at(121, 40) & 0xFFFFFF00u) == 0xD7D70000u);
         printf("  gappy=%06X\n", (c >> 8) & 0xFFFFFF);
     }
+
+    /* Pink core inside the hull, split off by a thick black ring.
+     * Its own hue is magenta; it still belongs to the dark-yellow cruiser. */
+    clear_frame();
+    apply(1, 10);
+    clear_frame();
+    fill(100, 16, 180, 96, 0xCCAA5500u, 0, 0, 0, 160, 1);
+    fill(124, 40, 156, 72, 0x00000000u, 0, 0, 0, 0, 1);
+    fill(132, 48, 148, 64, 0xBB999900u, 0, 0, 0, 160, 1);
+    apply(2, 10);
+    expect("cruiser core is dark yellow", (at(140, 56) & 0xFFFFFF00u) == 0xD7D70000u);
+    expect("cruiser core is not magenta", (at(140, 56) & 0xFFFFFF00u) != 0xD700D700u);
+    expect("cruiser hull stays dark yellow", (at(110, 24) & 0xFFFFFF00u) == 0xD7D70000u);
 
     /* White sprite on a white cloud must not stay white. */
     clear_frame();
