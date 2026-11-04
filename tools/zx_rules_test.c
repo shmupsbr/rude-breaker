@@ -133,15 +133,23 @@ int main(void)
     expect("option detail is black", (opt_lo & 0xFFFFFF00u) == 0x00000000u);
     expect("star stays white", (at(400, 40) & 0xFFFFFF00u) == 0xFFFFFF00u);
 
-    /* Clouds stage: the common blue-grey is the sky (solid cyan). Only a
-     * patch clearly lighter than that sky dithers white and black. */
+    /* Stage 3 palette: #334455 is the sky. The cloud is a 1 px checker of
+     * #56687C and #4D5669. A lone #4D5669 speck in the sky stays cyan. */
     clear_frame();
-    fill(80, 0, 400, 200, 0x4D566900u, 0, 0, 0, 0, 3);
-    fill(200, 40, 248, 88, 0xF0F0F000u, 0, 0, 0, 0, 3);
+    fill(80, 0, 400, 200, 0x33445500u, 0, 0, 0, 0, 3);
+    for (y = 40; y < 120; y++) {
+        for (x = 160; x < 320; x++) {
+            uint32_t rgb = ((x + y) & 1) ? 0x56687C00u : 0x4D566900u;
+
+            put(x, y, rgb, 0, 0, 0, 0, 3);
+        }
+    }
+    put(100, 20, 0x4D566900u, 0, 0, 0, 0, 3);
+    put(101, 20, 0x4D566900u, 0, 0, 0, 0, 3);
     apply(3, 10);
     white = blue = other = 0;
-    for (y = 8; y < 24; y++) {
-        for (x = 90; x < 160; x++) {
+    for (y = 4; y < 16; y++) {
+        for (x = 90; x < 140; x++) {
             uint32_t c = at(x, y) & 0xFFFFFF00u;
 
             if (c == 0x00D7D700u) {
@@ -152,11 +160,11 @@ int main(void)
         }
     }
     expect("sky is solid cyan", blue > 0 && other == 0);
+    expect("sky speck stays cyan", (at(100, 20) & 0xFFFFFF00u) == 0x00D7D700u);
     printf("  sky cyan=%d other=%d\n", blue, other);
-    expect("same blue-grey sky stays cyan", (at(300, 100) & 0xFFFFFF00u) == 0x00D7D700u);
     white = blue = other = 0;
-    for (y = 48; y < 80; y++) {
-        for (x = 208; x < 240; x++) {
+    for (y = 48; y < 112; y++) {
+        for (x = 168; x < 312; x++) {
             uint32_t c = at(x, y) & 0xFFFFFF00u;
 
             if (c == 0xFFFFFF00u) {
@@ -168,10 +176,10 @@ int main(void)
             }
         }
     }
-    expect("cloud highlight is white", white > 0);
-    expect("cloud highlight has black", blue > 0);
-    expect("cloud highlight is only white and black", other == 0);
-    printf("  highlight white=%d black=%d other=%d\n", white, blue, other);
+    expect("cloud checker is white", white > 0);
+    expect("cloud checker has black", blue > 0);
+    expect("cloud checker is only white and black", other == 0);
+    printf("  cloud white=%d black=%d other=%d\n", white, blue, other);
 
     /* Stage 1 asteroids: dim rock, solid dark magenta, not black. */
     clear_frame();
@@ -260,8 +268,14 @@ int main(void)
 
     /* White sprite on a white cloud must not stay white. */
     clear_frame();
-    fill(80, 0, 400, 160, 0x4D566900u, 0, 0, 0, 80, 3);
-    fill(100, 8, 180, 64, 0xF0F0F000u, 0, 0, 0, 230, 3);
+    fill(80, 0, 400, 160, 0x33445500u, 0, 0, 0, 80, 3);
+    for (y = 8; y < 64; y++) {
+        for (x = 100; x < 180; x++) {
+            uint32_t rgb = ((x + y) & 1) ? 0x56687C00u : 0x4D566900u;
+
+            put(x, y, rgb, 0, 0, 0, 230, 3);
+        }
+    }
     fill(120, 24, 136, 40, 0xFFFFFF00u, 1, 777, 0, 250, 3);
     apply(3, 10);
     {

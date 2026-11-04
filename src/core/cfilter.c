@@ -1330,6 +1330,11 @@ static uint32_t g_zw_hash[ZW_CW * ZW_CH];
 static uint8_t g_zw_ink[ZW_CW * ZW_CH], g_zw_pap[ZW_CW * ZW_CH];
 static uint8_t g_zw_ok[ZW_CW * ZW_CH];
 static uint32_t g_zw_col[ZW_W * ZW_H];
+/* Stage 3 host colours, counted per machine pixel before the 2x2 average. */
+static uint8_t g_s3_sky[ZW_W * ZW_H];  /* #334455 */
+static uint8_t g_s3_hi[ZW_W * ZW_H];   /* #56687C cloud body */
+static uint8_t g_s3_mid[ZW_W * ZW_H];  /* #4D5669 cloud or a sky speck */
+static uint8_t g_s3_cloud[ZW_W * ZW_H];
 static uint32_t g_zw_out[ZW_W * ZW_H];
 static uint32_t g_zw_scn[ZW_W * ZW_H]; /* scenery colour under a 2x2, for 1 px holes */
 static uint8_t g_zw_spr[ZW_W * ZW_H];
@@ -1451,18 +1456,64 @@ static const uint8_t k_bayer[64] = {
     15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21
 };
 
+/* #56687C is the cloud. #4D5669 next to it is the cloud edge. A lone
+ * #4D5669 speck in the sky is not. */
+static void zx_stage3_mark(void)
+{
+    int i, pass;
+
+    memset(g_s3_cloud, 0, sizeof g_s3_cloud);
+    if (g_cf_stage != 3) {
+        return;
+    }
+    for (i = 0; i < ZW_W * ZW_H; i++) {
+        if (g_s3_hi[i]) {
+            g_s3_cloud[i] = 1;
+        }
+    }
+    for (pass = 0; pass < 2; pass++) {
+        static uint8_t nxt[ZW_W * ZW_H];
+        int x, y;
+
+        memcpy(nxt, g_s3_cloud, sizeof nxt);
+        for (y = 0; y < ZW_H; y++) {
+            for (x = 0; x < ZW_W; x++) {
+                int q = y * ZW_W + x, d;
+
+                if (g_s3_cloud[q] || !g_s3_mid[q]) {
+                    continue;
+                }
+                for (d = 0; d < 8; d++) {
+                    static const int dx[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+                    static const int dy[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+                    int nx = x + dx[d], ny = y + dy[d];
+
+                    if (nx < 0 || nx >= ZW_W || ny < 0 || ny >= ZW_H) {
+                        continue;
+                    }
+                    if (g_s3_cloud[ny * ZW_W + nx]) {
+                        nxt[q] = 1;
+                        break;
+                    }
+                }
+            }
+        }
+        memcpy(g_s3_cloud, nxt, sizeof nxt);
+    }
+}
+
 /* Scenery is one solid dark colour. The clouds stage is the exception:
- * a blue sky stays solid cyan, and the near-white clouds are white with
- * a black dither. The clouds-stage sky is the dark blue-grey field, and
- * it is solid cyan. A dark green field (a city) stays dark green. Dim
+ * #334455 is solid cyan, and the #56687C / #4D5669 cloud is white with a
+ * black dither. A dark green field (a city) stays dark green. Dim
  * scenery keeps the dark colour of its own hue (stage 1 asteroids stay
  * dark magenta) with its dark lines black.
  * Sprites are left alone. */
 static void zx_paint_scenery(void)
 {
     static int green_cell[ZW_CW * ZW_CH];
-    int i, c, sky_l = 0, sky_n = 0;
+    int i, c;
 
+    zx_stage3_mark();
     memset(green_cell, 0, sizeof green_cell);
     {
         static int rs[ZW_CW * ZW_CH], gs[ZW_CW * ZW_CH], bs[ZW_CW * ZW_CH], ns[ZW_CW * ZW_CH];
@@ -1491,39 +1542,6 @@ static void zx_paint_scenery(void)
                             (ar + ag + ab) / 3 < 100;
         }
     }
-    /* Stage 3 sky is whatever blue-grey covers the most pixels, including
-     * #4D5669 and #56687C. Only a pixel clearly lighter than that sky is
-     * a cloud highlight. */
-    sky_l = 0;
-    sky_n = 0;
-    if (g_cf_stage == 3) {
-        static int hist[256];
-        int seen = 0, acc, h;
-
-        memset(hist, 0, sizeof hist);
-        for (i = 0; i < ZW_W * ZW_H; i++) {
-            int l;
-
-            if (g_zw_spr[i] || !g_zw_n[i]) {
-                continue;
-            }
-            l = LUM24(g_zw_col[i]);
-            if (l < 24) {
-                continue;
-            }
-            hist[l < 256 ? l : 255]++;
-            seen++;
-        }
-        acc = 0;
-        sky_n = seen;
-        for (h = 0; h < 256; h++) {
-            acc += hist[h];
-            if (acc * 2 >= seen) {
-                sky_l = h;
-                break;
-            }
-        }
-    }
     for (i = 0; i < ZW_W * ZW_H; i++) {
         int mx = i % ZW_W, my = i / ZW_W, c0 = (my >> 3) * ZW_CW + (mx >> 3);
         int sel, l;
@@ -1539,16 +1557,14 @@ static void zx_paint_scenery(void)
         if (green_cell[c0]) {
             /* a dark green field is closer to black than to #00D700 */
             sel = 4;
-        } else if (g_cf_stage == 3) {
-            /* The common blue-grey is the sky. A highlight is clearly
-             * lighter than that, and only those pixels dither. */
-            if (sky_n > 8 && l >= sky_l + 36 && l > 48) {
-                int t = 6;
+        } else if (g_cf_stage == 3 && (g_s3_cloud[i] || g_s3_hi[i])) {
+            /* Cloud body and its edge: white with a black dither. */
+            int t = 6;
 
-                sel = (t * 8 > k_bayer[(my & 7) * 8 + (mx & 7)]) ? 15 : 0;
-            } else {
-                sel = 5;
-            }
+            sel = (t * 8 > k_bayer[(my & 7) * 8 + (mx & 7)]) ? 15 : 0;
+        } else if (g_cf_stage == 3 && (g_s3_sky[i] || g_s3_mid[i])) {
+            /* #334455, and #4D5669 specks with no #56687C nearby. */
+            sel = 5;
         } else if (g_zw_dim[c0]) {
             int bn = g_zw_n[i] - g_zw_sn[i];
             int bd = bn > 0 && g_zw_bd[i] * 2 >= bn;
@@ -1800,6 +1816,9 @@ static void zx_world(uint32_t *px, int w, int h)
     memset(g_zw_tag, 0, sizeof g_zw_tag);
     memset(g_zw_bgc, 0, sizeof g_zw_bgc);
     memset(g_zw_scn, 0, sizeof g_zw_scn);
+    memset(g_s3_sky, 0, sizeof g_s3_sky);
+    memset(g_s3_hi, 0, sizeof g_s3_hi);
+    memset(g_s3_mid, 0, sizeof g_s3_mid);
     if (g_big_stage != g_cf_stage) {
         g_big_stage = g_cf_stage;
         g_cr_n = 0;
@@ -1836,6 +1855,17 @@ static void zx_world(uint32_t *px, int w, int h)
                     g_zw_sum[q][0] += p >> 24;
                     g_zw_sum[q][1] += (p >> 16) & 0xFF;
                     g_zw_sum[q][2] += (p >> 8) & 0xFF;
+                    if (g_cf_stage == 3) {
+                        uint32_t rgb = p >> 8;
+
+                        if (rgb == 0x334455u) {
+                            g_s3_sky[q]++;
+                        } else if (rgb == 0x56687Cu) {
+                            g_s3_hi[q]++;
+                        } else if (rgb == 0x4D5669u) {
+                            g_s3_mid[q]++;
+                        }
+                    }
                     idxrgb[bi & 15] = p;
                 }
                 if (id) {
