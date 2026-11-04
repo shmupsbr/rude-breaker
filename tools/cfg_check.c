@@ -77,9 +77,11 @@ int main(void)
     CHECK(g_loop_on == 1);
     CHECK(g_sndx == 1);
     CHECK(g_attract_on == 0);
-    CHECK(g_aura_on == 0);
+    CHECK(g_aura_on == 3);     /* NEW - BLUE: the 0.10.1 default */
     CHECK(g_mvol == 100);
     CHECK(g_joy_off_saved == 0);
+    CHECK(g_scaling == 1);     /* SHARP: the 0.10.1 default */
+    CHECK(g_vu_style == 0);
 
     /* 2. A new cfg: the new keys load. */
     put(cfg, "loop=off\niframes=new\nmaster_volume=40\njoystick=off\n"
@@ -89,6 +91,23 @@ int main(void)
     CHECK(g_aura_on == 1);
     CHECK(g_mvol == 40);
     CHECK(g_joy_off_saved == 1);
+    /* 2b. I-FRAMES colours (new = fire), VU style, 0.10.1 scaling. */
+    put(cfg, "iframes=lime\nvu=spectrum\n");
+    load_cfg(&g);
+    CHECK(g_aura_on == 2 && g_vu_style == 1);
+    put(cfg, "iframes=blue\n");
+    load_cfg(&g);
+    CHECK(g_aura_on == 3 && g_vu_style == 0);
+    put(cfg, "iframes=fire\n");
+    load_cfg(&g);
+    CHECK(g_aura_on == 1);
+    g_aura_on = 3;
+    g_vu_style = 1;
+    save_cfg(&g);
+    g_aura_on = 0;
+    g_vu_style = 0;
+    load_cfg(&g);
+    CHECK(g_aura_on == 3 && g_vu_style == 1);
     put(cfg, "master_volume=900\n");
     load_cfg(&g);
     CHECK(g_mvol == 100);
@@ -158,7 +177,8 @@ int main(void)
 
     /* 5. RESTORE DEFAULTS: options back, RBRANK.DAT still there and the same. */
     restore_defaults(&g);
-    CHECK(g_aura_on == 0);
+    CHECK(g_aura_on == 3);
+    CHECK(g_scaling == 1 && g_vu_style == 0);
     CHECK(g_mvol == 100);
     CHECK(g_bal == 0 && g_eqp == EQP_FLAT);
     CHECK(fsize(rank) == (long)sizeof blob);
