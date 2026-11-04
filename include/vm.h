@@ -105,6 +105,17 @@ void vm_set_kraken_take(RbVm *vm, int on);
 int  vm_take_kraken(RbVm *vm);
 /* Drop every entity that is not the ship, its options, or its shots. */
 void vm_kraken_isolate(RbVm *vm);
+/* Draw every live sprite into the playfield. The stage's own draw
+ * script is stopped for the fight, so the host calls this. */
+void vm_redraw(RbVm *vm);
+void vm_ent_unhide(RbVm *vm, int i);
+void vm_ent_set_type(RbVm *vm, int i, uint16_t type);
+/* Bind an SGM1 record as a sprite bank (opcode 0x32). */
+int  vm_bind_record(RbVm *vm, uint8_t slot, uint8_t rec);
+int  vm_ensure_record(RbVm *vm, int rec);
+/* Central recurring mid-boss sprite, decoded from the stage chunks
+ * directly. cells holds w*h indices. Returns 0 when it is not there. */
+int  vm_load_halb(RbVm *vm, uint8_t *cells, int max, int *w, int *h, int *seg);
 /* Load the ending (record 1 header 3) on a fresh slot. Loop redirect
  * is forced off for this load. */
 void vm_force_ending(RbVm *vm);
