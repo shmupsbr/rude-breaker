@@ -4391,18 +4391,27 @@ void game_update(RbGame *g)
     apply_host_options();
 #if KRAKEN_DEBUG
     /* F9: the debug build jumps into the Kraken fight. Release builds
-     * do not compile this, and the key is not read. */
-    if ((user_buttons & RB_BTN_BOSS) && !(g->input_prev.buttons & RB_BTN_BOSS)) {
-        kraken_debug_arm();
-    }
-    if (kraken_debug_armed() && g_vm) {
-        RbVmInfo kinfo;
+     * do not compile this, and the key is not read. One stage entry
+     * only; resetting every frame left a black screen with the HUD. */
+    {
+        static int dbg_stage;
 
-        vm_info(g_vm, &kinfo);
-        if (kinfo.chunk < 2 || kinfo.chunk > 6) {
-            begin_stage(g, 5, 1);
-            g->state = RB_STATE_PLAY;
-            g_loop = 2;
+        if ((user_buttons & RB_BTN_BOSS) && !(g->input_prev.buttons & RB_BTN_BOSS)) {
+            kraken_debug_arm();
+            dbg_stage = 0;
+        }
+        if (kraken_debug_armed() && !kraken_active() && g_vm && !dbg_stage) {
+            RbVmInfo kinfo;
+
+            vm_info(g_vm, &kinfo);
+            if (kinfo.chunk < 2 || kinfo.chunk > 6) {
+                /* Stage 1 is the path a normal start uses. Stage 5 from
+                 * a cold reset stays black and never shows the ship. */
+                begin_stage(g, 1, 1);
+                g->state = RB_STATE_PLAY;
+                g_loop = 2;
+                dbg_stage = 1;
+            }
         }
     }
 #endif

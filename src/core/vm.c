@@ -5634,17 +5634,76 @@ static int kraken_keep_ent(const RbVm *vm, int i)
     if (t == 0) {
         return 1;
     }
-    if (player_body_origin(org) || kind == 0x0012u || kind == 0x0014u) {
+    /* Kraken parts and the fortress-pattern entities the host spawned. */
+    if (org == 0xCE11u || vm->haste[i]) {
+        return 1;
+    }
+    /* Ship, options, and the shot scripts. Kind alone is not enough:
+     * other stage actors share those ids and would freeze on screen. */
+    if (player_body_origin(org)) {
         return 1;
     }
     if (t & 0x1000u) {
         return 1;
     }
-    /* Shot controller and the two shot children documented with it. */
-    if (org == 0x62E3u || org == 0x6331u || org == 0x6498u) {
+    if (org >= 0x6200u && org <= 0x6700u) {
         return 1;
     }
+    (void)kind;
     return 0;
+}
+
+void vm_redraw(RbVm *vm)
+{
+    if (!vm || !vm->gfx) {
+        return;
+    }
+    gfx_draw_entities(vm->gfx, vm->ent, ENT_N, ENT_STR,
+                      (const uint8_t *const *)vm->chunk, vm->clen, vm->cof,
+                      (int)gu16(vm, 0x76), (int)(int16_t)gu16(vm, 0x82),
+                      vm->view_chunk >= 2 && vm->view_chunk <= 6);
+}
+
+void vm_ent_unhide(RbVm *vm, int i)
+{
+    uint16_t t;
+
+    if (!vm || i < 0 || i >= ENT_N) {
+        return;
+    }
+    t = eu16(vm, i, 0);
+    if (t == 0) {
+        return;
+    }
+    t = (uint16_t)(t & (uint16_t)~0x0200u);
+    if ((t & 0x00FFu) == 0) {
+        t = (uint16_t)(t | 0x0012u);
+    }
+    su16(vm, i, 0, t);
+}
+
+void vm_ent_set_type(RbVm *vm, int i, uint16_t type)
+{
+    if (vm && i >= 0 && i < ENT_N && eu16(vm, i, 0) != 0 && type != 0) {
+        su16(vm, i, 0, type);
+    }
+}
+
+int vm_ensure_record(RbVm *vm, int rec)
+{
+    if (!vm || rec < 0) {
+        return 0;
+    }
+    return ensure_chunk(vm, (unsigned)rec) == 0;
+}
+
+int vm_bind_record(RbVm *vm, uint8_t slot, uint8_t rec)
+{
+    if (!vm_ensure_record(vm, rec)) {
+        return 0;
+    }
+    gfx_bind(vm->gfx, slot, vm->chunk[rec], vm->clen[rec]);
+    return 1;
 }
 
 void vm_kraken_isolate(RbVm *vm)
@@ -5888,4 +5947,232 @@ int vm_ent_raw(const RbVm *vm, int i, uint8_t raw[82], uint16_t *ip)
         *ip = eu16(vm, i, 8);
     }
     return 1;
+}
+
+/* A sprite setup in a stage script: width, height, pattern, bank. */
+static int sprite_at(const uint8_t *c, uint32_t n, uint32_t i,
+                     int *w, int *h, int *pat, int *seg)
+{
+    uint32_t k;
+    int ww = -1;
+    int hh = -1;
+    int pp = -1;
+    int ss = -1;
+
+    if (i + 5 >= n) {
+        return 0;
+    }
+    if (c[i] == 0x00u && c[i + 1] == 0x4Cu && c[i + 2] == 0x00u) {
+        ww = c[i + 3];
+    } else if (c[i] == 0x02u && c[i + 1] == 0x4Cu && c[i + 2] == 0x00u) {
+        ww = c[i + 3];
+    } else {
+        return 0;
+    }
+    if (ww < 3 || ww > 24) {
+        return 0;
+    }
+    for (k = i; k < i + 80u && k + 5u < n; k++) {
+        if (c[k] == 0x00u && c[k + 1] == 0x4Du && c[k + 2] == 0x00u) {
+            hh = c[k + 3];
+        } else if (c[k] == 0x02u && c[k + 1] == 0x4Du && c[k + 2] == 0x00u) {
+            hh = c[k + 3];
+        } else if (c[k] == 0x02u && c[k + 1] == 0x38u && c[k + 2] == 0x00u) {
+            pp = (int)c[k + 3] | ((int)c[k + 4] << 8);
+        } else if (c[k] == 0x00u && c[k + 1] == 0x3Au && c[k + 2] == 0x00u) {
+            ss = c[k + 3];
+        }
+    }
+    if (hh < 4 || hh > 24 || pp < 0 || (uint32_t)pp >= n) {
+        return 0;
+    }
+    if (ww * hh < 16) {
+        return 0;
+    }
+    *w = ww;
+    *h = hh;
+    *pat = pp;
+    *seg = ss;
+    return 1;
+}
+
+static int bind_seg(RbVm *vm, const uint8_t *c, uint32_t n, int seg)
+{
+    uint32_t i;
+    uint32_t blen = 0;
+
+    if (seg < 0 || seg > 255) {
+        return 0;
+    }
+    if (gfx_bank_data(vm->gfx, (uint8_t)seg, &blen) && blen > 128u) {
+        return 1;
+    }
+    for (i = 0; i + 3u < n; i++) {
+        if (c[i] == 0x32u && c[i + 1] == (uint8_t)seg && c[i + 2] < CHUNK_N) {
+            return vm_bind_record(vm, (uint8_t)seg, c[i + 2]);
+        }
+    }
+    return 0;
+}
+
+static int cell_draws(RbVm *vm, int seg, int index)
+{
+    uint32_t pix[256];
+    int i;
+    int n = 0;
+
+    if (!gfx_sprite_rgba(vm->gfx, (uint8_t)seg, index, pix)) {
+        return 0;
+    }
+    for (i = 0; i < 256; i++) {
+        if (pix[i] != 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
+int vm_load_halb(RbVm *vm, uint8_t *cells, int max, int *w, int *h, int *seg)
+{
+    /* One pass per stage chunk, then a match across the short lists. */
+    enum { TOP = 6 };
+    struct {
+        int w, h, pat, seg, area, chunk;
+    } top[5][TOP];
+    int ntop[5];
+    int chunk;
+    int best_score = -1;
+    int bw = 0, bh = 0, bs = 0, bc = 0, bp = 0;
+
+    if (!vm || !cells || max < 16 || !w || !h || !seg) {
+        return 0;
+    }
+    memset(ntop, 0, sizeof ntop);
+    for (chunk = 2; chunk <= 6; chunk++) {
+        const uint8_t *c;
+        uint32_t n;
+        uint32_t i;
+        int ci = chunk - 2;
+
+        if (!vm_ensure_record(vm, chunk)) {
+            continue;
+        }
+        c = vm->chunk[chunk];
+        n = vm->clen[chunk];
+        for (i = 0; i + 8u < n; i++) {
+            int ww, hh, pat, ss, area, t;
+
+            if (!sprite_at(c, n, i, &ww, &hh, &pat, &ss)) {
+                continue;
+            }
+            if ((uint32_t)pat + (uint32_t)ww * (uint32_t)hh > n) {
+                continue;
+            }
+            area = ww * hh;
+            for (t = 0; t < ntop[ci]; t++) {
+                if (top[ci][t].w == ww && top[ci][t].h == hh && top[ci][t].seg == ss) {
+                    break;
+                }
+            }
+            if (t < ntop[ci]) {
+                if (area > top[ci][t].area) {
+                    top[ci][t].area = area;
+                    top[ci][t].pat = pat;
+                }
+                continue;
+            }
+            if (ntop[ci] < TOP) {
+                t = ntop[ci]++;
+            } else {
+                int s;
+                int small = 0;
+
+                for (s = 1; s < TOP; s++) {
+                    if (top[ci][s].area < top[ci][small].area) {
+                        small = s;
+                    }
+                }
+                if (area <= top[ci][small].area) {
+                    continue;
+                }
+                t = small;
+            }
+            top[ci][t].w = ww;
+            top[ci][t].h = hh;
+            top[ci][t].pat = pat;
+            top[ci][t].seg = ss;
+            top[ci][t].area = area;
+            top[ci][t].chunk = chunk;
+        }
+    }
+    for (chunk = 0; chunk < 5; chunk++) {
+        int a;
+
+        for (a = 0; a < ntop[chunk]; a++) {
+            int stages = 0;
+            int other;
+
+            for (other = 0; other < 5; other++) {
+                int b;
+
+                for (b = 0; b < ntop[other]; b++) {
+                    if (top[other][b].w == top[chunk][a].w &&
+                        top[other][b].h == top[chunk][a].h &&
+                        top[other][b].seg == top[chunk][a].seg) {
+                        stages++;
+                        break;
+                    }
+                }
+            }
+            if (stages >= 2 && stages * 1000 + top[chunk][a].area > best_score) {
+                best_score = stages * 1000 + top[chunk][a].area;
+                bw = top[chunk][a].w;
+                bh = top[chunk][a].h;
+                bs = top[chunk][a].seg;
+                bc = top[chunk][a].chunk;
+                bp = top[chunk][a].pat;
+            }
+        }
+    }
+    if (best_score < 0 || bw * bh > max || bc < 2) {
+        return 0;
+    }
+    if (bs < 0 || !bind_seg(vm, vm->chunk[bc], vm->clen[bc], bs)) {
+        /* Bank slot was not next to the size. Try each sprite bind. */
+        const uint8_t *c = vm->chunk[bc];
+        uint32_t n = vm->clen[bc];
+        uint32_t i;
+        int found = 0;
+
+        for (i = 0; i + 3u < n && !found; i++) {
+            int index;
+
+            if (c[i] != 0x32u || c[i + 2] >= CHUNK_N) {
+                continue;
+            }
+            if (!vm_bind_record(vm, c[i + 1], c[i + 2])) {
+                continue;
+            }
+            index = c[bp + (bh / 2) * bw + bw / 2];
+            if (cell_draws(vm, c[i + 1], index) >= 8) {
+                bs = c[i + 1];
+                found = 1;
+            }
+        }
+        if (!found) {
+            return 0;
+        }
+    } else {
+        int index = vm->chunk[bc][bp + (bh / 2) * bw + bw / 2];
+
+        if (cell_draws(vm, bs, index) < 8 &&
+            cell_draws(vm, bs, vm->chunk[bc][bp]) < 8) {
+            return 0;
+        }
+    }
+    memcpy(cells, vm->chunk[bc] + bp, (size_t)bw * (size_t)bh);
+    *w = bw;
+    *h = bh;
+    *seg = bs;
+    return bw * bh;
 }

@@ -43,60 +43,6 @@ static const int SOCK_X[KR_TENT] = {-12, 12, -10, 10};
 static const int SOCK_Y[KR_TENT] = {-6, -6, 12, 12};
 static const int REST_A[KR_TENT] = {160, 224, 96, 32};
 
-/* Armour plate. '.' empty, d dark edge, a metal, b highlight, c seam. */
-static const char PLATE[16][21] = {
-    "......dddddd......",
-    "....ddaaaaaadd....",
-    "...ddabaaaaaadd...",
-    "..ddaabaaaaaaadd..",
-    "..daabaaaaaaaacd..",
-    "..daabaaaaaaaacd..",
-    "..daabaaaaaaaacd..",
-    "..daabaaaaaaaacd..",
-    "..ddaabaaaaaacdd..",
-    "...ddaabaaaacdd...",
-    "....ddaaaaaadd....",
-    ".....ddaaaadd.....",
-    "......dddddd......",
-    "........dd........",
-    "....................",
-    "...................."
-};
-
-/* Glowing tip. f outer, h ring, i inner, b core. */
-static const char ORB[16][21] = {
-    "....................",
-    "......ff..ff........",
-    "....ffhhhhhhff......",
-    "...fhhiiiiihhf......",
-    "...fhiiiibiiihf.....",
-    "...fhiiibbbiihf.....",
-    "...fhiiibbbiihf.....",
-    "...fhiiiibiiihf.....",
-    "....fhhiiiihhf......",
-    ".....ffhhhhff.......",
-    ".......ffff.........",
-    "....................",
-    "....................",
-    "....................",
-    "....................",
-    "...................."
-};
-
-static int art_idx(char c)
-{
-    switch (c) {
-    case 'd': return 4;
-    case 'a': return 7;
-    case 'b': return 15;
-    case 'c': return 11;
-    case 'f': return 13;
-    case 'h': return 12;
-    case 'i': return 11;
-    default:  return 0;
-    }
-}
-
 typedef struct HalbCand {
     uint8_t cells[KR_MAXC * KR_MAXC];
     uint8_t w, h;
@@ -176,9 +122,12 @@ static int s_noship;
 static int s_boom[KR_TENT];
 static int s_bx[KR_TENT], s_by[KR_TENT];
 static int s_big;
+static uint32_t s_himg[192 * 256];
+static int s_him_w, s_him_h, s_hok;
 #if KRAKEN_DEBUG
 static int s_arm;
 static int s_bypass;
+static int s_dbg_f;
 #endif
 
 static int ksin(int a)
@@ -271,11 +220,8 @@ static int medal_need(RbVm *vm)
 
 static int qualified(RbVm *vm)
 {
-#if KRAKEN_DEBUG
-    if (s_bypass) {
-        return 1;
-    }
-#endif
+    /* Debug entry starts the fight itself. It must not also swallow
+     * the stage's own loads, or the picture never comes up. */
     if (!s_fair || s_deaths != 0 || s_loop < 2 || !vm) {
         return 0;
     }
@@ -373,11 +319,14 @@ void kraken_reset(void)
     s_big = 0;
     s_cyc_i = 0;
     s_cyc_t = 0;
+    s_hok = 0;
+    s_him_w = s_him_h = 0;
     memset(s_boom, 0, sizeof s_boom);
     slots_init();
 #if KRAKEN_DEBUG
     s_arm = 0;
     s_bypass = 0;
+    s_dbg_f = 0;
 #endif
 }
 
@@ -630,14 +579,16 @@ static void spawn_parts(RbVm *vm)
         }
         for (s = 0; s < KR_SEGS; s++) {
             if (s_slot[i][s] < 0) {
-                s_slot[i][s] = vm_spawn_hold(vm, 0x0041u, (int16_t)s_px[i][s],
+                /* 0x0008 is outside the ship-hurt masks, so an arm does not
+                 * kill the player on contact. Shots are tested by the host. */
+                s_slot[i][s] = vm_spawn_hold(vm, 0x0008u, (int16_t)s_px[i][s],
                                              (int16_t)s_py[i][s], KR_HOLD,
                                              -7, 7, -7, 7);
             }
         }
     }
     if (tent_alive_n() == 0 && s_hull_slot < 0 && s_khp > 0) {
-        s_hull_slot = vm_spawn_hold(vm, 0x0041u, (int16_t)s_hx, (int16_t)s_hy,
+        s_hull_slot = vm_spawn_hold(vm, 0x0008u, (int16_t)s_hx, (int16_t)s_hy,
                                     KR_HOLD, -16, 16, -20, 20);
     }
 }
@@ -749,6 +700,12 @@ static void place_parts(RbVm *vm)
             }
             vm_ent_place(vm, id, (int16_t)s_px[i][s], (int16_t)s_py[i][s],
                          -7, 7, -7, 7);
+            /* Only the stretching tip is a real hit. The rest of the arm is not. */
+            vm_ent_set_type(vm, id,
+                            (s_phase == PH_FIGHT && s_dash && i == s_dash_i &&
+                             s + 1 == KR_SEGS)
+                                ? 0x0080u
+                                : 0x0008u);
         }
     }
     if (s_hull_slot >= 0) {
@@ -1106,6 +1063,157 @@ static void replay_cycle(RbVm *vm)
     }
 }
 
+static int hull_opaque(void)
+{
+    int i;
+    int n = 0;
+    int tot = s_him_w * s_him_h;
+
+    for (i = 0; i < tot; i++) {
+        if (s_himg[i] != 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static void paint_cells(const RbGfx *gfx, const uint8_t *cells, int w, int h,
+                        int seg, int c0, int c1)
+{
+    int cols = c1 - c0;
+    int row;
+    int col;
+
+    if (cols < 1 || h < 1 || cols * 16 > 192 || h * 16 > 256) {
+        return;
+    }
+    s_him_w = cols * 16;
+    s_him_h = h * 16;
+    memset(s_himg, 0, sizeof s_himg);
+    for (row = 0; row < h; row++) {
+        for (col = c0; col < c1; col++) {
+            uint32_t cell[256];
+            int y;
+            int x;
+            int index = cells[row * w + col];
+
+            if (!gfx || !gfx_sprite_rgba(gfx, (uint8_t)seg, index, cell)) {
+                continue;
+            }
+            for (y = 0; y < 16; y++) {
+                for (x = 0; x < 16; x++) {
+                    s_himg[(row * 16 + y) * s_him_w + (col - c0) * 16 + x] = cell[y * 16 + x];
+                }
+            }
+        }
+    }
+}
+
+/* Pull the recurring mid-boss out of the stage chunks and keep its
+ * central hull (the side pylons are the outer columns). */
+static void capture_live_hull(RbVm *vm, const RbGfx *gfx)
+{
+    int i;
+    int best = -1;
+    int best_area = 0;
+    RbEntView v;
+    uint8_t cells[24 * 24];
+    int n;
+    int c0;
+    int c1;
+
+    if (!vm || s_hok) {
+        return;
+    }
+    for (i = 0; i < 256; i++) {
+        int area;
+
+        if (!vm_ent_view(vm, i, &v)) {
+            continue;
+        }
+        if (v.kind == 0x0012u || v.kind == 0x0014u || (v.type & 0x0080u)) {
+            continue;
+        }
+        area = (int)v.w * (int)v.h;
+        if (v.w >= 3 && v.h >= 4 && area > best_area && area <= 24 * 24) {
+            best_area = area;
+            best = i;
+        }
+    }
+    if (best < 0 || !vm_ent_view(vm, best, &v)) {
+        return;
+    }
+    n = vm_ent_cells(vm, best, cells, 24 * 24);
+    if (n < v.w * v.h) {
+        return;
+    }
+    if (v.w >= 5) {
+        c0 = v.w / 3;
+        c1 = v.w - v.w / 3;
+        if (c1 <= c0) {
+            c0 = v.w / 2;
+            c1 = c0 + 1;
+        }
+    } else {
+        c0 = 0;
+        c1 = v.w;
+    }
+    paint_cells(gfx, cells, v.w, v.h, (int)v.seg, c0, c1);
+    if (hull_opaque() >= 40) {
+        s_hok = 1;
+    }
+}
+
+static void build_hull(RbVm *vm, const RbGfx *gfx)
+{
+    uint8_t cells[24 * 24];
+    int w = 0;
+    int h = 0;
+    int seg = 0;
+    int c0;
+    int c1;
+
+    if (s_hok || !vm) {
+        return;
+    }
+    if (!vm_load_halb(vm, cells, 24 * 24, &w, &h, &seg)) {
+        return;
+    }
+    if (w >= 5) {
+        c0 = w / 3;
+        c1 = w - w / 3;
+        if (c1 <= c0) {
+            c0 = w / 2;
+            c1 = c0 + 1;
+        }
+    } else {
+        c0 = 0;
+        c1 = w;
+    }
+    paint_cells(gfx, cells, w, h, seg, c0, c1);
+    if (hull_opaque() < 40) {
+        c0 = 0;
+        c1 = w;
+        if (c1 * 16 > 192) {
+            int mid = w / 2;
+            int half = 192 / 32;
+
+            c0 = mid - half;
+            c1 = mid + half;
+            if (c0 < 0) {
+                c0 = 0;
+            }
+            if (c1 > w) {
+                c1 = w;
+            }
+        }
+        paint_cells(gfx, cells, w, h, seg, c0, c1);
+    }
+    if (hull_opaque() >= 40) {
+        s_hok = 1;
+    }
+}
+
 static void start_fight(RbVm *vm)
 {
     int base;
@@ -1116,7 +1224,20 @@ static void start_fight(RbVm *vm)
     close_cycle();
     s_ncyc = count_cycles();
     vm_set_kraken_take(vm, 0);
+    build_hull(vm, vm_gfx(vm));
+    if (!s_hok) {
+        capture_live_hull(vm, vm_gfx(vm));
+    }
+    for (i = 0; i < 256; i++) {
+        RbEntView v;
+
+        if (vm_ent_view(vm, i, &v) && (v.kind == 0x0012u || v.origin == 0x4F6Eu ||
+                                       v.origin == 0x4F74u)) {
+            vm_ent_unhide(vm, i);
+        }
+    }
     vm_kraken_isolate(vm);
+    vm_redraw(vm);
     slots_init();
     base = s_boss_hp >= 64 ? s_boss_hp : 480;
     s_khp_max = base;
@@ -1235,20 +1356,56 @@ void kraken_after(RbVm *vm, int stage, int paused)
             start_fight(vm);
         }
 #if KRAKEN_DEBUG
-        else if (s_arm && vm_ship_pos(vm, &i, &i)) {
-            start_fight(vm);
+        else if (s_arm) {
+            int slot = -1;
+            int shown = 0;
+
+            s_dbg_f++;
+            for (i = 0; i < 256; i++) {
+                RbEntView v;
+
+                if (vm_ent_view(vm, i, &v) && v.kind == 0x0012u) {
+                    slot = i;
+                    if ((v.type & 0x0200u) == 0 && (v.type & 0x00FFu) != 0) {
+                        shown = 1;
+                    }
+                }
+            }
+            /* Stage 1 shows the ship within a couple of seconds. Starting
+             * before that kills the script that would spawn it. */
+            if (slot >= 0 && (shown || vm_gfx_active(vm) || s_dbg_f > 90)) {
+                start_fight(vm);
+            }
         }
 #endif
         return;
     }
+    /* Drop stage actors every frame so a director cannot put them back.
+     * The ship, its shots, and Kraken's own parts are kept. */
+    vm_kraken_isolate(vm);
     if (paused) {
+        vm_redraw(vm);
         return;
     }
-    if (!vm_ship_pos(vm, &i, &i)) {
-        if (++s_noship > 90) {
-            stop_fight(vm, 0);
+    {
+        int have = 0;
+        int k;
+
+        for (k = 0; k < 256; k++) {
+            RbEntView v;
+
+            if (vm_ent_view(vm, k, &v) && v.kind == 0x0012u) {
+                have = 1;
+                vm_ent_unhide(vm, k);
+            }
         }
-        return;
+        if (!have) {
+            if (++s_noship > 180) {
+                stop_fight(vm, 0);
+            }
+            vm_redraw(vm);
+            return;
+        }
     }
     s_noship = 0;
     s_timer++;
@@ -1315,6 +1472,12 @@ void kraken_after(RbVm *vm, int stage, int paused)
             s_boom[i]--;
         }
     }
+    if (s_phase != PH_OFF) {
+        if (!s_hok) {
+            build_hull(vm, vm_gfx(vm));
+        }
+        vm_redraw(vm);
+    }
 }
 
 static void put_px(uint32_t *px, int w, int h, int x, int y, uint32_t c)
@@ -1325,65 +1488,136 @@ static void put_px(uint32_t *px, int w, int h, int x, int y, uint32_t c)
     px[(size_t)y * (size_t)w + (size_t)x] = c;
 }
 
-static void blit_cell(uint32_t *px, int w, int h, int x, int y, const uint32_t cell[256])
+static void blit_hull(uint32_t *px, int w, int h, int cx, int cy)
 {
-    int row;
-    int col;
+    int x;
+    int y;
+    int x0 = cx - s_him_w / 2;
+    int y0 = cy - s_him_h / 2;
 
-    for (row = 0; row < 16; row++) {
-        for (col = 0; col < 16; col++) {
-            put_px(px, w, h, x + col, y + row, cell[row * 16 + col]);
-        }
-    }
-}
-
-static void draw_grid(uint32_t *px, int w, int h, const RbGfx *gfx,
-                      const HalbCand *c, int c0, int c1, int cx, int cy)
-{
-    int cols;
-    int rows;
-    int left;
-    int top;
-    int row;
-    int col;
-
-    if (!gfx || !c || c1 <= c0) {
+    if (!s_hok) {
         return;
     }
-    cols = c1 - c0;
-    rows = c->h;
-    left = cx - cols * 8;
-    top = cy - rows * 8;
-    for (row = 0; row < rows; row++) {
-        for (col = c0; col < c1; col++) {
-            uint32_t cell[256];
-            int index = c->cells[row * c->w + col];
-
-            if (!gfx_sprite_rgba(gfx, (uint8_t)c->seg, index, cell)) {
-                continue;
-            }
-            blit_cell(px, w, h, left + (col - c0) * 16, top + row * 16, cell);
+    for (y = 0; y < s_him_h; y++) {
+        for (x = 0; x < s_him_w; x++) {
+            put_px(px, w, h, x0 + x, y0 + y, s_himg[y * s_him_w + x]);
         }
     }
 }
 
-static void hull_cols(const HalbCand *c, int *c0, int *c1)
-{
-    int a = (int)c->w / 3;
-    int b = (int)c->w - a;
+/* Metal colours are fixed pixels, not palette indexes: those indexes
+ * come out beige on a stage and the arms were chains of balls. */
+#define METAL_OUT 0x141018FFu
+#define METAL_SH  0x4A5260FFu
+#define METAL_MID 0x9AA3AFFF
+#define METAL_LIT 0xE6EBF2FFu
+#define METAL_HI  0xFFFFFFFFu
+#define JOINT_RED 0xE02820FFu
+#define ORB_HALO  0xFF58C8FFu
+#define ORB_BODY  0xFF8AD8FFu
+#define ORB_CORE  0xFFF8FFFFu
 
-    if (b <= a) {
-        a = (int)c->w / 2;
-        b = a + 1;
+static void draw_seg(uint32_t *px, int w, int h, int x0, int y0, int x1, int y1,
+                     int thick, int joint)
+{
+    int dx = x1 - x0;
+    int dy = y1 - y0;
+    int steps = dx < 0 ? -dx : dx;
+    int sy = dy < 0 ? -dy : dy;
+    int s;
+    int pxn;
+    int pyn;
+    int plen;
+
+    if (sy > steps) {
+        steps = sy;
     }
-    if (a < 0) {
-        a = 0;
+    if (steps < 1) {
+        steps = 1;
     }
-    if (b > c->w) {
-        b = c->w;
+    pxn = -dy;
+    pyn = dx;
+    plen = pxn < 0 ? -pxn : pxn;
+    if ((pyn < 0 ? -pyn : pyn) > plen) {
+        plen = pyn < 0 ? -pyn : pyn;
     }
-    *c0 = a;
-    *c1 = b;
+    if (plen < 1) {
+        plen = 1;
+    }
+    for (s = 0; s <= steps; s++) {
+        int x = x0 + dx * s / steps;
+        int y = y0 + dy * s / steps;
+        int rad = thick / 2;
+        int oy;
+        int ox;
+
+        if (rad < 2) {
+            rad = 2;
+        }
+        for (oy = -rad - 1; oy <= rad + 1; oy++) {
+            for (ox = -rad - 1; ox <= rad + 1; ox++) {
+                int d2 = ox * ox + oy * oy;
+                int side;
+                uint32_t col;
+
+                if (d2 > (rad + 1) * (rad + 1)) {
+                    continue;
+                }
+                side = ox * pxn / plen + oy * pyn / plen;
+                if (d2 >= rad * rad) {
+                    col = METAL_OUT;
+                } else if (joint && s >= steps - 2) {
+                    col = JOINT_RED;
+                } else if (side > 0 && d2 * 4 < rad * rad) {
+                    col = METAL_HI;
+                } else if (side > 0) {
+                    col = METAL_LIT;
+                } else if (side < -rad / 2) {
+                    col = METAL_SH;
+                } else {
+                    col = METAL_MID;
+                }
+                put_px(px, w, h, x + ox, y + oy, col);
+            }
+        }
+    }
+}
+
+static void draw_orb(uint32_t *px, int w, int h, int cx, int cy)
+{
+    int y;
+    int x;
+    int a;
+    const int rad = 11;
+
+    for (y = -rad - 2; y <= rad + 2; y++) {
+        for (x = -rad - 2; x <= rad + 2; x++) {
+            int d2 = x * x + y * y;
+            uint32_t col;
+
+            if (d2 > (rad + 2) * (rad + 2)) {
+                continue;
+            }
+            if (d2 >= rad * rad) {
+                col = METAL_OUT;
+            } else if (d2 <= 9) {
+                col = ORB_CORE;
+            } else if (d2 <= 36) {
+                col = ORB_BODY;
+            } else {
+                col = ORB_HALO;
+            }
+            put_px(px, w, h, cx + x, cy + y, col);
+        }
+    }
+    for (a = 0; a < 256; a += 21) {
+        int hx = cx + kcos(a) * 16 / 256;
+        int hy = cy + ksin(a) * 16 / 256;
+
+        put_px(px, w, h, hx, hy, ORB_CORE);
+        put_px(px, w, h, hx + 1, hy, ORB_HALO);
+        put_px(px, w, h, hx, hy + 1, ORB_BODY);
+    }
 }
 
 static uint32_t pal(const RbGfx *gfx, int idx, uint32_t fallback)
@@ -1395,67 +1629,6 @@ static uint32_t pal(const RbGfx *gfx, int idx, uint32_t fallback)
     }
     c = gfx_index_rgba(gfx, idx);
     return c ? c : fallback;
-}
-
-static void draw_art(uint32_t *px, int w, int h, const RbGfx *gfx,
-                     const char art[16][21], int cx, int cy, int scale)
-{
-    int row;
-    int col;
-    uint32_t ink[16];
-    int i;
-
-    for (i = 0; i < 16; i++) {
-        ink[i] = pal(gfx, i, 0xFFFFFFFFu);
-    }
-    for (row = 0; row < 16; row++) {
-        for (col = 0; col < 20; col++) {
-            int idx = art_idx(art[row][col]);
-            int sx;
-            int sy;
-
-            if (!idx) {
-                continue;
-            }
-            for (sy = 0; sy < scale; sy++) {
-                for (sx = 0; sx < scale; sx++) {
-                    put_px(px, w, h,
-                           cx - 10 * scale + col * scale + sx,
-                           cy - 8 * scale + row * scale + sy,
-                           ink[idx]);
-                }
-            }
-        }
-    }
-}
-
-static void draw_pod(uint32_t *px, int w, int h, const RbGfx *gfx, int cx, int cy)
-{
-    int y;
-    int x;
-    uint32_t body = pal(gfx, 7, 0xC8C8C8FFu);
-    uint32_t edge = pal(gfx, 4, 0x686868FFu);
-    uint32_t hi = pal(gfx, 15, 0xFFFFFFFFu);
-    uint32_t glass = pal(gfx, 1, 0x202028FFu);
-
-    for (y = -22; y <= 22; y++) {
-        int half = 8 - (y > 8 ? (y - 8) / 3 : y < -12 ? (-12 - y) / 2 : 0);
-
-        if (half < 3) {
-            half = 3;
-        }
-        for (x = -half; x <= half; x++) {
-            uint32_t c = (x == -half || x == half || y == -22 || y == 22) ? edge : body;
-
-            if (y > -4 && y < 8 && x > -3 && x < 3) {
-                c = glass;
-            }
-            if (x == -half + 1 && y > -16 && y < 16) {
-                c = hi;
-            }
-            put_px(px, w, h, cx + x, cy + y, c);
-        }
-    }
 }
 
 static void draw_boom(uint32_t *px, int w, int h, const RbGfx *gfx, int cx, int cy, int t, int big)
@@ -1505,24 +1678,44 @@ static void draw_name(uint32_t *px, int w, int h, const RbGfx *gfx, int cx, int 
     }
 }
 
+static void draw_arm(uint32_t *px, int w, int h, int ti)
+{
+    int s;
+    int x0 = s_hx + SOCK_X[ti];
+    int y0 = s_hy + SOCK_Y[ti];
+
+    for (s = 0; s < KR_SEGS; s++) {
+        int x1 = s_px[ti][s];
+        int y1 = s_py[ti][s];
+        int thick = 16 - s * 2;
+
+        if (thick < 6) {
+            thick = 6;
+        }
+        if (s + 1 == KR_SEGS) {
+            draw_seg(px, w, h, x0, y0, x1, y1, thick, 1);
+            draw_orb(px, w, h, x1, y1);
+        } else {
+            draw_seg(px, w, h, x0, y0, x1, y1, thick, 1);
+        }
+        x0 = x1;
+        y0 = y1;
+    }
+}
+
 void kraken_draw(RbVm *vm, const RbGfx *gfx, uint32_t *px, int w, int h)
 {
     int i;
-    int s;
-    int c0 = 0;
-    int c1 = 0;
-    const HalbCand *halb = (s_best >= 0) ? &s_cand[s_best] : NULL;
 
-    (void)vm;
+    (void)gfx;
     if (!px || s_phase == PH_OFF || w < 640 || h < 400) {
         return;
     }
+    if (!s_hok && vm) {
+        build_hull(vm, vm_gfx(vm));
+    }
     if (s_phase == PH_LEAVE) {
-        if (halb) {
-            draw_grid(px, w, h, gfx, halb, 0, halb->w, s_hx, s_hy);
-        } else {
-            draw_pod(px, w, h, gfx, s_hx, s_hy);
-        }
+        blit_hull(px, w, h, s_hx, s_hy);
         return;
     }
     if (s_phase == PH_WAIT || (s_phase == PH_RETURN && s_timer < 40)) {
@@ -1531,31 +1724,18 @@ void kraken_draw(RbVm *vm, const RbGfx *gfx, uint32_t *px, int w, int h)
     if (s_phase == PH_WAIT) {
         return;
     }
-    if (halb) {
-        hull_cols(halb, &c0, &c1);
-    }
     for (i = 0; i < KR_TENT; i++) {
-            if (s_phase == PH_FIGHT && s_thp[i] <= 0) {
+        if (s_phase == PH_FIGHT && s_thp[i] <= 0) {
             draw_boom(px, w, h, gfx, s_bx[i], s_by[i], s_boom[i], 0);
             continue;
         }
-        if (s_phase != PH_RETURN && s_phase != PH_FIGHT) {
-            continue;
-        }
-        for (s = 0; s < KR_SEGS; s++) {
-            if (s + 1 == KR_SEGS) {
-                draw_art(px, w, h, gfx, ORB, s_px[i][s], s_py[i][s], 1);
-            } else {
-                draw_art(px, w, h, gfx, PLATE, s_px[i][s], s_py[i][s], 1);
-            }
+        if (s_phase == PH_RETURN || s_phase == PH_FIGHT) {
+            draw_arm(px, w, h, i);
         }
     }
+    /* Hull stays up after the arms are gone. It is the thing you shoot. */
     if (s_phase == PH_RETURN || s_phase == PH_FIGHT || s_phase == PH_DEAD) {
-        if (halb && c1 > c0) {
-            draw_grid(px, w, h, gfx, halb, c0, c1, s_hx, s_hy);
-        } else if (s_phase != PH_DEAD) {
-            draw_pod(px, w, h, gfx, s_hx, s_hy);
-        }
+        blit_hull(px, w, h, s_hx, s_hy);
     }
     for (i = 0; i < s_nhom; i++) {
         RbEntView v;
@@ -1563,7 +1743,7 @@ void kraken_draw(RbVm *vm, const RbGfx *gfx, uint32_t *px, int w, int h)
         if (!vm || s_hom[i] < 0 || !vm_ent_view(vm, s_hom[i], &v)) {
             continue;
         }
-        draw_art(px, w, h, gfx, ORB, v.x, v.y, 1);
+        draw_orb(px, w, h, v.x, v.y);
     }
     if (s_big > 0) {
         draw_boom(px, w, h, gfx, s_hx, s_hy, s_big > 18 ? s_big - 10 : s_big, 1);
