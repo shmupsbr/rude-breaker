@@ -1,9 +1,12 @@
 /**
  * Kraken. Host fight drawn over the stage the ship is already in.
  *
- * The central hull is a silver stand-in until the recurring mid-boss
- * sprite ids are hardcoded. Arms and orbs are new pixels. Fortress
- * patterns are the fortress's own scripts, run at half their wait.
+ * The stage 5 boss falls off the bottom while it breaks apart, then
+ * the game's own white flash plays. If this is not the true last
+ * fight, the run continues. If it is, the central part rises back
+ * after three seconds, puts out four arms, and the fight starts.
+ * Beating it explodes that part in place. The hull is a silver
+ * stand-in until the stage 5 boss sprite ids are hardcoded.
  */
 #include "kraken.h"
 #include "gfx.h"
@@ -99,6 +102,14 @@ static int s_khp, s_khp_max;
 static int s_thp[KR_TENT];
 static int s_tmax;
 static int s_hit;
+static int s_drop;
+static int s_drop_dy;
+static int s_drop_done;
+static int s_saw_fort;
+static int s_quiet;
+static int s_applied[256];
+static int16_t s_last_y[256];
+static uint16_t s_drop_org[256];
 static uint8_t s_pshot[256];
 static int16_t s_px0[256];
 static int16_t s_py0[256];
@@ -320,6 +331,14 @@ void kraken_reset(void)
     s_big = 0;
     s_cyc_i = 0;
     s_cyc_t = 0;
+    s_drop = 0;
+    s_drop_dy = 0;
+    s_drop_done = 0;
+    s_saw_fort = 0;
+    s_quiet = 0;
+    memset(s_applied, 0, sizeof s_applied);
+    memset(s_last_y, 0, sizeof s_last_y);
+    memset(s_drop_org, 0, sizeof s_drop_org);
     memset(s_boom, 0, sizeof s_boom);
     slots_init();
 #if KRAKEN_DEBUG
@@ -1249,6 +1268,150 @@ static void replay_cycle(RbVm *vm)
 }
 
 
+static int drop_skip(const RbEntView *v)
+{
+    if (!v) {
+        return 1;
+    }
+    if (v->kind == 0x0012u || v->kind == 0x0014u) {
+        return 1;
+    }
+    if (is_player_shot(v)) {
+        return 1;
+    }
+    if ((v->w == 0 || v->h == 0) && !is_fort(v->origin)) {
+        return 1;
+    }
+    return 0;
+}
+
+/* Push the stage 5 boss and the bursts spawned on it down the screen.
+ * A new sprite takes the whole offset at once, so a blast that the
+ * script plants on the boss's old spot appears where the boss is now,
+ * already on its way off the bottom. */
+static void drop_world(RbVm *vm)
+{
+    int i;
+
+    s_drop_dy += 12;
+    if (s_drop_dy > 640) {
+        s_drop_dy = 640;
+    }
+    for (i = 0; i < 256; i++) {
+        RbEntView v;
+        int dy;
+        int y;
+
+        if (!vm_ent_view(vm, i, &v)) {
+            s_drop_org[i] = 0;
+            s_applied[i] = 0;
+            continue;
+        }
+        if (v.origin != s_drop_org[i]) {
+            s_drop_org[i] = v.origin;
+            s_applied[i] = 0;
+        }
+        if (drop_skip(&v)) {
+            continue;
+        }
+        /* The script wrote a fresh absolute Y. Apply the full fall
+         * again or the body snaps back to the middle. */
+        if (s_applied[i] > 0 && (int)v.y < (int)s_last_y[i] - 24) {
+            s_applied[i] = 0;
+        }
+        dy = s_drop_dy - s_applied[i];
+        if (dy == 0) {
+            continue;
+        }
+        y = (int)v.y + dy;
+        if (y > 560) {
+            y = 560;
+        }
+        vm_ent_place(vm, i, v.x, (int16_t)y, v.bl, v.br, v.bt, v.bb);
+        s_applied[i] = s_drop_dy;
+        s_last_y[i] = (int16_t)y;
+    }
+}
+
+static void watch_drop(RbVm *vm, int stage)
+{
+    RbVmInfo info;
+    int i;
+    int living = 0;
+
+    if (!vm || s_phase != PH_OFF) {
+        return;
+    }
+    vm_info(vm, &info);
+    if (info.chunk != 6 || stage != 5) {
+        s_drop = 0;
+        s_drop_dy = 0;
+        s_drop_done = 0;
+        s_saw_fort = 0;
+        s_quiet = 0;
+        return;
+    }
+    for (i = 0; i < 256; i++) {
+        RbEntView v;
+
+        if (!vm_ent_view(vm, i, &v) || !is_fort(v.origin)) {
+            continue;
+        }
+        if (v.hp > 0 && !(v.type & 0x0400u) && v.w > 0 && v.h > 0) {
+            living++;
+            s_saw_fort = 1;
+        }
+    }
+    if (living > 0) {
+        s_quiet = 0;
+        /* A restarted stage 5 brings the boss back. Allow another fall. */
+        if (s_drop_done && !s_drop) {
+            s_drop_done = 0;
+        }
+    } else if (s_saw_fort && !s_drop_done) {
+        s_quiet++;
+    }
+    /* Two quiet frames, so a one-frame gap in the boss parts does not
+     * start the fall in the middle of the fight. */
+    if (s_saw_fort && s_quiet >= 2 && !s_drop && !s_drop_done) {
+        s_drop = 1;
+        s_drop_dy = 0;
+        memset(s_applied, 0, sizeof s_applied);
+        memset(s_last_y, 0, sizeof s_last_y);
+        memset(s_drop_org, 0, sizeof s_drop_org);
+    }
+    if (!s_drop || s_drop_done) {
+        return;
+    }
+    drop_world(vm);
+    vm_redraw(vm);
+    if (s_drop_dy >= 480) {
+        s_drop = 0;
+        s_drop_done = 1;
+    }
+}
+
+static void ship_ready(RbVm *vm)
+{
+    int i;
+
+    for (i = 0; i < 256; i++) {
+        RbEntView v;
+
+        if (!vm_ent_view(vm, i, &v)) {
+            continue;
+        }
+        if (v.kind != 0x0012u && v.kind != 0x0014u) {
+            continue;
+        }
+        if (v.y >= 200) {
+            continue;
+        }
+        vm_ent_place(vm, i, v.x, 330, v.bl, v.br, v.bt, v.bb);
+        vm_ent_unhide(vm, i);
+    }
+}
+
 static void start_fight(RbVm *vm)
 {
     int base;
@@ -1291,10 +1454,21 @@ static void start_fight(RbVm *vm)
         s_thp[i] = s_tmax;
         s_boom[i] = 0;
     }
+    s_drop = 0;
+    s_drop_done = 1;
     s_hx = 320;
-    s_hy = 160;
-    s_phase = PH_LEAVE;
+    s_hy = 440;
     s_timer = 0;
+#if KRAKEN_DEBUG
+    /* F9 skips the three-second hold and plays the rise. */
+    if (s_arm) {
+        s_phase = PH_RETURN;
+    } else
+#endif
+    {
+        s_phase = PH_WAIT;
+    }
+    ship_ready(vm);
     s_noship = 0;
     s_big = 0;
     s_cyc_i = 0;
@@ -1341,9 +1515,14 @@ void kraken_before(RbVm *vm, int deaths, int fair, int loop, int stage, int paus
         return;
     }
     if (s_phase == PH_RETURN) {
-        stretch = s_timer * 256 / 80;
-        if (stretch > 256) {
-            stretch = 256;
+        /* The central part rises first. The arms come out after it arrives. */
+        if (s_timer < 50) {
+            stretch = 0;
+        } else {
+            stretch = (s_timer - 50) * 256 / 30;
+            if (stretch > 256) {
+                stretch = 256;
+            }
         }
     } else if (s_phase != PH_FIGHT) {
         stretch = 0;
@@ -1352,17 +1531,18 @@ void kraken_before(RbVm *vm, int deaths, int fair, int loop, int stage, int paus
         shipx = 320;
         shipy = 300;
     }
-    if (s_phase == PH_LEAVE) {
-        s_hy = 180 - s_timer * 3;
-        s_hx = 320;
-    } else if (s_phase == PH_WAIT) {
-        s_hy = -40;
+    if (s_phase == PH_WAIT) {
+        s_hy = 440;
         s_hx = 320;
     } else if (s_phase == PH_RETURN) {
         s_hx = 320;
-        s_hy = -30 + s_timer * (96 + 30) / 80;
+        if (s_timer < 50) {
+            s_hy = 440 - s_timer * (440 - 96) / 50;
+        } else {
+            s_hy = 96;
+        }
     }
-    if (s_phase == PH_RETURN || s_phase == PH_FIGHT) {
+    if (s_phase == PH_FIGHT || (s_phase == PH_RETURN && stretch > 0)) {
         if (stretch < 8) {
             stretch = 8;
         }
@@ -1387,7 +1567,6 @@ void kraken_after(RbVm *vm, int stage, int paused)
 {
     int i;
 
-    (void)stage;
     if (!vm) {
         return;
     }
@@ -1397,6 +1576,7 @@ void kraken_after(RbVm *vm, int stage, int paused)
     watch_world(vm, s_stage);
     scan_patterns(vm);
     if (s_phase == PH_OFF) {
+        watch_drop(vm, stage);
         if (vm_take_kraken(vm)) {
             start_fight(vm);
         }
@@ -1456,14 +1636,11 @@ void kraken_after(RbVm *vm, int stage, int paused)
     }
     s_noship = 0;
     s_timer++;
-    if (s_phase == PH_LEAVE && s_timer >= 90) {
-        s_phase = PH_WAIT;
-        s_timer = 0;
-    } else if (s_phase == PH_WAIT && s_timer >= 55) {
+    if (s_phase == PH_WAIT && s_timer >= (3 * 92) / 3) {
         s_phase = PH_RETURN;
         s_timer = 0;
         s_hx = 320;
-        s_hy = -30;
+        s_hy = 440;
     } else if (s_phase == PH_RETURN && s_timer >= 80) {
         s_phase = PH_FIGHT;
         s_timer = 0;
@@ -1501,6 +1678,9 @@ void kraken_after(RbVm *vm, int stage, int paused)
             cycle_begin(vm);
         }
         if (s_khp <= 0) {
+            /* In the middle of the screen, the way the stage boss used to die. */
+            s_hx = 320;
+            s_hy = 150;
             s_phase = PH_DEAD;
             s_timer = 0;
             s_big = 28;
@@ -1770,6 +1950,23 @@ static void draw_arm(uint32_t *px, int w, int h, int ti)
     }
 }
 
+static void draw_flash(uint32_t *px, int w, int h, int t)
+{
+    int y;
+    int x;
+
+    if (t < 8 || t > 22) {
+        return;
+    }
+    for (y = 0; y < h; y++) {
+        for (x = 80; x < 560 && x < w; x++) {
+            if (t < 16 || ((x + y) & 3) >= (t - 16)) {
+                px[(size_t)y * (size_t)w + (size_t)x] = 0xFFFFFFFFu;
+            }
+        }
+    }
+}
+
 void kraken_draw(RbVm *vm, const RbGfx *gfx, uint32_t *px, int w, int h)
 {
     int i;
@@ -1793,7 +1990,7 @@ void kraken_draw(RbVm *vm, const RbGfx *gfx, uint32_t *px, int w, int h)
             draw_boom(px, w, h, gfx, s_bx[i], s_by[i], s_boom[i], 0);
             continue;
         }
-        if (s_phase == PH_RETURN || s_phase == PH_FIGHT) {
+        if (s_phase == PH_FIGHT || (s_phase == PH_RETURN && s_timer >= 50)) {
             draw_arm(px, w, h, i);
         }
     }
@@ -1811,5 +2008,8 @@ void kraken_draw(RbVm *vm, const RbGfx *gfx, uint32_t *px, int w, int h)
     }
     if (s_big > 0) {
         draw_boom(px, w, h, gfx, s_hx, s_hy, s_big > 18 ? s_big - 10 : s_big, 1);
+    }
+    if (s_phase == PH_DEAD) {
+        draw_flash(px, w, h, s_timer);
     }
 }
