@@ -9,6 +9,9 @@ BUILD    := build
 CC       ?= gcc
 CXX      ?= g++
 CFLAGS   := -std=c99 -Wall -Wextra -Wpedantic -O2 -Iinclude
+# Empty unless `make debug`. That target defines KRAKEN_DEBUG.
+EXTRA_CFLAGS ?=
+CFLAGS   += $(EXTRA_CFLAGS)
 CXXFLAGS := -std=c++14 -O2 -w -isystem third_party/ymfm -Iinclude -Isrc/hal/sdl2
 LDFLAGS  :=
 
@@ -31,7 +34,8 @@ CORE_SRCS := \
 	src/core/cfilter.c \
 	src/core/crt.c \
 	src/core/eq.c \
-	src/core/demo.c
+	src/core/demo.c \
+	src/core/kraken.c
 
 ifeq ($(PLATFORM),sdl2)
   HAL_SRCS := \
@@ -73,7 +77,12 @@ SRCS := $(CORE_SRCS) $(HAL_SRCS)
 OBJS := $(SRCS:%.c=$(BUILD)/$(PLATFORM)/%.o) \
         $(YMFM_SRCS:%.cpp=$(BUILD)/$(PLATFORM)/%.o)
 
-.PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test dirs
+.PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test dirs debug
+
+# Debug build: same game, plus F9 to jump into the Kraken fight.
+# Leave this target and the KRAKEN_DEBUG blocks out of a release build.
+debug:
+	$(MAKE) EXTRA_CFLAGS=-DKRAKEN_DEBUG=1 all
 
 all: dirs $(TARGET) test-endian
 
