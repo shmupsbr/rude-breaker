@@ -33,6 +33,9 @@ void cfilter_set_layer(const uint8_t *mask);
 void cfilter_set_bg(const uint8_t *luma);
 void cfilter_set_kind(const uint8_t *kind);
 void cfilter_set_player(const uint8_t *own, const uint8_t *aura, int aura_ink, int shot_ink);
+/* Pre-grade luma of each shown pixel (0..255), so ship shading is the
+ * art's own grey, not the lifted grade. NULL falls back to RGB luma. */
+void cfilter_set_shade(const uint8_t *shade);
 void cfilter_set_stage(int stage);
 /* ZX: per shown pixel sprite family id (0 = scenery) and background
  * index, and the page scroll, so colours can follow the scenery. */

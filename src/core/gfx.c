@@ -28,6 +28,7 @@ static int g_layer_ok;
 static uint8_t g_kind[RB_GFX_W * RB_GFX_H];
 /* luma of the background under each sprite pixel (ZX SPECTRUM filter) */
 static uint8_t g_bgl[RB_GFX_W * RB_GFX_H];
+static uint8_t g_shade[RB_GFX_W * RB_GFX_H]; /* pre-grade luma, screen space */
 static uint16_t g_sidm[RB_GFX_W * RB_GFX_H];  /* sprite id per shown pixel */
 static uint8_t g_ownm[RB_GFX_W * RB_GFX_H];   /* player ship / option pixels shown */
 static uint8_t g_bgim[RB_GFX_W * RB_GFX_H];   /* background index per shown pixel */
@@ -3267,6 +3268,11 @@ const uint8_t *gfx_own_mask(void)
     return g_layer_ok ? g_ownm : NULL;
 }
 
+const uint8_t *gfx_shade_mask(void)
+{
+    return g_layer_ok ? g_shade : NULL;
+}
+
 const uint8_t *gfx_layer_mask(void)
 {
     return g_layer_ok ? g_layer : NULL;
@@ -3407,6 +3413,7 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
                 g_layer[(size_t)y * RB_GFX_W + (size_t)x] = 0;
                 g_kind[(size_t)y * RB_GFX_W + (size_t)x] = 0;
                 g_ownm[(size_t)y * RB_GFX_W + (size_t)x] = 0;
+                g_shade[(size_t)y * RB_GFX_W + (size_t)x] = 0;
                 continue;
             }
             at = (size_t)src * RB_GFX_W + (size_t)x;
@@ -3430,6 +3437,8 @@ void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
                 for (ch = 0; ch < 3; ch++) {
                     lv[ch] = dac_level(gfx->pal[idx][ch]);
                 }
+                g_shade[(size_t)y * RB_GFX_W + (size_t)x] =
+                    (uint8_t)((lv[0] * 17 * 77 + lv[1] * 17 * 150 + lv[2] * 17 * 29) >> 8);
                 /* pal[][0] is red, [1] green, [2] blue, matching ports AC/AA/AE.
                  * The grade, when on, replaces level*17 after the DAC sample. */
                 expand_index(scene, (int)idx, lv[0], lv[1], lv[2],

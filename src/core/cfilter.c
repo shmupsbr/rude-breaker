@@ -1337,8 +1337,9 @@ static uint8_t g_tblk[ZW_W * ZW_H];
 static uint8_t g_sf_ink[65536];
 static uint8_t g_sf_state[65536];     /* 0 new, 1..12 voting, 13 locked */
 static uint16_t g_sf_vote[65536][8];
-static uint8_t g_sf_big[65536];       /* stage 2 cruiser, sticky this stage */
 static int g_big_stage = -1;
+static int g_cr_n; /* how many stage-2 cruisers locked */
+static uint16_t g_cr_id[2]; /* [0] first = dark yellow, [1] second = cyan */
 static uint32_t g_zw_palh;
 static uint8_t g_zw_tag[ZW_W * ZW_H]; /* 1 enemy, 2 item/shot, 3 enemy bullet */
 static uint8_t g_zw_bgc[ZW_W * ZW_H]; /* spectrum index behind this pixel */
@@ -1400,6 +1401,187 @@ static int zx_is_space(uint32_t idx0)
     return dark > 350 && stars >= 4;
 }
 
+/* Ordered dither: one ink and one paper per 8x8 cell, mixed in a Bayer
+ * pattern at the density that matches the original colour. Pairs are a
+ * colour with black, with white, or with its bright/dark twin, which is
+ * how a missing semitone is faked. Sprites are not dithered. */
+#define ZX_NP 40
+static uint8_t g_pa[ZX_NP], g_pb[ZX_NP], g_pcloud[ZX_NP];
+static int g_pn;
+static uint8_t g_lut_p[4096], g_lut_t[4096], g_lut_cp[4096], g_lut_ct[4096];
+static int g_lut_ok;
+static const uint8_t k_bayer[64] = {
+    0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26,
+    12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22,
+    3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25,
+    15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21
+};
+
+static int zx_mix_err(int r, int g, int b, int ia, int ib, int t)
+{
+    int ar = (int)(k_zx16[ia] >> 16), ag = (int)((k_zx16[ia] >> 8) & 255), ab = (int)(k_zx16[ia] & 255);
+    int br = (int)(k_zx16[ib] >> 16), bg = (int)((k_zx16[ib] >> 8) & 255), bb = (int)(k_zx16[ib] & 255);
+    int mr = (ar * (8 - t) + br * t) / 8, mg = (ag * (8 - t) + bg * t) / 8, mb = (ab * (8 - t) + bb * t) / 8;
+
+    return (int)redmean(r, g, b, (uint32_t)mr << 16 | (uint32_t)mg << 8 | (uint32_t)mb);
+}
+
+static void zx_lut_build(void)
+{
+    int c, i = 0, k;
+
+    for (c = 1; c <= 15; c++) {
+        g_pa[i] = 0;
+        g_pb[i] = (uint8_t)c;
+        g_pcloud[i] = (uint8_t)(c == 1 || c == 5 || c == 7 || c == 9 || c == 13 || c == 15);
+        i++;
+    }
+    for (c = 1; c <= 14; c++) {
+        g_pa[i] = (uint8_t)c;
+        g_pb[i] = 15;
+        g_pcloud[i] = (uint8_t)(c == 1 || c == 5 || c == 7 || c == 9 || c == 13);
+        i++;
+    }
+    for (c = 1; c <= 7; c++) {
+        g_pa[i] = (uint8_t)c;
+        g_pb[i] = (uint8_t)(c + 8);
+        g_pcloud[i] = (uint8_t)(c == 1 || c == 5 || c == 7);
+        i++;
+    }
+    g_pn = i;
+    for (k = 0; k < 4096; k++) {
+        int r = ((k >> 8) & 15) * 17, g = ((k >> 4) & 15) * 17, b = (k & 15) * 17;
+        int p, best = 0, bt = 0, be = -1, cb = 0, ct = 0, ce = -1;
+
+        for (p = 0; p < g_pn; p++) {
+            int t, te = -1, tt = 0;
+
+            for (t = 0; t <= 8; t++) {
+                int e = zx_mix_err(r, g, b, g_pa[p], g_pb[p], t);
+
+                if (te < 0 || e < te) {
+                    te = e;
+                    tt = t;
+                }
+            }
+            if (be < 0 || te < be) {
+                be = te;
+                best = p;
+                bt = tt;
+            }
+            if (g_pcloud[p] && (ce < 0 || te < ce)) {
+                ce = te;
+                cb = p;
+                ct = tt;
+            }
+        }
+        g_lut_p[k] = (uint8_t)best;
+        g_lut_t[k] = (uint8_t)bt;
+        g_lut_cp[k] = (uint8_t)cb;
+        g_lut_ct[k] = (uint8_t)ct;
+    }
+    g_lut_ok = 1;
+}
+
+/* Every scenery cell, on every stage. Sprites are left alone. A dark
+ * green field (a city) stays dark green; a light blue field (clouds)
+ * falls out as white mixed with blue or cyan. */
+static void zx_dither_scenery(void)
+{
+    static uint8_t votes[ZW_CW * ZW_CH][ZX_NP];
+    static uint8_t win[ZW_CW * ZW_CH];
+    static int green_cell[ZW_CW * ZW_CH];
+    int i, c;
+
+    if (!g_lut_ok) {
+        zx_lut_build();
+    }
+    memset(votes, 0, sizeof votes);
+    memset(green_cell, 0, sizeof green_cell);
+    {
+        static int rs[ZW_CW * ZW_CH], gs[ZW_CW * ZW_CH], bs[ZW_CW * ZW_CH], ns[ZW_CW * ZW_CH];
+
+        memset(rs, 0, sizeof rs);
+        memset(gs, 0, sizeof gs);
+        memset(bs, 0, sizeof bs);
+        memset(ns, 0, sizeof ns);
+        for (i = 0; i < ZW_W * ZW_H; i++) {
+            int mx = i % ZW_W, my = i / ZW_W, c0 = (my >> 3) * ZW_CW + (mx >> 3);
+            int k12, p;
+
+            if (g_zw_spr[i] || !g_zw_n[i]) {
+                continue;
+            }
+            k12 = K24_12(g_zw_col[i]);
+            /* every scenery cell, every stage: the pair that best matches
+             * the original colours. Sprites are skipped above. */
+            p = g_lut_p[k12];
+            if (p < g_pn) {
+                votes[c0][p]++;
+            }
+            rs[c0] += (int)(g_zw_col[i] >> 16);
+            gs[c0] += (int)((g_zw_col[i] >> 8) & 255);
+            bs[c0] += (int)(g_zw_col[i] & 255);
+            ns[c0]++;
+        }
+        for (c = 0; c < ZW_CW * ZW_CH; c++) {
+            int p, bp = 0, bv = -1;
+            int n = ns[c] ? ns[c] : 1;
+            int ar = rs[c] / n, ag = gs[c] / n, ab = bs[c] / n;
+
+            for (p = 0; p < g_pn; p++) {
+                if (votes[c][p] > bv) {
+                    bv = votes[c][p];
+                    bp = p;
+                }
+            }
+            win[c] = (uint8_t)bp;
+            /* city field: dark and green, not the clouds stage */
+            green_cell[c] = g_cf_stage != 3 && ns[c] >= 8 && ag > ar + 18 && ag > ab + 18 &&
+                            (ar + ag + ab) / 3 < 100;
+        }
+    }
+    for (i = 0; i < ZW_W * ZW_H; i++) {
+        int mx = i % ZW_W, my = i / ZW_W, c0 = (my >> 3) * ZW_CW + (mx >> 3);
+        int k12, p, t, a, b, sel;
+        int r, g, bv, best, bt;
+
+        if (g_zw_spr[i] || !g_zw_n[i]) {
+            continue;
+        }
+        if (green_cell[c0]) {
+            /* a dark green field is closer to black than to #00D700, so a
+             * free mix would drop it. Keep the city ground dark green. */
+            sel = 4;
+            g_zw_out[i] = k_zx16[sel];
+            g_zw_bgc[i] = (uint8_t)sel;
+            continue;
+        } else {
+            k12 = K24_12(g_zw_col[i]);
+            p = win[c0];
+            a = g_pa[p];
+            b = g_pb[p];
+            r = (int)(g_zw_col[i] >> 16);
+            g = (int)((g_zw_col[i] >> 8) & 255);
+            bv = (int)(g_zw_col[i] & 255);
+            best = -1;
+            bt = g_cf_stage == 3 ? g_lut_ct[k12] : g_lut_t[k12];
+            for (t = 0; t <= 8; t++) {
+                int e = zx_mix_err(r, g, bv, a, b, t);
+
+                if (best < 0 || e < best) {
+                    best = e;
+                    bt = t;
+                }
+            }
+            t = bt;
+        }
+        sel = (t * 8 > k_bayer[(my & 7) * 8 + (mx & 7)]) ? b : a;
+        g_zw_out[i] = k_zx16[sel];
+        g_zw_bgc[i] = (uint8_t)sel;
+    }
+}
+
 static void zx_world(uint32_t *px, int w, int h)
 {
     int x, y, i, sc = g_w_scroll;
@@ -1425,8 +1607,9 @@ static void zx_world(uint32_t *px, int w, int h)
     memset(g_zw_tag, 0, sizeof g_zw_tag);
     memset(g_zw_bgc, 0, sizeof g_zw_bgc);
     if (g_big_stage != g_cf_stage) {
-        memset(g_sf_big, 0, sizeof g_sf_big);
         g_big_stage = g_cf_stage;
+        g_cr_n = 0;
+        g_cr_id[0] = g_cr_id[1] = 0;
     }
     {
         static uint32_t hsh[ZW_CW * ZW_CH];
@@ -1479,7 +1662,10 @@ static void zx_world(uint32_t *px, int w, int h)
             int n = g_zw_n[i], sn = g_zw_sn[i], bn = n - sn;
             uint32_t r, g, b;
 
-            g_zw_spr[i] = n && sn * 2 >= n;
+            /* one sprite sample owns the machine pixel: a real sprite
+             * was dropped when the 2x2 was mostly scenery, so cruisers
+             * and small enemies were painted as the background */
+            g_zw_spr[i] = sn > 0;
             if (g_zw_spr[i]) {
                 r = (g_zw_sum[i][0] >> 16) / (sn ? sn : 1);
                 g = (g_zw_sum[i][1] >> 16) / (sn ? sn : 1);
@@ -1595,9 +1781,6 @@ static void zx_world(uint32_t *px, int w, int h)
                 if (my < ZW_H - 1) { m += LUM24(g_zw_col[i + ZW_W]); cnt++; }
                 m = cnt ? m / cnt : l;
                 ci = (!bd && l > 16 && l >= m - 24) ? (g_cf_stage == 1 ? 3 : 5) : 0;
-                if (g_cf_stage == 3 && bd && l < 170) {
-                    ci = 4;   /* city field: dark green */
-                }
             } else {
                 const uint16_t *d = g_zc_d[K24_12(g_zw_col[i])];
                 int side = d[B] < d[A], l = LUM24(g_zw_col[i]), m = 0, cnt = 0;
@@ -1616,14 +1799,13 @@ static void zx_world(uint32_t *px, int w, int h)
                     }
                 }
                 ci = side ? B : A;
-                if (g_cf_stage == 3 && bd && l < 170) {
-                    ci = 4;
-                }
             }
             g_zw_out[i] = k_zx16[ci];
             g_zw_bgc[i] = (uint8_t)ci;
         }
     }
+    /* Halftone every background cell. Sprites stay flat (painted next). */
+    zx_dither_scenery();
     /* background under sprites: the scenery that pixel covered, else the cell */
     {
         static uint8_t mode[ZW_CW * ZW_CH];
@@ -1782,8 +1964,19 @@ static void zx_world(uint32_t *px, int w, int h)
         for (k = 0; k < nf; k++) {
             int wdt = fx1[k] - fx0[k] + 1, hgt = fy1[k] - fy0[k] + 1;
 
-            if (ftag[k] == 1 && fn[k] >= 90 && (wdt >= 16 || hgt >= 16)) {
-                g_sf_big[fid[k]] = 1;
+            /* real sprite, large enough to be a cruiser: first one seen
+             * (top of the screen first) is dark yellow, the next is cyan */
+            if (ftag[k] == 1 && fn[k] >= 80 && (wdt >= 14 || hgt >= 14) && g_cr_n < 2) {
+                int s, seen = 0;
+
+                for (s = 0; s < g_cr_n; s++) {
+                    if (g_cr_id[s] == fid[k]) {
+                        seen = 1;
+                    }
+                }
+                if (!seen) {
+                    g_cr_id[g_cr_n++] = fid[k];
+                }
             }
         }
     }
@@ -1798,11 +1991,13 @@ static void zx_world(uint32_t *px, int w, int h)
         l = LUM24(g_zw_col[i]);
         tag = g_zw_tag[i];
         bg = g_zw_bgc[i] & 7;
-        big = id && g_sf_big[id];
+        big = (g_cr_n > 0 && id == g_cr_id[0]) ? 1 : (g_cr_n > 1 && id == g_cr_id[1]) ? 2 : 0;
         if (id >= 0xFFF1u && id <= 0xFFF5u) {
             ink = id == 0xFFF1u ? 10 : id == 0xFFF3u ? 14 : 9; /* V red, M yellow, L blue */
-        } else if (big) {
-            ink = 14;
+        } else if (big == 1) {
+            ink = 6; /* dark yellow */
+        } else if (big == 2) {
+            ink = 13; /* cyan */
         } else if (id && g_sf_ink[id]) {
             ink = g_sf_ink[id];
         } else {
@@ -1831,8 +2026,8 @@ static void zx_world(uint32_t *px, int w, int h)
                     m = ln;
                 }
             }
-            /* bright yellow, with more of the shading kept as black lines */
-            col = (m - l > 18 || l <= 100) ? 0 : 14;
+            /* flat cruiser colour; only the darker lines go black */
+            col = (l * 3 < m * 2) ? 0 : ink;
         } else if (tag == 3) {
             col = l > 36 ? ink : 0;
             if ((col & 7) == bg) {
@@ -2591,8 +2786,6 @@ static void zx_detail(uint32_t *px, int w)
                 if (!spr && g_zd_m[y * 240 + x] >= 90 && g_zd_l[y * 240 + x - 1] < 40 &&
                     g_zd_l[y * 240 + x + 1] < 40) {
                     c = 0xFFFFFFFFu;
-                } else if (!spr && mx - l > 48 && l * 5 < mx * 3) {
-                    c = 0x000000FFu;             /* scenery outline / detail */
                 } else if (spr && mx - l > 18 && l * 5 < mx * 4) {
                     c = 0x000000FFu;             /* sprite inner detail */
                 } else {
@@ -2610,8 +2803,13 @@ static void zx_detail(uint32_t *px, int w)
  * stays legible in straight flight. Options and shots use the weapon
  * colour (red, blue or yellow). Where the I-FRAMES aura painted, that
  * mode colour replaces the ship, as before. */
-static const uint8_t *g_pl_own, *g_pl_aura;
+static const uint8_t *g_pl_own, *g_pl_aura, *g_shade;
 static int g_pl_aink = 10, g_pl_sink = 10;
+
+void cfilter_set_shade(const uint8_t *shade)
+{
+    g_shade = shade;
+}
 
 void cfilter_set_player(const uint8_t *own, const uint8_t *aura, int aura_ink, int shot_ink)
 {
@@ -2621,13 +2819,23 @@ void cfilter_set_player(const uint8_t *own, const uint8_t *aura, int aura_ink, i
     g_pl_sink = shot_ink & 15;
 }
 
+/* Art grey, before the grade lifts it. Grey shading on the ship collapses
+ * to white or black against the brightest pixel of that object. */
+static int pix_shade(size_t at)
+{
+    if (g_shade) {
+        return g_shade[at];
+    }
+    return LUM24(g_zd_src[at] >> 8);
+}
+
 static void zx_player(uint32_t *px, int w)
 {
     static uint8_t role[200 * 240];
     static uint8_t litn[200 * 240];
     static uint8_t maxl[200 * 240];
     static uint8_t aura[200 * 240];
-    int by, bx;
+    int by, bx, smax[4] = {0, 0, 0, 0};
 
     if (!g_pl_own) {
         return;
@@ -2672,9 +2880,12 @@ static void zx_player(uint32_t *px, int w)
                 if ((r == 1 && v != 1) || (r == 2 && v != 2) || (r == 3 && v != 3)) {
                     continue;
                 }
-                l = LUM24(g_zd_src[k4[k]] >> 8);
+                l = pix_shade(k4[k]);
                 if (l > mx) {
                     mx = l;
+                }
+                if (l > smax[r]) {
+                    smax[r] = l;
                 }
                 if (l >= 40) {
                     lit++;
@@ -2714,27 +2925,35 @@ static void zx_player(uint32_t *px, int w)
                 px[q] = px[q + 1] = px[q + (size_t)w] = px[q + (size_t)w + 1] = c;
                 continue;
             }
-            /* Straight-flight wing tip: one lit pixel at the silhouette
-             * end. Fill the 2x2 so it does not vanish into the black. */
-            tip = r != 3 && nb <= 1 && litn[ix] > 0 && maxl[ix] >= 28;
-            if (r == 3 || tip) {
-                c = maxl[ix] >= (r == 3 ? 40 : 28) ? (k_zx16[ink] << 8 | 0xFFu) : 0x000000FFu;
-                px[q] = px[q + 1] = px[q + (size_t)w] = px[q + (size_t)w + 1] = c;
-                continue;
-            }
             {
-                const size_t k4[4] = {q, q + 1, q + (size_t)w, q + (size_t)w + 1};
-                int k;
+                /* Greys collapse: only the light end stays white (or the
+                 * weapon colour on an option). Darker shading is black. */
+                int cut = r == 3 ? 40 : (smax[r] * 5 / 8);
 
-                for (k = 0; k < 4; k++) {
-                    int v = g_pl_own[k4[k]];
-                    int l;
+                if (cut < 1) {
+                    cut = 1;
+                }
+                /* Wing tip: the end block is filled so a 1 px tip survives. */
+                tip = r != 3 && nb <= 1 && maxl[ix] >= cut;
+                if (r == 3 || tip) {
+                    c = maxl[ix] >= cut ? (k_zx16[ink] << 8 | 0xFFu) : 0x000000FFu;
+                    px[q] = px[q + 1] = px[q + (size_t)w] = px[q + (size_t)w + 1] = c;
+                    continue;
+                }
+                {
+                    const size_t k4[4] = {q, q + 1, q + (size_t)w, q + (size_t)w + 1};
+                    int k;
 
-                    if ((r == 1 && v != 1) || (r == 2 && v != 2)) {
-                        continue;
+                    for (k = 0; k < 4; k++) {
+                        int v = g_pl_own[k4[k]];
+                        int l;
+
+                        if ((r == 1 && v != 1) || (r == 2 && v != 2)) {
+                            continue;
+                        }
+                        l = pix_shade(k4[k]);
+                        px[k4[k]] = (l >= cut ? k_zx16[ink] : 0) << 8 | 0xFFu;
                     }
-                    l = LUM24(g_zd_src[k4[k]] >> 8);
-                    px[k4[k]] = (l >= 40 ? k_zx16[ink] : 0) << 8 | 0xFFu;
                 }
             }
         }
