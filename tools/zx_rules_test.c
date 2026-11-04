@@ -133,14 +133,15 @@ int main(void)
     expect("option detail is black", (opt_lo & 0xFFFFFF00u) == 0x00000000u);
     expect("star stays white", (at(400, 40) & 0xFFFFFF00u) == 0xFFFFFF00u);
 
-    /* Clouds stage: the real sky is a dark blue-grey, and it is solid cyan.
-     * The white clouds dither with black. */
+    /* Clouds stage: the common blue-grey is the sky (solid cyan). Only a
+     * patch clearly lighter than that sky dithers white and black. */
     clear_frame();
-    fill(80, 0, 112, 32, 0x24303000u, 0, 0, 0, 0, 3);
+    fill(80, 0, 400, 200, 0x4D566900u, 0, 0, 0, 0, 3);
+    fill(200, 40, 248, 88, 0xF0F0F000u, 0, 0, 0, 0, 3);
     apply(3, 10);
     white = blue = other = 0;
-    for (y = 2; y < 30; y++) {
-        for (x = 82; x < 110; x++) {
+    for (y = 8; y < 24; y++) {
+        for (x = 90; x < 160; x++) {
             uint32_t c = at(x, y) & 0xFFFFFF00u;
 
             if (c == 0x00D7D700u) {
@@ -152,12 +153,10 @@ int main(void)
     }
     expect("sky is solid cyan", blue > 0 && other == 0);
     printf("  sky cyan=%d other=%d\n", blue, other);
-    clear_frame();
-    fill(80, 0, 112, 32, 0xE4E4E400u, 0, 0, 0, 0, 3);
-    apply(3, 10);
+    expect("same blue-grey sky stays cyan", (at(300, 100) & 0xFFFFFF00u) == 0x00D7D700u);
     white = blue = other = 0;
-    for (y = 2; y < 30; y++) {
-        for (x = 82; x < 110; x++) {
+    for (y = 48; y < 80; y++) {
+        for (x = 208; x < 240; x++) {
             uint32_t c = at(x, y) & 0xFFFFFF00u;
 
             if (c == 0xFFFFFF00u) {
@@ -169,51 +168,10 @@ int main(void)
             }
         }
     }
-    expect("clouds use white", white > 0);
-    expect("clouds use black", blue > 0);
-    expect("clouds are only white and black", other == 0);
-    printf("  clouds white=%d black=%d other=%d\n", white, blue, other);
-    /* Real cloud bodies are blue-grey, well below a near-white cut. */
-    clear_frame();
-    fill(80, 0, 112, 32, 0x4D566900u, 0, 0, 0, 0, 3);
-    fill(120, 0, 152, 32, 0x56687C00u, 0, 0, 0, 0, 3);
-    apply(3, 10);
-    white = blue = other = 0;
-    for (y = 2; y < 30; y++) {
-        for (x = 82; x < 110; x++) {
-            uint32_t c = at(x, y) & 0xFFFFFF00u;
-
-            if (c == 0xFFFFFF00u) {
-                white++;
-            } else if (c == 0x00000000u) {
-                blue++;
-            } else {
-                other++;
-            }
-        }
-    }
-    expect("real cloud is white and black", white > 0 && blue > 0 && other == 0);
-    expect("real cloud is not solid cyan", (at(90, 16) & 0xFFFFFF00u) != 0x00D7D700u);
-    white = blue = other = 0;
-    for (y = 2; y < 30; y++) {
-        for (x = 122; x < 150; x++) {
-            uint32_t c = at(x, y) & 0xFFFFFF00u;
-
-            if (c == 0xFFFFFF00u || c == 0x00000000u) {
-                white++;
-            } else {
-                other++;
-            }
-        }
-    }
-    expect("lighter real cloud dithers", white > 0 && other == 0);
-    /* The same blue-grey still dithers at the start of stage 4. Teal metal does not. */
-    clear_frame();
-    fill(80, 0, 112, 32, 0x4D566900u, 0, 0, 0, 0, 4);
-    apply(4, 10);
-    expect("stage 4 cloud is not solid cyan", (at(90, 16) & 0xFFFFFF00u) != 0x00D7D700u);
-    expect("stage 4 cloud is white or black",
-           (at(90, 16) & 0xFFFFFF00u) == 0xFFFFFF00u || (at(90, 16) & 0xFFFFFF00u) == 0x00000000u);
+    expect("cloud highlight is white", white > 0);
+    expect("cloud highlight has black", blue > 0);
+    expect("cloud highlight is only white and black", other == 0);
+    printf("  highlight white=%d black=%d other=%d\n", white, blue, other);
 
     /* Stage 1 asteroids: dim rock, solid dark magenta, not black. */
     clear_frame();
@@ -302,7 +260,8 @@ int main(void)
 
     /* White sprite on a white cloud must not stay white. */
     clear_frame();
-    fill(80, 0, 200, 80, 0xE8F4FF00u, 0, 0, 0, 230, 3);
+    fill(80, 0, 400, 160, 0x4D566900u, 0, 0, 0, 80, 3);
+    fill(100, 8, 180, 64, 0xF0F0F000u, 0, 0, 0, 230, 3);
     fill(120, 24, 136, 40, 0xFFFFFF00u, 1, 777, 0, 250, 3);
     apply(3, 10);
     {

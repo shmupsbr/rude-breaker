@@ -1461,7 +1461,7 @@ static const uint8_t k_bayer[64] = {
 static void zx_paint_scenery(void)
 {
     static int green_cell[ZW_CW * ZW_CH];
-    int i, c;
+    int i, c, sky_l = 0, sky_n = 0;
 
     memset(green_cell, 0, sizeof green_cell);
     {
@@ -1491,9 +1491,42 @@ static void zx_paint_scenery(void)
                             (ar + ag + ab) / 3 < 100;
         }
     }
+    /* Stage 3 sky is whatever blue-grey covers the most pixels, including
+     * #4D5669 and #56687C. Only a pixel clearly lighter than that sky is
+     * a cloud highlight. */
+    sky_l = 0;
+    sky_n = 0;
+    if (g_cf_stage == 3) {
+        static int hist[256];
+        int seen = 0, acc, h;
+
+        memset(hist, 0, sizeof hist);
+        for (i = 0; i < ZW_W * ZW_H; i++) {
+            int l;
+
+            if (g_zw_spr[i] || !g_zw_n[i]) {
+                continue;
+            }
+            l = LUM24(g_zw_col[i]);
+            if (l < 24) {
+                continue;
+            }
+            hist[l < 256 ? l : 255]++;
+            seen++;
+        }
+        acc = 0;
+        sky_n = seen;
+        for (h = 0; h < 256; h++) {
+            acc += hist[h];
+            if (acc * 2 >= seen) {
+                sky_l = h;
+                break;
+            }
+        }
+    }
     for (i = 0; i < ZW_W * ZW_H; i++) {
         int mx = i % ZW_W, my = i / ZW_W, c0 = (my >> 3) * ZW_CW + (mx >> 3);
-        int sel, r, g, b, hi, lo, l;
+        int sel, l;
 
         if (!g_zw_n[i]) {
             continue;
@@ -1502,28 +1535,20 @@ static void zx_paint_scenery(void)
             g_zw_scn[i] = k_zx16[g_zw_bgc[i] & 15];
             continue;
         }
-        r = (int)(g_zw_col[i] >> 16);
-        g = (int)((g_zw_col[i] >> 8) & 255);
-        b = (int)(g_zw_col[i] & 255);
-        hi = r > g ? (r > b ? r : b) : (g > b ? g : b);
-        lo = r < g ? (r < b ? r : b) : (g < b ? g : b);
         l = LUM24(g_zw_col[i]);
         if (green_cell[c0]) {
             /* a dark green field is closer to black than to #00D700 */
             sel = 4;
-        } else if ((g_cf_stage == 3 || g_cf_stage == 4) &&
-                   ((l >= 58 && b >= g && b >= r && b > g + 6 && hi - lo < 56) ||
-                    (g_cf_stage == 3 && l >= 168 && hi - lo < 40))) {
-            /* Real clouds are the blue-greys around #4D5669 and #56687C,
-             * not near-white. They dither white with black. A near-white
-             * highlight does too. The dark sky stays cyan below. */
-            int t = l >= 180 ? 7 : 6;
+        } else if (g_cf_stage == 3) {
+            /* The common blue-grey is the sky. A highlight is clearly
+             * lighter than that, and only those pixels dither. */
+            if (sky_n > 8 && l >= sky_l + 36 && l > 48) {
+                int t = 6;
 
-            sel = (t * 8 > k_bayer[(my & 7) * 8 + (mx & 7)]) ? 15 : 0;
-        } else if (g_cf_stage == 3 ||
-                   (g_cf_stage == 4 && l < 58 && b >= g && b >= r && g >= r && hi - lo < 28)) {
-            /* Sky, including the dark blue-grey that opens stage 4. */
-            sel = 5;
+                sel = (t * 8 > k_bayer[(my & 7) * 8 + (mx & 7)]) ? 15 : 0;
+            } else {
+                sel = 5;
+            }
         } else if (g_zw_dim[c0]) {
             int bn = g_zw_n[i] - g_zw_sn[i];
             int bd = bn > 0 && g_zw_bd[i] * 2 >= bn;
@@ -1559,13 +1584,31 @@ static void zx_paint_scenery(void)
     }
 }
 
-/* Stage 2 cruisers drawn as background tiles: a large connected mass
- * that is not a live sprite. Flat colour, no dither. First mass from
- * the top is dark yellow, the next is cyan. */
+/* A cruiser pixel: scenery or an enemy sprite, not the player, an option
+ * or a bullet. Pink and red cores count; the black starfield does not. */
+static int zx_cr_cand(int i)
+{
+    uint16_t id;
+    int l;
+
+    if (i < 0 || i >= ZW_W * ZW_H || !g_zw_n[i]) {
+        return 0;
+    }
+    id = g_zw_id[i];
+    if (id >= 0xFFF0u || g_zw_tag[i] == 3) {
+        return 0;
+    }
+    l = LUM24(g_zw_col[i]);
+    return l > 16;
+}
+
+/* Stage 2 cruisers: a large mass, scenery or sprite. First one from the
+ * top is dark yellow, every later one is cyan. Every pixel of that mass
+ * is that colour or black. */
 static void zx_stage2_hull(void)
 {
     static uint16_t lab[ZW_W * ZW_H];
-    static uint8_t hat[ZW_W * ZW_H];
+    static uint8_t den[ZW_W * ZW_H];
     static int stk[ZW_W * ZW_H];
     int i, nlab = 1;
 
@@ -1573,15 +1616,44 @@ static void zx_stage2_hull(void)
         return;
     }
     memset(lab, 0, sizeof lab);
-    memset(hat, 0, sizeof hat);
+    memset(den, 0, sizeof den);
+    for (i = 0; i < ZW_W * ZW_H; i++) {
+        int x, y, c, d;
+
+        if (!zx_cr_cand(i)) {
+            continue;
+        }
+        x = i % ZW_W;
+        y = i / ZW_W;
+        c = 0;
+        for (d = 0; d < 8; d++) {
+            static const int dx[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+            static const int dy[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+            int nx = x + dx[d], ny = y + dy[d];
+
+            if (nx < 0 || nx >= ZW_W || ny < 0 || ny >= ZW_H) {
+                continue;
+            }
+            if (zx_cr_cand(ny * ZW_W + nx)) {
+                c++;
+            }
+        }
+        den[i] = (uint8_t)c;
+    }
     for (i = 0; i < ZW_W * ZW_H; i++) {
         int sp, cnt, x0, y0, x1, y1, mx, my, k;
-        int slot = 0;
+        int slot = 0, saw1 = 0, saw2 = 0;
 
-        /* Dark lines inside the hull used to split it, so the pieces
-         * stayed dithered. Anything above pure space-black can connect. */
-        if (lab[i] || g_zw_spr[i] || !g_zw_n[i] || LUM24(g_zw_col[i]) <= 8) {
+        /* Pink and red cores are part of the ship. Isolated stars are not:
+         * a gap is bridged only between two solid edges. */
+        if (lab[i] || !zx_cr_cand(i)) {
             continue;
+        }
+        if (g_zw_id[i] && g_cr_n > 0 && g_zw_id[i] == g_cr_id[0]) {
+            saw1 = 1;
+        }
+        if (g_zw_id[i] && g_cr_n > 1 && g_zw_id[i] == g_cr_id[1]) {
+            saw2 = 1;
         }
         sp = 0;
         cnt = 0;
@@ -1599,17 +1671,35 @@ static void zx_stage2_hull(void)
             for (d = 0; d < 8; d++) {
                 static const int dx[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
                 static const int dy[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
-                int nx = qx + dx[d], ny = qy + dy[d], n;
+                int dist;
 
-                if (nx < 0 || nx >= ZW_W || ny < 0 || ny >= ZW_H) {
-                    continue;
+                /* dist 1 joins the body. dist 2..4 crosses a panel line
+                 * only when both sides are solid, so stars stay loose. */
+                for (dist = 1; dist <= 6; dist++) {
+                    int nx = qx + dx[d] * dist, ny = qy + dy[d] * dist, n;
+
+                    if (nx < 0 || nx >= ZW_W || ny < 0 || ny >= ZW_H) {
+                        continue;
+                    }
+                    if (dist > 1 && d >= 4) {
+                        break;
+                    }
+                    n = ny * ZW_W + nx;
+                    if (lab[n] || !zx_cr_cand(n)) {
+                        continue;
+                    }
+                    if (dist > 1 && (den[q] < 3 || den[n] < 3)) {
+                        continue;
+                    }
+                    if (g_zw_id[n] && g_cr_n > 0 && g_zw_id[n] == g_cr_id[0]) {
+                        saw1 = 1;
+                    }
+                    if (g_zw_id[n] && g_cr_n > 1 && g_zw_id[n] == g_cr_id[1]) {
+                        saw2 = 1;
+                    }
+                    lab[n] = (uint16_t)nlab;
+                    stk[sp++] = n;
                 }
-                n = ny * ZW_W + nx;
-                if (lab[n] || g_zw_spr[n] || !g_zw_n[n] || LUM24(g_zw_col[n]) <= 8) {
-                    continue;
-                }
-                lab[n] = (uint16_t)nlab;
-                stk[sp++] = n;
             }
         }
         /* A one-pixel gap with the hull on both sides is detail, not
@@ -1639,14 +1729,20 @@ static void zx_stage2_hull(void)
             nlab++;
             continue;
         }
-        for (k = 0; k < g_cr_n && k < 2; k++) {
+        if (saw1) {
+            slot = 1;
+        } else if (saw2) {
+            slot = 2;
+        }
+        for (k = 0; k < g_cr_n && k < 2 && !slot; k++) {
             if (g_hull_box[k][2] >= x0 && x1 >= g_hull_box[k][0] &&
                 g_hull_box[k][3] >= y0 && y1 >= g_hull_box[k][1]) {
                 slot = k + 1;
             }
         }
-        if (!slot && g_cr_n < 2) {
-            slot = ++g_cr_n;
+        if (!slot) {
+            /* the first mass is yellow; every later cruiser is cyan */
+            slot = g_cr_n < 2 ? ++g_cr_n : 2;
         }
         if (slot) {
             g_hull_box[slot - 1][0] = x0;
@@ -1672,58 +1768,10 @@ static void zx_stage2_hull(void)
                 ink = slot == 1 ? 6 : 13;
                 g_zw_out[q] = k_zx16[l < 28 ? 0 : ink];
                 g_zw_spr[q] = 1;
-                hat[q] = (uint8_t)slot;
             }
         }
         nlab++;
         (void)k;
-    }
-    /* A pink core sits inside the hull, split off by panel lines, so the
-     * flood never reaches it and its own hue is magenta. Anything enclosed
-     * by a slot on all four sides is that cruiser: dark yellow or cyan,
-     * and only the darkest pixels black. */
-    for (i = 1; i <= g_cr_n && i <= 2; i++) {
-        int x0 = g_hull_box[i - 1][0], y0 = g_hull_box[i - 1][1];
-        int x1 = g_hull_box[i - 1][2], y1 = g_hull_box[i - 1][3];
-        int yy, xx, ink = i == 1 ? 6 : 13;
-
-        for (yy = y0; yy <= y1; yy++) {
-            for (xx = x0; xx <= x1; xx++) {
-                int q = yy * ZW_W + xx, x, y, L = 0, R = 0, U = 0, D = 0;
-
-                if (hat[q] || g_zw_spr[q] || !g_zw_n[q] || LUM24(g_zw_col[q]) < 28) {
-                    continue;
-                }
-                for (x = xx - 1; x >= x0; x--) {
-                    if (hat[yy * ZW_W + x] == (uint8_t)i) {
-                        L = 1;
-                        break;
-                    }
-                }
-                for (x = xx + 1; x <= x1; x++) {
-                    if (hat[yy * ZW_W + x] == (uint8_t)i) {
-                        R = 1;
-                        break;
-                    }
-                }
-                for (y = yy - 1; y >= y0; y--) {
-                    if (hat[y * ZW_W + xx] == (uint8_t)i) {
-                        U = 1;
-                        break;
-                    }
-                }
-                for (y = yy + 1; y <= y1; y++) {
-                    if (hat[y * ZW_W + xx] == (uint8_t)i) {
-                        D = 1;
-                        break;
-                    }
-                }
-                if (L && R && U && D) {
-                    g_zw_out[q] = k_zx16[ink];
-                    g_zw_spr[q] = 1;
-                }
-            }
-        }
     }
 }
 
