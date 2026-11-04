@@ -5,8 +5,8 @@
  * the game's own white flash plays. If this is not the true last
  * fight, the run continues. If it is, the central part rises back
  * after three seconds, puts out four arms, and the fight starts.
- * Beating it explodes that part in place. The hull is a silver
- * stand-in until the stage 5 boss sprite ids are hardcoded.
+ * Beating it explodes that part in place. The hull is the stage 5
+ * boss core (chunk 6, bank 36, pattern 41223, 3x5).
  */
 #include "kraken.h"
 #include "gfx.h"
@@ -102,6 +102,16 @@ static int s_khp, s_khp_max;
 static int s_thp[KR_TENT];
 static int s_tmax;
 static int s_hit;
+#define CORE_CH   6
+#define CORE_BANK 36
+#define CORE_PAT  41223
+#define CORE_TW   3
+#define CORE_TH   5
+static uint32_t s_core[CORE_TW * 16 * CORE_TH * 16];
+static int s_core_ok;
+#if KRAKEN_DEBUG
+static int s_hull_said;
+#endif
 static int s_drop;
 static int s_drop_dy;
 static int s_drop_done;
@@ -1338,6 +1348,7 @@ static void watch_drop(RbVm *vm, int stage)
     RbVmInfo info;
     int i;
     int living = 0;
+    int dead = 0;
 
     if (!vm || s_phase != PH_OFF) {
         return;
@@ -1354,25 +1365,31 @@ static void watch_drop(RbVm *vm, int stage)
     for (i = 0; i < 256; i++) {
         RbEntView v;
 
-        if (!vm_ent_view(vm, i, &v) || !is_fort(v.origin)) {
+        /* Kind 0041 is the core. It keeps fighting after the pylons
+         * (kinds 0042-0045) are gone. The fall starts at its hp 0. */
+        if (!vm_ent_view(vm, i, &v) || v.kind != 0x0041u) {
             continue;
         }
-        if (v.hp > 0 && !(v.type & 0x0400u) && v.w > 0 && v.h > 0) {
+        if (v.hp > 0 && !(v.type & 0x0400u)) {
             living++;
             s_saw_fort = 1;
+        } else {
+            dead++;
         }
     }
     if (living > 0) {
         s_quiet = 0;
-        /* A restarted stage 5 brings the boss back. Allow another fall. */
+        /* A restarted stage 5 brings the core back. Allow another fall. */
         if (s_drop_done && !s_drop) {
             s_drop_done = 0;
         }
+    } else if (s_saw_fort && dead && !s_drop && !s_drop_done) {
+        s_quiet = 2;
     } else if (s_saw_fort && !s_drop_done) {
         s_quiet++;
     }
-    /* Two quiet frames, so a one-frame gap in the boss parts does not
-     * start the fall in the middle of the fight. */
+    /* hp 0 starts at once. A vanished core waits two frames so a
+     * one-frame gap during the solo fight does not drop it. */
     if (s_saw_fort && s_quiet >= 2 && !s_drop && !s_drop_done) {
         s_drop = 1;
         s_drop_dy = 0;
@@ -1410,6 +1427,139 @@ static void ship_ready(RbVm *vm)
         vm_ent_place(vm, i, v.x, 330, v.bl, v.br, v.bt, v.bb);
         vm_ent_unhide(vm, i);
     }
+}
+
+static int core_opaque(const RbGfx *gfx, int index)
+{
+    uint32_t pix[256];
+    int i;
+    int n = 0;
+
+    if (!gfx || index < 0 || !gfx_sprite_rgba(gfx, CORE_BANK, index, pix)) {
+        return 0;
+    }
+    for (i = 0; i < 256; i++) {
+        if (pix[i] != 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
+static void hull_say(const char *msg)
+{
+#if KRAKEN_DEBUG
+    if (s_hull_said == 2) {
+        return;
+    }
+    fprintf(stderr, "kraken hull: %s\n", msg);
+    fflush(stderr);
+    s_hull_said = 1;
+#else
+    (void)msg;
+#endif
+}
+
+/* Stage 5 core, the frame it uses after the side pylons are gone.
+ * Chunk 6 holds the pattern bytes. Bank 36 is the sprite sheet the
+ * stage binds with opcode 0x32. */
+static int load_core(RbVm *vm)
+{
+    const uint8_t *script;
+    uint32_t n = 0;
+    uint8_t cells[CORE_TW * CORE_TH];
+    const RbGfx *gfx;
+    int rec = -1;
+    int solid;
+    int k;
+    uint32_t i;
+    int row;
+    int col;
+    int opaque = 0;
+
+    if (s_core_ok || !vm) {
+        return s_core_ok;
+    }
+    if (!vm_ensure_record(vm, CORE_CH)) {
+        hull_say("decode failed: chunk 6 not loaded");
+        return 0;
+    }
+    script = vm_chunk_bytes(vm, CORE_CH, &n);
+    if (!script || n < (uint32_t)CORE_PAT + sizeof cells) {
+        hull_say("decode failed: pattern 41223 past end of chunk 6");
+        return 0;
+    }
+    memcpy(cells, script + CORE_PAT, sizeof cells);
+    gfx = vm_gfx(vm);
+    /* Stage 5 has usually bound bank 36 already. Keep that sheet if
+     * the core cells draw. Rebinding is only for the title jump. */
+    solid = 0;
+    for (k = 0; k < (int)sizeof cells; k++) {
+        if (core_opaque(gfx, cells[k]) >= 8) {
+            solid++;
+        }
+    }
+    if (solid >= 3) {
+        rec = 0;
+    }
+    for (i = 0; i + 3u < n && rec < 0; i++) {
+        if (script[i] != 0x32u || script[i + 1] != (uint8_t)CORE_BANK) {
+            continue;
+        }
+        if (!vm_bind_record(vm, (uint8_t)CORE_BANK, script[i + 2])) {
+            continue;
+        }
+        solid = 0;
+        for (k = 0; k < (int)sizeof cells; k++) {
+            if (core_opaque(gfx, cells[k]) >= 8) {
+                solid++;
+            }
+        }
+        if (solid >= 3) {
+            rec = script[i + 2];
+        }
+    }
+    if (rec < 0) {
+        hull_say("decode failed: bank 36 has no core cells");
+        return 0;
+    }
+    memset(s_core, 0, sizeof s_core);
+    for (row = 0; row < CORE_TH; row++) {
+        for (col = 0; col < CORE_TW; col++) {
+            uint32_t pix[256];
+            int y;
+            int x;
+            int index = cells[row * CORE_TW + col];
+
+            if (!gfx_sprite_rgba(gfx, CORE_BANK, index, pix)) {
+                continue;
+            }
+            for (y = 0; y < 16; y++) {
+                for (x = 0; x < 16; x++) {
+                    uint32_t p = pix[y * 16 + x];
+
+                    if (p == 0) {
+                        continue;
+                    }
+                    s_core[(row * 16 + y) * (CORE_TW * 16) + col * 16 + x] = p;
+                    opaque++;
+                }
+            }
+        }
+    }
+    if (opaque < 40) {
+        hull_say("decode failed: core frame is empty");
+        return 0;
+    }
+    s_core_ok = 1;
+#if KRAKEN_DEBUG
+    fprintf(stderr, "kraken hull: chunk=6 bank=36 pat=41223 rec=%d 3x5\n", rec);
+    fflush(stderr);
+    s_hull_said = 2;
+#else
+    (void)rec;
+#endif
+    return 1;
 }
 
 static void start_fight(RbVm *vm)
@@ -1474,9 +1624,9 @@ static void start_fight(RbVm *vm)
     s_cyc_i = 0;
     s_cyc_t = 0;
     sys_play_music(8);
+    load_core(vm);
 #if KRAKEN_DEBUG
     s_arm = 0;
-    fprintf(stderr, "kraken hull: silver stand-in\n");
     fprintf(stderr, "kraken hp core=%d arm=%d hit=%d\n", s_khp, s_tmax, s_hit);
     fflush(stderr);
 #endif
@@ -1726,7 +1876,21 @@ static void blit_hull(uint32_t *px, int w, int h, int cx, int cy)
     int yy;
     int xx;
 
-    /* Silver stand-in core. The real hull sprite is not guessed. */
+    if (s_core_ok) {
+        int x0 = cx - (CORE_TW * 16) / 2;
+        int y0 = cy - (CORE_TH * 16) / 2;
+        int y;
+        int x;
+
+        for (y = 0; y < CORE_TH * 16; y++) {
+            for (x = 0; x < CORE_TW * 16; x++) {
+                put_px(px, w, h, x0 + x, y0 + y,
+                       s_core[y * (CORE_TW * 16) + x]);
+            }
+        }
+        return;
+    }
+    /* Shown only until chunk 6 / bank 36 can be decoded. */
     for (yy = -48; yy <= 40; yy++) {
         int half = 9;
 
@@ -1974,6 +2138,9 @@ void kraken_draw(RbVm *vm, const RbGfx *gfx, uint32_t *px, int w, int h)
     (void)gfx;
     if (!px || s_phase == PH_OFF || w < 640 || h < 400) {
         return;
+    }
+    if (vm && !s_core_ok) {
+        load_core(vm);
     }
     if (s_phase == PH_LEAVE) {
         blit_hull(px, w, h, s_hx, s_hy);
