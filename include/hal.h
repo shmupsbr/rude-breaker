@@ -345,6 +345,11 @@ void sys_audio_extra(int on);
 /* MUSIC CHIP / SFX CHIP: 0 ORIGINAL, 1 SID, 2 GAME BOY, 3 PSG, 4 PC ENGINE,
  * 5 VIRTUAL BOY, 6 ZX SPECTRUM (AY-3-8912). */
 void sys_audio_chips(int music, int sfx);
+/* MASTER VOLUME in percent (0..100), applied to the host output only. */
+void sys_audio_volume(int pct);
+/* Output shaping (eq.h): profile EQP_*, 10 custom band gains in dB
+ * (kept when NULL), balance -10..10. */
+void sys_audio_eq(int profile, const int8_t *custom, int balance);
 
 /* Milliseconds since sys_init (debug / Phase 1 only; core must not rely). */
 uint32_t sys_ticks_ms(void);
