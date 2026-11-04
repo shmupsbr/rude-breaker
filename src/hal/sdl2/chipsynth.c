@@ -225,7 +225,13 @@ static void msx2_reset(int ci);
 #ifndef JINGLE_GAIN
 #define JINGLE_GAIN g_jingle_k[c->mode]
 #endif
-static const float g_jingle_k[CHIPX_COUNT] = {1.0f, 0.9f, 1.158f, 1.848f, 2.626f, 0.9f, 1.435f, 2.479f, MD_JINGLE};
+/* v0.10.1: every chip variant except ORIGINAL a further 10 % down
+ * (JINGLE_CUT). Kept as its own factor so a retune of the table above
+ * cannot silently drop it again. */
+#define JINGLE_CUT 0.9f
+static const float g_jingle_k[CHIPX_COUNT] = {1.0f, 0.9f * JINGLE_CUT, 1.158f * JINGLE_CUT, 1.848f * JINGLE_CUT,
+                                              2.626f * JINGLE_CUT, 0.9f * JINGLE_CUT, 1.435f * JINGLE_CUT,
+                                              2.479f * JINGLE_CUT, MD_JINGLE * JINGLE_CUT};
 static int g_jingle_left[2];
 static float g_jingle_g[2] = {1.0f, 1.0f};
 
@@ -2264,15 +2270,34 @@ static float cg_sample(Chip *c, struct SidGtr *g)
         break;
     }
     case CHIPX_ZX: {
-        /* AY guitar: A = envelope saw at the note (buzzer, ANDed with
-         * its square), B = fifth, C = octave; noise pick. */
-        float a = ay_vq(e), p, ep, en;
+        /* AY guitar: A = envelope saw buzzer (in tune, see below),
+         * B = fifth, C = octave; noise pick. */
+        float a = ay_vq(e), p, ep = 0.0f, en, fe = f;
+        int k;
 
-        en = floorf(AY_CLK / (256.0f * f) + 0.5f);
-        en = en < 1.0f ? 1.0f : en;
-        ep = AY_CLK / (256.0f * en);
-        p = cg_phase(&g->ph[0], ep);
-        x += a * (ay_saw(p) * 2.0f - 1.0f);
+        /* The envelope period is coarse (clock/256): at guitar pitches
+         * a period of ~20 is up to 40 cents off and clashed with the
+         * finely tuned squares, and the saw's 5th/7th harmonics muddy
+         * the chords. Keep the buzz only where its period lands within
+         * 5 cents of the note; otherwise play a square at the note. */
+        for (k = 0; k < 1; k++, fe *= 0.5f) {
+            float r;
+
+            en = floorf(AY_CLK / (256.0f * fe) + 0.5f);
+            en = en < 1.0f ? 1.0f : en;
+            r = AY_CLK / (256.0f * en) / fe;
+            if (fabsf(1200.0f * log2f(r)) <= 5.0f) {
+                ep = AY_CLK / (256.0f * en);
+                break;
+            }
+        }
+        if (ep > 0.0f) {
+            p = cg_phase(&g->ph[0], ep);
+            x += a * (ay_saw(p) * 2.0f - 1.0f);
+        } else {
+            p = cg_phase(&g->ph[0], ay_f(f));
+            x += (p < 0.5f ? 1.0f : -1.0f) * a;
+        }
         p = cg_phase(&g->ph[1], ay_f(f * 1.4983f));
         x += (p < 0.5f ? 1.0f : -1.0f) * ay_vq(e * 0.75f);
         p = cg_phase(&g->ph[2], ay_f(f * 2.0f));
