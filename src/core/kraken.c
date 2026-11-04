@@ -1,11 +1,9 @@
 /**
  * Kraken. Host fight drawn over the stage the ship is already in.
  *
- * The central hull is the middle of the recurring mid-boss sprite
- * (the ship that enters and leaves every stage, not the stage 5
- * fortress). Arms, orbs and the fallback pod are new pixels in the
- * palette the stage is already using. Fortress patterns are the
- * fortress's own scripts, run at half their wait.
+ * The central hull is a silver stand-in until the recurring mid-boss
+ * sprite ids are hardcoded. Arms and orbs are new pixels. Fortress
+ * patterns are the fortress's own scripts, run at half their wait.
  */
 #include "kraken.h"
 #include "gfx.h"
@@ -123,11 +121,6 @@ static int s_noship;
 static int s_boom[KR_TENT];
 static int s_bx[KR_TENT], s_by[KR_TENT];
 static int s_big;
-static uint32_t s_himg[192 * 256];
-static int s_him_w, s_him_h, s_hok;
-#if KRAKEN_DEBUG
-static int s_hlog;
-#endif
 #if KRAKEN_DEBUG
 static int s_arm;
 static int s_bypass;
@@ -323,8 +316,6 @@ void kraken_reset(void)
     s_big = 0;
     s_cyc_i = 0;
     s_cyc_t = 0;
-    s_hok = 0;
-    s_him_w = s_him_h = 0;
     memset(s_boom, 0, sizeof s_boom);
     slots_init();
 #if KRAKEN_DEBUG
@@ -351,6 +342,50 @@ void kraken_debug_arm(void)
 int kraken_debug_armed(void)
 {
     return s_arm;
+}
+
+void kraken_dump_screen(const RbVm *vm)
+{
+    int i;
+    int n = 0;
+
+    fprintf(stderr,
+            "kraken dump begin (chunk=script record, bank=sprite sheet, pat=pattern word, cells=frame bytes)\n");
+    if (!vm) {
+        fprintf(stderr, "kraken dump end n=0\n");
+        return;
+    }
+    for (i = 0; i < 256; i++) {
+        RbEntView v;
+        uint8_t cells[12];
+        int nc;
+        int k;
+        char cellbuf[48];
+        int used = 0;
+
+        if (!vm_ent_view(vm, i, &v)) {
+            continue;
+        }
+        nc = vm_ent_cells(vm, i, cells, (int)sizeof cells);
+        cellbuf[0] = 0;
+        for (k = 0; k < nc && k < 12; k++) {
+            int wr = snprintf(cellbuf + used, sizeof cellbuf - (size_t)used,
+                              "%s%u", k ? "," : "", (unsigned)cells[k]);
+
+            if (wr < 0 || used + wr >= (int)sizeof cellbuf) {
+                break;
+            }
+            used += wr;
+        }
+        fprintf(stderr,
+                "kraken obj slot=%d type=%04X kind=%04X org=%04X chunk=%u bank=%u pat=%u x=%d y=%d w=%u h=%u hp=%u cells=%s\n",
+                i, v.type, v.kind, v.origin, (unsigned)v.cof, (unsigned)v.seg,
+                (unsigned)v.pat, (int)v.x, (int)v.y, (unsigned)v.w, (unsigned)v.h,
+                (unsigned)v.hp, cellbuf);
+        n++;
+    }
+    fprintf(stderr, "kraken dump end n=%d\n", n);
+    fflush(stderr);
 }
 #endif
 
@@ -1106,169 +1141,6 @@ static void replay_cycle(RbVm *vm)
     }
 }
 
-static int hull_opaque(void)
-{
-    int i;
-    int n = 0;
-    int tot = s_him_w * s_him_h;
-
-    for (i = 0; i < tot; i++) {
-        if (s_himg[i] != 0) {
-            n++;
-        }
-    }
-    return n;
-}
-
-static void paint_cells(const RbGfx *gfx, const uint8_t *cells, int w, int h,
-                        int seg, int c0, int c1)
-{
-    int cols = c1 - c0;
-    int row;
-    int col;
-
-    if (cols < 1 || h < 1 || cols * 16 > 192 || h * 16 > 256) {
-        return;
-    }
-    s_him_w = cols * 16;
-    s_him_h = h * 16;
-    memset(s_himg, 0, sizeof s_himg);
-    for (row = 0; row < h; row++) {
-        for (col = c0; col < c1; col++) {
-            uint32_t cell[256];
-            int y;
-            int x;
-            int index = cells[row * w + col];
-
-            if (!gfx || !gfx_sprite_rgba(gfx, (uint8_t)seg, index, cell)) {
-                continue;
-            }
-            for (y = 0; y < 16; y++) {
-                for (x = 0; x < 16; x++) {
-                    s_himg[(row * 16 + y) * s_him_w + (col - c0) * 16 + x] = cell[y * 16 + x];
-                }
-            }
-        }
-    }
-}
-
-/* Pull the recurring mid-boss out of the stage chunks and keep its
- * central hull (the side pylons are the outer columns). */
-static void capture_live_hull(RbVm *vm, const RbGfx *gfx)
-{
-    int i;
-    int best = -1;
-    int best_area = 0;
-    RbEntView v;
-    uint8_t cells[24 * 24];
-    int n;
-    int c0;
-    int c1;
-
-    if (!vm || s_hok) {
-        return;
-    }
-    for (i = 0; i < 256; i++) {
-        int area;
-
-        if (!vm_ent_view(vm, i, &v)) {
-            continue;
-        }
-        if (v.kind == 0x0012u || v.kind == 0x0014u || (v.type & 0x0080u)) {
-            continue;
-        }
-        area = (int)v.w * (int)v.h;
-        if (v.w >= 3 && v.h >= 4 && area > best_area && area <= 24 * 24) {
-            best_area = area;
-            best = i;
-        }
-    }
-    if (best < 0 || !vm_ent_view(vm, best, &v)) {
-        return;
-    }
-    n = vm_ent_cells(vm, best, cells, 24 * 24);
-    if (n < v.w * v.h) {
-        return;
-    }
-    if (v.w >= 5) {
-        c0 = v.w / 3;
-        c1 = v.w - v.w / 3;
-        if (c1 <= c0) {
-            c0 = v.w / 2;
-            c1 = c0 + 1;
-        }
-    } else {
-        c0 = 0;
-        c1 = v.w;
-    }
-    paint_cells(gfx, cells, v.w, v.h, (int)v.seg, c0, c1);
-    if (hull_opaque() >= 40) {
-        s_hok = 1;
-    }
-}
-
-static void build_hull(RbVm *vm, const RbGfx *gfx)
-{
-    uint8_t cells[24 * 24];
-    int w = 0;
-    int h = 0;
-    int seg = 0;
-    int c0;
-    int c1;
-
-    if (s_hok || !vm) {
-        return;
-    }
-    if (!vm_load_halb(vm, cells, 24 * 24, &w, &h, &seg)) {
-#if KRAKEN_DEBUG
-        if (!s_hlog) {
-            s_hlog = 1;
-            fprintf(stderr, "kraken hull: decode failed: %s\n",
-                    vm_halb_why() ? vm_halb_why() : "unknown");
-        }
-#endif
-        return;
-    }
-#if KRAKEN_DEBUG
-    if (!s_hlog) {
-        s_hlog = 1;
-        fprintf(stderr, "kraken hull: %s\n", vm_halb_why() ? vm_halb_why() : "ok");
-    }
-#endif
-    if (w >= 5) {
-        c0 = w / 3;
-        c1 = w - w / 3;
-        if (c1 <= c0) {
-            c0 = w / 2;
-            c1 = c0 + 1;
-        }
-    } else {
-        c0 = 0;
-        c1 = w;
-    }
-    paint_cells(gfx, cells, w, h, seg, c0, c1);
-    if (hull_opaque() < 40) {
-        c0 = 0;
-        c1 = w;
-        if (c1 * 16 > 192) {
-            int mid = w / 2;
-            int half = 192 / 32;
-
-            c0 = mid - half;
-            c1 = mid + half;
-            if (c0 < 0) {
-                c0 = 0;
-            }
-            if (c1 > w) {
-                c1 = w;
-            }
-        }
-        paint_cells(gfx, cells, w, h, seg, c0, c1);
-    }
-    if (hull_opaque() >= 40) {
-        s_hok = 1;
-    }
-}
 
 static void start_fight(RbVm *vm)
 {
@@ -1280,10 +1152,6 @@ static void start_fight(RbVm *vm)
     close_cycle();
     s_ncyc = count_cycles();
     vm_set_kraken_take(vm, 0);
-    build_hull(vm, vm_gfx(vm));
-    if (!s_hok) {
-        capture_live_hull(vm, vm_gfx(vm));
-    }
     for (i = 0; i < 256; i++) {
         RbEntView v;
 
@@ -1427,13 +1295,11 @@ void kraken_after(RbVm *vm, int stage, int paused)
                     }
                 }
             }
-            /* Stage 1 shows the ship within a couple of seconds. Starting
-             * before that kills the script that would spawn it. */
-            /* Wait until stage 5 has painted stars, then start. Starting
-             * on the reset frame leaves a black field and kills the
-             * script that would have drawn it. */
-            if (slot >= 0 && shown &&
-                (gfx_bg_lit(vm_gfx(vm)) >= 6 || s_dbg_f > 240)) {
+            /* The stage has to paint its own background first. A timeout
+             * used to begin the fight on black and then stop that
+             * painting forever. */
+            if (slot >= 0 && shown && s_dbg_f > 45 &&
+                gfx_bg_lit(vm_gfx(vm)) >= 24) {
                 start_fight(vm);
             }
         }
@@ -1533,9 +1399,6 @@ void kraken_after(RbVm *vm, int stage, int paused)
         }
     }
     if (s_phase != PH_OFF) {
-        if (!s_hok) {
-            build_hull(vm, vm_gfx(vm));
-        }
         vm_redraw(vm);
     }
 }
@@ -1548,9 +1411,8 @@ static void put_px(uint32_t *px, int w, int h, int x, int y, uint32_t c)
     px[(size_t)y * (size_t)w + (size_t)x] = c;
 }
 
-#define METAL_OUT 0x3A4048FFu
-#define METAL_SH  0x9AA4B0FFu
-#define METAL_MID 0xD0D6DEFF
+#define METAL_OUT 0xA8B0BCFFu
+#define METAL_SH  0xD5DCE6FFu
 #define METAL_LIT 0xF7F9FCFF
 #define METAL_HI  0xFFFFFFFF
 #define JOINT_RED 0xE02820FFu
@@ -1560,35 +1422,26 @@ static void put_px(uint32_t *px, int w, int h, int x, int y, uint32_t c)
 
 static void blit_hull(uint32_t *px, int w, int h, int cx, int cy)
 {
-    int x;
-    int y;
-    int x0 = cx - s_him_w / 2;
-    int y0 = cy - s_him_h / 2;
+    int yy;
+    int xx;
 
-    if (!s_hok) {
-        /* Decode missed: still put a bright core where the arms meet. */
-        int yy;
-        int xx;
+    /* Silver stand-in core. The real hull sprite is not guessed. */
+    for (yy = -48; yy <= 40; yy++) {
+        int half = 9;
 
-        for (yy = -28; yy <= 28; yy++) {
-            int half = 7 - (yy > 10 ? (yy - 10) / 4 : yy < -14 ? (-14 - yy) / 3 : 0);
-
-            if (half < 4) {
-                half = 4;
-            }
-            for (xx = -half; xx <= half; xx++) {
-                uint32_t col = (xx == -half || xx == half || yy == -28 || yy == 28)
-                                   ? METAL_OUT
-                                   : (xx >= half - 2 ? METAL_HI : METAL_LIT);
-
-                put_px(px, w, h, cx + xx, cy + yy, col);
-            }
+        if (yy < -32) {
+            half = 6;
+        } else if (yy > 22) {
+            half = 7 - (yy - 22) / 5;
         }
-        return;
-    }
-    for (y = 0; y < s_him_h; y++) {
-        for (x = 0; x < s_him_w; x++) {
-            put_px(px, w, h, x0 + x, y0 + y, s_himg[y * s_him_w + x]);
+        if (half < 4) {
+            half = 4;
+        }
+        for (xx = -half; xx <= half; xx++) {
+            int edge = xx == -half || xx == half || yy == -48 || yy == 40;
+            uint32_t col = edge ? METAL_OUT : (xx >= half - 3 ? METAL_HI : METAL_LIT);
+
+            put_px(px, w, h, cx + xx, cy + yy, col);
         }
     }
 }
@@ -1601,24 +1454,11 @@ static void draw_seg(uint32_t *px, int w, int h, int x0, int y0, int x1, int y1,
     int steps = dx < 0 ? -dx : dx;
     int sy = dy < 0 ? -dy : dy;
     int s;
-    int pxn;
-    int pyn;
-    int plen;
-
     if (sy > steps) {
         steps = sy;
     }
     if (steps < 1) {
         steps = 1;
-    }
-    pxn = -dy;
-    pyn = dx;
-    plen = pxn < 0 ? -pxn : pxn;
-    if ((pyn < 0 ? -pyn : pyn) > plen) {
-        plen = pyn < 0 ? -pyn : pyn;
-    }
-    if (plen < 1) {
-        plen = 1;
     }
     for (s = 0; s <= steps; s++) {
         int x = x0 + dx * s / steps;
@@ -1639,17 +1479,19 @@ static void draw_seg(uint32_t *px, int w, int h, int x0, int y0, int x1, int y1,
                 if (d2 > (rad + 1) * (rad + 1)) {
                     continue;
                 }
-                side = ox * pxn / plen + oy * pyn / plen;
+                /* Upper-left of each disc is the white band. A direction
+                 * test collapsed to 0 here and the whole arm went flat. */
+                side = ox + oy;
                 if (d2 > rad * rad) {
                     col = METAL_OUT;
                 } else if (joint && s >= steps - 2) {
                     col = JOINT_RED;
-                } else if (side > rad / 3) {
+                } else if (side < -(rad / 2)) {
                     col = METAL_HI;
-                } else if (side >= 0) {
-                    col = METAL_LIT;
+                } else if (side > rad - 1) {
+                    col = METAL_SH;
                 } else {
-                    col = METAL_MID;
+                    col = METAL_LIT;
                 }
                 put_px(px, w, h, x + ox, y + oy, col);
             }
@@ -1761,10 +1603,10 @@ static void draw_arm(uint32_t *px, int w, int h, int ti)
     for (s = 0; s < KR_SEGS; s++) {
         int x1 = s_px[ti][s];
         int y1 = s_py[ti][s];
-        int thick = 22 - s;
+        int thick = 30 - s * 2;
 
-        if (thick < 12) {
-            thick = 12;
+        if (thick < 16) {
+            thick = 16;
         }
         if (s + 1 == KR_SEGS) {
             draw_seg(px, w, h, x0, y0, x1, y1, thick, 1);
@@ -1784,9 +1626,6 @@ void kraken_draw(RbVm *vm, const RbGfx *gfx, uint32_t *px, int w, int h)
     (void)gfx;
     if (!px || s_phase == PH_OFF || w < 640 || h < 400) {
         return;
-    }
-    if (!s_hok && vm) {
-        build_hull(vm, vm_gfx(vm));
     }
     if (s_phase == PH_LEAVE) {
         blit_hull(px, w, h, s_hx, s_hy);

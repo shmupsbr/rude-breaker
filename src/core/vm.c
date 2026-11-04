@@ -5647,14 +5647,17 @@ static int kraken_keep_ent(const RbVm *vm, int i)
         return 1;
     }
     /* Player shots on the ship sheet (draw code: type bit 0x0004, bank 26). */
-    if ((t & 0x0004u) && eu16(vm, i, 0x3A) == 26u) {
+    /* Player shots: bit 0x1000, or a kind-0 sprite on the ship sheet. */
+    if ((t & 0x0004u) && (kind == 0 || eu16(vm, i, 0x3A) == 26u)) {
         return 1;
     }
-    if (org >= 0x6200u && org <= 0x6700u) {
-        return 1;
+    /* Stage foes (0x0020/0x0040, the bits a player shot tests) and
+     * enemy bullets (0x0080). Anything else stays, including the shot
+     * controller, so the ship keeps firing after the foes are gone. */
+    if ((t & 0x0080u) || ((t & 0x0060u) && !(t & 0x1000u))) {
+        return 0;
     }
-    (void)kind;
-    return 0;
+    return 1;
 }
 
 void vm_redraw(RbVm *vm)

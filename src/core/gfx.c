@@ -3369,8 +3369,8 @@ int gfx_bg_lit(const RbGfx *gfx)
     if (!gfx || !gfx->bg) {
         return 0;
     }
-    for (y = 16; y < RB_GFX_H - 16; y += 16) {
-        for (x = 96; x < 544; x += 16) {
+    for (y = 16; y < RB_GFX_H - 16; y += 4) {
+        for (x = 96; x < 544; x += 4) {
             if (gfx->bg[pix_at(x, y)] != 0) {
                 n++;
             }
