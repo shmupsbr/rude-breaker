@@ -95,9 +95,55 @@ void vm_set_shot_pct(RbVm *vm, unsigned pct);
 void vm_set_return_fire(RbVm *vm, int force);
 /* LOOP: when on, the load of the ending after stage 5 loads stage 1
  * instead, with C9 / B2 set to c9 / b2 before the stage init runs.
- * vm_take_loop returns 1 once per such load. */
+ * vm_take_loop returns 1 once per such load. The host turns this on
+ * only for the first clear, so the run is exactly two loops. */
 void vm_set_loop(RbVm *vm, int on, unsigned c9, unsigned b2);
 int  vm_take_loop(RbVm *vm);
+/* When take is set, the ending load after stage 5 is swallowed once
+ * and vm_take_kraken returns 1. The stage stays up for the host fight. */
+void vm_set_kraken_take(RbVm *vm, int on);
+int  vm_take_kraken(RbVm *vm);
+/* Drop every entity that is not the ship, its options, or its shots. */
+void vm_kraken_isolate(RbVm *vm);
+/* Load the ending (record 1 header 3) on a fresh slot. Loop redirect
+ * is forced off for this load. */
+void vm_force_ending(RbVm *vm);
+void vm_add_score(RbVm *vm, uint32_t add);
+
+typedef struct RbEntView {
+    uint16_t type;
+    uint16_t kind;
+    uint16_t origin;
+    uint16_t hp;
+    int16_t  x;
+    int16_t  y;
+    int16_t  bl, br, bt, bb;
+    uint16_t pat;
+    uint16_t seg;
+    uint8_t  w, h;
+    uint8_t  cof;
+    uint8_t  alive;
+} RbEntView;
+
+int  vm_ent_view(const RbVm *vm, int i, RbEntView *out);
+int  vm_ent_cells(const RbVm *vm, int i, uint8_t *dst, int max);
+void vm_ent_place(RbVm *vm, int i, int16_t x, int16_t y,
+                  int16_t bl, int16_t br, int16_t bt, int16_t bb);
+void vm_ent_set_hp(RbVm *vm, int i, uint16_t hp);
+void vm_ent_clear(RbVm *vm, int i);
+/* Invisible holder. Origin 0xCE11, script does not run. -1 if full. */
+int  vm_spawn_hold(RbVm *vm, uint16_t type, int16_t x, int16_t y, uint16_t hp,
+                   int16_t bl, int16_t br, int16_t bt, int16_t bb);
+/* Run an existing stage-chunk script at half its wait counts. */
+int  vm_spawn_haste(RbVm *vm, int chunk, uint16_t ip, uint16_t type,
+                    int16_t x, int16_t y);
+/* Copy a captured entity and run it from ip, waits halved. */
+int  vm_spawn_snap(RbVm *vm, const uint8_t raw[82], uint8_t cof, uint16_t ip,
+                   uint16_t origin, int16_t x, int16_t y);
+void vm_clear_haste(RbVm *vm);
+const uint8_t *vm_chunk_bytes(const RbVm *vm, int chunk, uint32_t *len);
+/* 82-byte entity image, for a later snap spawn. Returns 0 if empty. */
+int  vm_ent_raw(const RbVm *vm, int i, uint8_t raw[82], uint16_t *ip);
 int vm_bonus_1000(RbVm *vm, int dy);
 unsigned vm_shot_c9_hits(const RbVm *vm);
 int  vm_training(const RbVm *vm);

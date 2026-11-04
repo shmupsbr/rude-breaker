@@ -125,6 +125,9 @@ typedef struct RB_PACKED RbInput {
 #define RB_BTN_4        0x0800u
 /* Host-only speed button (> >> >>>). The game script never sees it. */
 #define RB_BTN_SPEED    0x2000u
+/* Debug-build shortcut into the true last boss. The release input
+ * path never sets it, and the script mapping ignores it. */
+#define RB_BTN_BOSS     0x4000u
 
 /* ---- entities (shared layout for Phase 1 and Phase 2) ------------------- */
 
