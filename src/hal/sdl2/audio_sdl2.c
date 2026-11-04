@@ -11,6 +11,8 @@
 #include <string.h>
 #include <math.h>
 
+#include "eq.h"
+
 static SDL_AudioDeviceID g_dev;
 static int g_opened;
 static int g_paused;
@@ -174,6 +176,47 @@ void sys_audio_chips(int music, int sfx)
     }
 }
 
+/* MASTER VOLUME: host gain on the mixed output, after the meters.
+ * 100 % leaves the samples untouched. Squared so the 10 % steps sound
+ * even. Q15. */
+static volatile int g_master_q15 = 32768;
+/* BALANCE / OUTPUT PROFILE / CUSTOM EQ (bypassed when FLAT, centred). */
+static EqChain g_eq = { .bypass = 1 };
+static int     g_eq_rate = 44100;
+static int     g_eq_prof;
+static int8_t  g_eq_custom[EQ_BANDS];
+static int     g_eq_bal;
+
+static void eq_apply(void)
+{
+    EqChain c;
+
+    eq_design(&c, g_eq_rate, g_eq_prof, g_eq_custom, g_eq_bal);
+    if (g_dev) {
+        SDL_LockAudioDevice(g_dev);
+    }
+    g_eq = c;
+    if (g_dev) {
+        SDL_UnlockAudioDevice(g_dev);
+    }
+}
+
+void sys_audio_eq(int profile, const int8_t *custom, int balance)
+{
+    if (custom) {
+        memcpy(g_eq_custom, custom, sizeof g_eq_custom);
+    }
+    g_eq_prof = profile;
+    g_eq_bal = balance;
+    eq_apply();
+}
+
+void sys_audio_volume(int pct)
+{
+    pct = pct < 0 ? 0 : pct > 100 ? 100 : pct;
+    g_master_q15 = pct * pct * 32768 / 10000;
+}
+
 static void audio_cb(void *userdata, Uint8 *stream, int len)
 {
     int frames = len / (int)(2 * sizeof(int16_t));
@@ -203,6 +246,16 @@ static void audio_cb(void *userdata, Uint8 *stream, int len)
     }
     note_level((const int16_t *)stream, frames);
     vu_feed((const int16_t *)stream, frames);
+    eq_run(&g_eq, (int16_t *)stream, frames);
+    if (g_master_q15 < 32768) {
+        int16_t *o = (int16_t *)stream;
+        int q = g_master_q15;
+        int k;
+
+        for (k = 0; k < 2 * frames; k++) {
+            o[k] = (int16_t)(((int32_t)o[k] * q) >> 15);
+        }
+    }
 }
 
 static void audio_resume(void)
@@ -236,6 +289,8 @@ static void open_device(void)
         return;
     }
     vu_setup(got.freq);
+    g_eq_rate = got.freq;
+    eq_apply();
     SDL_PauseAudioDevice(g_dev, 0);
     g_opened = 1;
 }

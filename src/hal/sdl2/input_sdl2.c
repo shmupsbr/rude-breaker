@@ -422,6 +422,55 @@ static void apply_custom(const Uint8 *keys, RbInput *out)
     (void)custom_pad;
 }
 
+/* Readable names for pad buttons in DEFINE KEYS (18 chars at most),
+ * by controller family where SDL knows it. */
+static const char *pad_button_name(int btn)
+{
+    int fam = 0; /* 0 generic/Xbox, 1 PlayStation, 2 Nintendo */
+
+    if (g_pad) {
+        switch (SDL_GameControllerGetType(g_pad)) {
+        case SDL_CONTROLLER_TYPE_PS3:
+        case SDL_CONTROLLER_TYPE_PS4:
+        case SDL_CONTROLLER_TYPE_PS5:
+            fam = 1;
+            break;
+        case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_PRO:
+        case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
+        case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
+        case SDL_CONTROLLER_TYPE_NINTENDO_SWITCH_JOYCON_PAIR:
+            fam = 2;
+            break;
+        default:
+            break;
+        }
+    }
+    switch (btn) {
+    case SDL_CONTROLLER_BUTTON_A: return fam == 1 ? "CROSS" : fam == 2 ? "B (BOTTOM)" : "A";
+    case SDL_CONTROLLER_BUTTON_B: return fam == 1 ? "CIRCLE" : fam == 2 ? "A (RIGHT)" : "B";
+    case SDL_CONTROLLER_BUTTON_X: return fam == 1 ? "SQUARE" : fam == 2 ? "Y (LEFT)" : "X";
+    case SDL_CONTROLLER_BUTTON_Y: return fam == 1 ? "TRIANGLE" : fam == 2 ? "X (TOP)" : "Y";
+    case SDL_CONTROLLER_BUTTON_BACK: return fam == 1 ? "SHARE / SELECT" : fam == 2 ? "MINUS" : "VIEW / BACK";
+    case SDL_CONTROLLER_BUTTON_GUIDE: return fam == 1 ? "PS BUTTON" : fam == 2 ? "HOME" : "GUIDE";
+    case SDL_CONTROLLER_BUTTON_START: return fam == 1 ? "OPTIONS / START" : fam == 2 ? "PLUS" : "MENU / START";
+    case SDL_CONTROLLER_BUTTON_LEFTSTICK: return fam == 1 ? "L3" : "LEFT STICK PRESS";
+    case SDL_CONTROLLER_BUTTON_RIGHTSTICK: return fam == 1 ? "R3" : "RIGHT STICK PRESS";
+    case SDL_CONTROLLER_BUTTON_LEFTSHOULDER: return fam == 1 ? "L1" : fam == 2 ? "L" : "LB";
+    case SDL_CONTROLLER_BUTTON_RIGHTSHOULDER: return fam == 1 ? "R1" : fam == 2 ? "R" : "RB";
+    case SDL_CONTROLLER_BUTTON_DPAD_UP: return "D-PAD UP";
+    case SDL_CONTROLLER_BUTTON_DPAD_DOWN: return "D-PAD DOWN";
+    case SDL_CONTROLLER_BUTTON_DPAD_LEFT: return "D-PAD LEFT";
+    case SDL_CONTROLLER_BUTTON_DPAD_RIGHT: return "D-PAD RIGHT";
+    case SDL_CONTROLLER_BUTTON_MISC1: return fam == 1 ? "MIC" : fam == 2 ? "CAPTURE" : "SHARE / MISC";
+    case SDL_CONTROLLER_BUTTON_PADDLE1: return "BACK PADDLE 1";
+    case SDL_CONTROLLER_BUTTON_PADDLE2: return "BACK PADDLE 2";
+    case SDL_CONTROLLER_BUTTON_PADDLE3: return "BACK PADDLE 3";
+    case SDL_CONTROLLER_BUTTON_PADDLE4: return "BACK PADDLE 4";
+    case SDL_CONTROLLER_BUTTON_TOUCHPAD: return "TOUCHPAD CLICK";
+    default: return NULL;
+    }
+}
+
 static void fill_label(int action)
 {
     const Bind *b = &g_bind[action];
@@ -436,7 +485,7 @@ static void fill_label(int action)
         }
     } else if (b->kind == RB_BIND_BUTTON) {
         if (b->pad) {
-            s = SDL_GameControllerGetStringForButton((SDL_GameControllerButton)b->a);
+            s = pad_button_name(b->a);
             if (!s || !s[0]) {
                 snprintf(tmp, sizeof tmp, "BUTTON %d", b->a);
                 s = tmp;
@@ -446,10 +495,31 @@ static void fill_label(int action)
             s = tmp;
         }
     } else if (b->kind == RB_BIND_AXIS) {
-        snprintf(tmp, sizeof tmp, "AXIS %d%c", b->a, b->b < 0 ? '-' : '+');
+        if (b->pad) {
+            static const char *const ax[] = {
+                "LEFT STICK X", "LEFT STICK Y", "RIGHT STICK X",
+                "RIGHT STICK Y", "LEFT TRIGGER", "RIGHT TRIGGER"
+            };
+
+            if (b->a == SDL_CONTROLLER_AXIS_LEFTX || b->a == SDL_CONTROLLER_AXIS_RIGHTX) {
+                snprintf(tmp, sizeof tmp, "%s %s", b->a ? "R STICK" : "L STICK",
+                         b->b < 0 ? "LEFT" : "RIGHT");
+            } else if (b->a == SDL_CONTROLLER_AXIS_LEFTY || b->a == SDL_CONTROLLER_AXIS_RIGHTY) {
+                snprintf(tmp, sizeof tmp, "%s %s", b->a == 1 ? "L STICK" : "R STICK",
+                         b->b < 0 ? "UP" : "DOWN");
+            } else if (b->a >= 0 && b->a < 6) {
+                snprintf(tmp, sizeof tmp, "%s", ax[b->a]);
+            } else {
+                snprintf(tmp, sizeof tmp, "AXIS %d%c", b->a, b->b < 0 ? '-' : '+');
+            }
+        } else {
+            snprintf(tmp, sizeof tmp, "AXIS %d%c", b->a, b->b < 0 ? '-' : '+');
+        }
         s = tmp;
     } else if (b->kind == RB_BIND_HAT) {
-        snprintf(tmp, sizeof tmp, "HAT %d", b->b);
+        snprintf(tmp, sizeof tmp, "HAT %s",
+                 b->b == SDL_HAT_UP ? "UP" : b->b == SDL_HAT_DOWN ? "DOWN" :
+                 b->b == SDL_HAT_LEFT ? "LEFT" : b->b == SDL_HAT_RIGHT ? "RIGHT" : "?");
         s = tmp;
     }
     snprintf(g_label[action], sizeof g_label[action], "%s", s);
@@ -889,8 +959,13 @@ void sys_read_input(RbInput *out)
         if (ev.type == SDL_JOYDEVICEADDED || ev.type == SDL_JOYDEVICEREMOVED ||
             ev.type == SDL_CONTROLLERDEVICEADDED ||
             ev.type == SDL_CONTROLLERDEVICEREMOVED) {
-            close_dev();
-            bind_device();
+            /* Keep the controller in use when another one comes or
+             * goes; look again only when it is gone (or there was none). */
+            if (!(g_dev_is_pad ? g_pad && SDL_GameControllerGetAttached(g_pad)
+                               : g_joy && SDL_JoystickGetAttached(g_joy))) {
+                close_dev();
+                bind_device();
+            }
         }
         if (ev.type == SDL_JOYBUTTONDOWN && !g_dev_is_pad && !g_cap) {
             learn_start((int)ev.jbutton.button);
