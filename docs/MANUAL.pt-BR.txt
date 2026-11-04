@@ -302,7 +302,7 @@ rudebreaker.cfg, então saves de versões anteriores carregam sem mudança.
 GAMEPLAY
 
   Opções, nesta ordem: DIFFICULTY, RANK, SUICIDE BULLETS, SHIP SELECT,
-  SHIP SPEED, TRAINING, LOOP, ATTRACT MODE, I-FRAMES e BACK.
+  SHIP SPEED, TRAINING, ATTRACT MODE, I-FRAMES e BACK.
 
   DIFFICULTY       VERY EASY, EASY, NORMAL, HARD, VERY HARD. São os
                    próprios níveis de dificuldade do jogo original.
@@ -345,13 +345,6 @@ GAMEPLAY
 
   TRAINING         ON: modo de treino (veja a seção 5). OFF: jogo
                    normal.
-
-  LOOP             ON (padrão) ou OFF. OFF: o jogo termina depois da
-                   fase 5 com o final, como no original. ON: vencer a fase 5 começa
-                   a fase 1 de novo como loop 2, depois loop 3 e assim
-                   por diante, mantendo pontuação, vidas e armas. Cada
-                   loop é mais difícil (veja a seção 6). Salvo no
-                   rudebreaker.cfg.
 
   ATTRACT MODE     ON (padrão) ou OFF. ON: depois da tela de ranking
                    roda uma demo de 30 segundos (sem música, só efeitos
@@ -510,9 +503,8 @@ GRAPHICS
                    depois NO (sem contagem). Continua NO pelas cinco fases e num continue, e só
                    volta a YES numa partida nova. No Training o
                    cabeçalho do quadro também mostra TRAINING.
-                   A partir do loop 2 (LOOP ON) o título do quadro
-                   RANK também mostra o loop: LOOP 2, LOOP 3 ... Fica
-                   oculto no loop 1 e com LOOP OFF.
+                   A partir do loop 2 o título do quadro RANK também
+                   mostra o loop: LOOP 2. Fica oculto no loop 1.
                    O layout vertical (retrato) não é mais uma escolha do
                    SIDE PANELS: ele vem do ORIENTATION 90 ou 270. Um
                    save de versão anterior com SIDE PANELS TATE carrega
@@ -741,7 +733,7 @@ PASSWORD           Abre a tela de senha original.
 ORIGINAL PRESET    Um passo para o jogo como era no disco do PC-98,
                    por exemplo para comparar. Aperte Fire uma vez:
                    aparece PRESS AGAIN; aperte Fire de novo para
-                   confirmar. Põe LOOP OFF, RANK OFF, SHIP SELECT ON (a
+                   confirmar. Põe RANK OFF, SHIP SELECT ON (a
                    escolha de arma, como no disco), SOUND CHANNELS
                    ORIGINAL, a paleta original, sem COLOR FILTER, sem
                    CRT, sem painéis laterais, cores de tiro originais,
@@ -911,61 +903,55 @@ A cadência e a quantidade de tiros dos inimigos não mudam: nos dados
 do jogo o tempo de tiro de cada inimigo é um contador próprio dentro
 do script dele, e não dá para mudar isso para todos sem alterar os
 padrões.
-Com LOOP, cada loop novo começa o rank 100 mais alto e permite 50 a
-mais (no máximo 1000), e o rank sobe o número do loop vezes mais
-rápido (veja LOOP abaixo).
+O loop 2 começa o rank 100 mais alto e permite 50 a mais (no máximo
+1000), e o rank sobe duas vezes mais rápido (veja DOIS LOOPS abaixo).
 Não vale no Training. RANK OFF desliga tudo isso.
 
-O LOOP (opção do GAMEPLAY, ON por padrão) é uma adição deste port.
-Com LOOP ON, vencer a fase 5 não mostra o final: a fase 1 começa de
-novo como loop 2, depois loop 3 e assim por diante, e você mantém
-pontuação, vidas e armas. Em cada loop novo:
+DOIS LOOPS é como toda partida é jogada. Não há opção LOOP. Vencer a
+fase 5 não mostra o final: a fase 1 começa de novo como loop 2, e você
+mantém pontuação, vidas e armas. Depois da fase 5 do loop 2 a partida
+termina, salvo se o Kraken aparecer (abaixo). No loop 2:
 
-  - A dificuldade base fica um nível acima da do loop anterior, a
-    partir da DIFFICULTY escolhida (VERY EASY -> EASY -> NORMAL ->
-    HARD -> VERY HARD). Em VERY HARD ela fica em VERY HARD e só o
-    multiplicador de loop abaixo continua crescendo. O nível novo, com
-    os ajustes do próprio jogo para ele (tiros e resistência dos
-    inimigos), vale a partir do começo da fase 1 do loop.
-  - O rank recomeça no ponto inicial da base nova. O teto de subida,
-    os limites do rank e a aceleração no teto seguem a base do mesmo
-    jeito que seguem a sua DIFFICULTY no loop 1 (por exemplo, uma
-    partida em NORMAL fica HARD no loop 2, e lá pode subir até VERY
-    HARD).
-  - Todo valor controlado pelo rank é multiplicado pelo número do
-    loop: x1 no loop 1, x2 no loop 2, x3 no loop 3 e assim por diante.
-    Isso vale para a velocidade com que o rank sobe, para quanto o
-    rank soma à velocidade dos tiros inimigos e para os passos de +1%
-    da aceleração no teto. Limites: o multiplicador para em x8 (loop 8
-    em diante); a velocidade dos tiros inimigos nunca passa do valor
-    VERY HARD do próprio jogo; a aceleração no teto vai até +25% vezes
-    o multiplicador, mas nunca passa de +50%.
-  - A partir do loop 2 (fora do Training), o ganho de rank é
-    multiplicado pelo número do loop nos dois modos de rank, e os
-    tiros inimigos ficam mais rápidos com o rank dentro do loop: a
-    faixa de rank do loop (do início ao teto) é dividida em 10
-    passos, e cada passo soma 5% de velocidade vezes (loop - 1): +5%
-    por passo no loop 2, +10% no loop 3 e assim por diante, até no
-    máximo +100%.
-  - A partir do loop 2, SUICIDE BULLETS fica sempre ON (a opção do
-    menu é mantida e volta a valer no loop 1 / numa partida nova).
-  - A partir do loop 2, os chefes têm mais HP: cada chefe de fase
-    +50% por loop extra (x1,5 no loop 2, x2 no loop 3 ...) e o chefe
-    final (a fortaleza da fase 5) +100% por loop extra (x2 no loop 2,
-    x3 no loop 3 ...). O multiplicador de loop para em x8 e o HP tem
-    limite, então nunca estoura.
-  - Perder uma vida volta para a dificuldade base do loop, com o rank
-    inicial dela.
-  - A partir do loop 2, o título do quadro RANK no painel lateral
-    mostra o loop (LOOP 2, LOOP 3 ...); fica oculto no loop 1. A
-    contagem para em 99.
-  - Game over encerra a partida; uma partida nova começa no loop 1 com
+  - A dificuldade base fica um nível acima da DIFFICULTY escolhida
+    (VERY EASY -> EASY -> NORMAL -> HARD -> VERY HARD). Em VERY HARD
+    ela continua VERY HARD. O nível novo vale no começo da fase 1 do
+    loop 2.
+  - O rank recomeça no ponto inicial da base nova. Uma partida em
+    NORMAL fica HARD no loop 2 e lá pode subir até VERY HARD.
+  - Todo valor controlado pelo rank dobra. A velocidade dos tiros
+    inimigos nunca passa do VERY HARD do próprio jogo, e a aceleração
+    no teto nunca passa de +50%.
+  - Fora do Training, o ganho de rank dobra nos dois modos, e os tiros
+    inimigos ficam mais rápidos com o rank: a faixa (do início ao teto)
+    é dividida em 10 passos, e cada passo soma 5% de velocidade.
+  - SUICIDE BULLETS fica sempre ON (a opção do menu continua e volta a
+    valer no loop 1 e numa partida nova).
+  - Os chefes de fase ganham +50% de HP, e o chefe final (a fortaleza
+    da fase 5) ganha +100%. O HP tem limite e nunca estoura.
+  - Perder uma vida volta para a dificuldade base do loop 2, com o
+    rank inicial dela.
+  - O título do quadro RANK no painel mostra LOOP 2. Fica oculto no
+    loop 1.
+  - Game over encerra a partida. Uma partida nova começa no loop 1 com
     a DIFFICULTY escolhida.
-  - No Training, LOOP ON ainda começa a fase 1 de novo depois da fase
-    5, mas a dificuldade e o multiplicador não mudam.
+  - No Training, a fase 1 ainda recomeça depois da fase 5, mas a
+    dificuldade e o multiplicador não mudam.
 
-Com LOOP OFF o jogo termina depois da fase 5 exatamente como no
-original.
+KRAKEN é o chefe final verdadeiro. Ele só aparece depois da fase 5 do
+loop 2, e só se você pegou todas as medalhas escondidas nos dois loops
+e nunca perdeu a nave. O chefe que entra e sai em toda fase (não a
+fortaleza da fase 5) vai embora, espera, e volta só com o casco central,
+chamado Kraken, com quatro braços segmentados. Cada braço termina numa
+esfera que brilha e se curva na direção da sua nave. O Kraken não leva
+dano até os quatro braços caírem. Cada braço tem metade dos pontos de
+vida do Kraken. O Kraken dispara todos os padrões da fortaleza da fase
+5, no dobro da velocidade, e troca de padrão a cada 10 segundos. Os
+braços disparam tiros teleguiados: um de cada vez com quatro braços,
+dois ao mesmo tempo de braços aleatórios com três, um de cada braço
+com dois, e muito rápido com um só. A cada 10 segundos um braço
+aleatório (o mesmo pode ser escolhido de novo) se estica para te
+atingir, e esse braço não atira enquanto está esticado. Os outros
+ataques continuam. Destruir o Kraken mostra o final.
 
 O cheat de debug original continua no código. Durante a partida,
 pause com o Esc e digite N E K O C O. Depois:
