@@ -1036,6 +1036,12 @@ void sys_read_input(RbInput *out)
     if (keys[SDL_SCANCODE_F10]) {
         out->buttons |= RB_BTN_QUIT;
     }
+#if KRAKEN_DEBUG
+    /* Debug build only. F9 starts the Kraken fight. */
+    if (keys[SDL_SCANCODE_F9]) {
+        out->buttons |= RB_BTN_BOSS;
+    }
+#endif
     out->buttons = (uint16_t)(out->buttons | held_from_env() | script_from_env());
     if (out->buttons & RB_BTN_UP) {
         out->axis_y = -1;
