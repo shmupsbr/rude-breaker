@@ -3340,6 +3340,22 @@ static int panels_active(const RbGame *g)
            ((g_orient & 1) || sys_window_wide());
 }
 
+/* 4:3 and 5:4: no side panels. The picture stays 4:3 and the bars
+ * around it are the metal plate, not black. */
+static int plate_bars(const RbGame *g)
+{
+    int w = 0, h = 0, hz = 0;
+
+    if ((g_orient & 1) || !g_vm || !g_live || g->state != RB_STATE_PLAY ||
+        menu_visible() || !vm_gfx_active(g_vm)) {
+        return 0;
+    }
+    if (sys_display(&w, &h, &hz) != 0) {
+        return 0;
+    }
+    return aspect_near(w, h, 4, 3) || aspect_near(w, h, 5, 4);
+}
+
 /* The panel logo and side art come from the game's own title screen.
  * When the title has not been shown (stage select, Training, a quick
  * restart), a second, silent VM runs the boot chunk from SGM1.DAT up to
@@ -4764,7 +4780,7 @@ void game_render(const RbGame *g)
     }
     aspect_follow_display();
     gfx_set_hud_inset(panels_active(g));
-    if (panels_active(g)) {
+    if (panels_active(g) || plate_bars(g)) {
         panels_draw(g, sys_frame_pixels());
     } else {
         sys_compose_present(0);

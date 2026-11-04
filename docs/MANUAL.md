@@ -439,7 +439,7 @@ GRAPHICS
                    DEATH and an arcade stick that shows your input.
                    The logo and side art are taken from your own
                    title screen.
-                   OFF, or a 4:3 or 5:4 window (or anything narrower than 16:10): the classic look.
+                   OFF: the classic look. A 4:3 or 5:4 window (or anything narrower than 16:10) has no panels; the picture is 4:3 and any leftover bars are the metal plate, not black.
                    LOADOUT shows two levels, one block per level, level
                    1 included (it fills the first block). SHOT is the
                    main shot: 4 levels, so 4 blocks; levels 2, 3 and 4

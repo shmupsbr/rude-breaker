@@ -109,7 +109,8 @@ int main(void)
     one(1920, 1080, 0);
     one(1920, 1200, 0);
     one(1680, 1050, 0);
-    one(1280, 1024, 0);
+    one(1280, 1024, 0); /* 5:4: no panels, bars are plate */
+    one(1600, 1200, 0); /* 4:3: no panels, picture fills the frame */
     one(2560, 1080, 0);
     one(3440, 1440, 0);
     one(1080, 1920, 1);
