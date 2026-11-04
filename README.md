@@ -44,7 +44,7 @@ You must supply these files from **your own legal copy** of the game.
 ### Building the play package
 1. Get the game legally, for example from [Project EGG](https://www.amusement-center.com/), or from your own *Disc Station Vol. 10* disc.
 2. Extract these files from the Rude Breaker disk: `SGM1.DAT`, `SONG.DAT` and `FPLAY.COM`.
-3. Download `releases/RudeBreaker-PC-pr9p.zip` from this repository (or build `rudebreaker.exe` yourself), unzip it, and add the game files so the folder looks like this:
+3. Download `releases/RudeBreaker-Windows-v0.10.0.zip` (version 0.10.0; `rudebreaker --version` shows it) from this repository (or build `rudebreaker.exe` yourself), unzip it, and add the game files so the folder looks like this:
    ```
    Rude Breaker PC/
      rudebreaker.exe
@@ -60,7 +60,9 @@ Instead of loose files you can also drop a PC-98 disk image of the game next to 
 These three files are all you need. No other file (BIOS, sound ROM or the like) is required: the music uses YM2203 emulation, which needs no ROM.
 
 ### Linux
-A Linux x86_64 build is in `releases/RudeBreaker-Linux-pr9p.zip`. It ships its own `libSDL2-2.0.so.0` and runs on most distributions with glibc 2.17 or newer (X11 or Wayland; PulseAudio, PipeWire or ALSA).
+A Linux x86_64 build is in `releases/RudeBreaker-Linux-x86_64-v0.10.0.zip`. It ships its own `libSDL2-2.0.so.0` and runs on most distributions with glibc 2.27 or newer (X11 or Wayland; PulseAudio, PipeWire or ALSA).
+
+**Wayland or X11:** the program opens on X11 first; on a Wayland desktop that means XWayland, which works everywhere. For native Wayland start it with `SDL_VIDEODRIVER=wayland ./rudebreaker`; to force X11, `SDL_VIDEODRIVER=x11 ./rudebreaker`.
 
 1. Unzip it and add the same game files, so the folder looks like this:
    ```
@@ -85,7 +87,10 @@ make linux
 The binary is `build/rudebreaker`. `make linux` looks for `libSDL2-2.0.so.0` next to the binary first and falls back to the system library, and links the C++ runtime statically.
 
 ### Raspberry Pi
-The Raspberry Pi package, `RudeBreaker-RaspberryPi-*.zip`, is for 64-bit Raspberry Pi OS (`uname -m` shows `aarch64`). Add the game files as for Linux, then `chmod +x rudebreaker` and `./rudebreaker` inside the folder. If the window misbehaves under Wayland, try `SDL_VIDEODRIVER=x11 ./rudebreaker`; on Pi OS Lite, use `SDL_VIDEODRIVER=kmsdrm SDL_AUDIODRIVER=alsa ./rudebreaker` from the console. A Pi 4 or Pi 5 is recommended. "cannot execute binary file" means a 32-bit system or the wrong package; 32-bit builds are no longer made. Details are in the manual.
+The Raspberry Pi packages are `RudeBreaker-RaspberryPi-*.zip`. Add the game files as for Linux, then `chmod +x rudebreaker` and `./rudebreaker` inside the folder. If the window misbehaves under Wayland, try `SDL_VIDEODRIVER=x11 ./rudebreaker`; on Pi OS Lite, use `SDL_VIDEODRIVER=kmsdrm SDL_AUDIODRIVER=alsa ./rudebreaker` from the console. A Pi 4 or Pi 5 is recommended. There are two packages: `RudeBreaker-RaspberryPi-aarch64-v0.10.0.zip` for 64-bit Raspberry Pi OS (`uname -m` shows `aarch64`) and `RudeBreaker-RaspberryPi-armhf-v0.10.0.zip` for 32-bit Raspberry Pi OS (`armv6l` or `armv7l`, every Pi model). "cannot execute binary file" means the other package is needed. Details are in the manual.
+
+### macOS
+`releases/RudeBreaker-macOS-Universal-v0.10.0.zip` holds `Rude Breaker.app` (Apple Silicon and Intel, macOS 10.13 or newer). Put the game files in `Rude Breaker.app/Contents/Resources` (right-click > Show Package Contents). The app is ad-hoc signed, not notarized: the first time, right-click > Open. See `README-Mac.txt` in the zip.
 
 ### Distribution notice
 Do **not** distribute the game files. You may only use them if you own the game legally: the original *Disc Station Vol. 10* disc, or a purchase or subscription through Project EGG. If you do not own the game, you may play it for no more than **24 hours, for testing purposes only**, and must then delete the game files.

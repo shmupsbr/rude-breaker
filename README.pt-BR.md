@@ -44,7 +44,7 @@ Você precisa tirar esses arquivos da **sua própria cópia legal** do jogo.
 ### Como montar o pacote pra jogar
 1. Consiga o jogo legalmente, por exemplo na [Project EGG](https://www.amusement-center.com/) ou no seu próprio disco da *Disc Station Vol. 10*.
 2. Extraia estes arquivos do disco do Rude Breaker: `SGM1.DAT`, `SONG.DAT` e `FPLAY.COM`.
-3. Baixe o `releases/RudeBreaker-PC-pr9p.zip` deste repositório (ou compile o `rudebreaker.exe`), descompacte e coloque os arquivos do jogo junto, deixando a pasta assim:
+3. Baixe o `releases/RudeBreaker-Windows-v0.10.0.zip` (versão 0.10.0; `rudebreaker --version` mostra) deste repositório (ou compile o `rudebreaker.exe`), descompacte e coloque os arquivos do jogo junto, deixando a pasta assim:
    ```
    Rude Breaker PC/
      rudebreaker.exe
@@ -60,7 +60,9 @@ Em vez dos arquivos soltos, você também pode colocar uma imagem de disco PC-98
 Só esses três arquivos são necessários. Não precisa de nenhum outro (BIOS, ROM de som ou parecido): a música usa emulação do YM2203, que não precisa de ROM.
 
 ### Linux
-Tem uma versão pra Linux x86_64 em `releases/RudeBreaker-Linux-pr9p.zip`. Ela já vem com a própria `libSDL2-2.0.so.0` e roda na maioria das distribuições com glibc 2.17 ou mais nova (X11 ou Wayland; PulseAudio, PipeWire ou ALSA).
+Tem uma versão pra Linux x86_64 em `releases/RudeBreaker-Linux-x86_64-v0.10.0.zip`. Ela já vem com a própria `libSDL2-2.0.so.0` e roda na maioria das distribuições com glibc 2.27 ou mais nova (X11 ou Wayland; PulseAudio, PipeWire ou ALSA).
+
+**Wayland ou X11:** o programa abre primeiro em X11; num desktop Wayland isso quer dizer XWayland, que funciona em todo lugar. Para Wayland nativo, abra com `SDL_VIDEODRIVER=wayland ./rudebreaker`; para forçar X11, `SDL_VIDEODRIVER=x11 ./rudebreaker`.
 
 1. Descompacte e coloque os mesmos arquivos do jogo, deixando a pasta assim:
    ```
@@ -85,7 +87,10 @@ make linux
 O binário fica em `build/rudebreaker`. O `make linux` procura a `libSDL2-2.0.so.0` primeiro na pasta do binário e, se não achar, usa a do sistema; o runtime de C++ é linkado estático.
 
 ### Raspberry Pi
-O pacote para Raspberry Pi, `RudeBreaker-RaspberryPi-*.zip`, é para o Raspberry Pi OS de 64 bits (`uname -m` mostra `aarch64`). Coloque os arquivos do jogo como no Linux e, dentro da pasta, rode `chmod +x rudebreaker` e `./rudebreaker`. Se a janela der problema no Wayland, tente `SDL_VIDEODRIVER=x11 ./rudebreaker`; no Pi OS Lite, use `SDL_VIDEODRIVER=kmsdrm SDL_AUDIODRIVER=alsa ./rudebreaker` no console. O recomendado é um Pi 4 ou Pi 5. "cannot execute binary file" quer dizer sistema de 32 bits ou pacote errado; as versões de 32 bits não são mais feitas. Os detalhes estão no manual.
+Os pacotes para Raspberry Pi são `RudeBreaker-RaspberryPi-*.zip`. Coloque os arquivos do jogo como no Linux e, dentro da pasta, rode `chmod +x rudebreaker` e `./rudebreaker`. Se a janela der problema no Wayland, tente `SDL_VIDEODRIVER=x11 ./rudebreaker`; no Pi OS Lite, use `SDL_VIDEODRIVER=kmsdrm SDL_AUDIODRIVER=alsa ./rudebreaker` no console. O recomendado é um Pi 4 ou Pi 5. São dois pacotes: `RudeBreaker-RaspberryPi-aarch64-v0.10.0.zip` para o Raspberry Pi OS de 64 bits (`uname -m` mostra `aarch64`) e `RudeBreaker-RaspberryPi-armhf-v0.10.0.zip` para o Raspberry Pi OS de 32 bits (`armv6l` ou `armv7l`, qualquer modelo de Pi). "cannot execute binary file" quer dizer que é o outro pacote. Os detalhes estão no manual.
+
+### macOS
+`releases/RudeBreaker-macOS-Universal-v0.10.0.zip` traz o `Rude Breaker.app` (Apple Silicon e Intel, macOS 10.13 ou mais novo). Coloque os arquivos do jogo em `Rude Breaker.app/Contents/Resources` (botão direito > Mostrar Conteúdo do Pacote). O app tem só assinatura ad-hoc, sem notarização: na primeira vez, botão direito > Abrir. Veja o `README-Mac.txt` no zip.
 
 ### Aviso de distribuição
 **Não** distribua os arquivos do jogo. Você só pode usá-los se tiver o jogo legalmente: o disco original da *Disc Station Vol. 10*, ou uma compra ou assinatura pela Project EGG. Se você não tem o jogo, pode jogá-lo por no máximo **24 horas, só pra fins de teste**, e depois deve apagar os arquivos do jogo.

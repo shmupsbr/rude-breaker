@@ -44,7 +44,7 @@
 ### プレイ用パッケージの作り方（Windows）
 1. ゲームを正規に入手してください。例：[プロジェクトEGG](https://www.amusement-center.com/)、またはお手持ちの *ディスクステーション Vol.10* のディスク。
 2. Rude Breaker のディスクから次のファイルを取り出します：`SGM1.DAT`、`SONG.DAT`、`FPLAY.COM`。
-3. このリポジトリの `releases/RudeBreaker-PC-pr9p.zip` をダウンロード（または `rudebreaker.exe` を自分でビルド）して展開し、ゲームファイルを加えて次のようなフォルダにします：
+3. このリポジトリの `releases/RudeBreaker-Windows-v0.10.0.zip`（バージョン 0.10.0。`rudebreaker --version` で表示） をダウンロード（または `rudebreaker.exe` を自分でビルド）して展開し、ゲームファイルを加えて次のようなフォルダにします：
    ```
    Rude Breaker PC/
      rudebreaker.exe
@@ -60,7 +60,9 @@
 必要なのはこの3つのファイルだけです。BIOSや音源ROMなど、ほかのファイルは要りません。音楽はYM2203のエミュレーションで鳴らしており、ROMは不要です。
 
 ### Linux
-Linux x86_64版は `releases/RudeBreaker-Linux-pr9p.zip` にあります。`libSDL2-2.0.so.0` を同梱しており、glibc 2.17以降のほとんどのディストリビューションで動作します（X11またはWayland、PulseAudio・PipeWire・ALSA）。
+Linux x86_64版は `releases/RudeBreaker-Linux-x86_64-v0.10.0.zip` にあります。`libSDL2-2.0.so.0` を同梱しており、glibc 2.27以降のほとんどのディストリビューションで動作します（X11またはWayland、PulseAudio・PipeWire・ALSA）。
+
+**Wayland と X11：** プログラムはまず X11 で開きます。Wayland のデスクトップでは XWayland 経由になり、どこでも動きます。Wayland で直接動かすには `SDL_VIDEODRIVER=wayland ./rudebreaker`、X11 を強制するには `SDL_VIDEODRIVER=x11 ./rudebreaker` で起動します。
 
 1. 展開して同じゲームファイルを加え、次のようなフォルダにします：
    ```
@@ -85,7 +87,10 @@ make linux
 バイナリは `build/rudebreaker` に作られます。`make linux` でビルドしたバイナリは、まず自分と同じフォルダの `libSDL2-2.0.so.0` を探し、なければシステムのライブラリを使います。C++ランタイムは静的リンクされます。
 
 ### Raspberry Pi
-Raspberry Pi用のパッケージ `RudeBreaker-RaspberryPi-*.zip` は64ビット版 Raspberry Pi OS 用です（`uname -m` で `aarch64` と表示されます）。Linuxと同じようにゲームファイルを加え、そのフォルダで `chmod +x rudebreaker`、`./rudebreaker` を実行します。Wayland でウィンドウがうまく出ない場合は `SDL_VIDEODRIVER=x11 ./rudebreaker` を、Pi OS Lite ではコンソールから `SDL_VIDEODRIVER=kmsdrm SDL_AUDIODRIVER=alsa ./rudebreaker` を試してください。Pi 4 または Pi 5 を推奨します。「cannot execute binary file」と出たら、32ビット版OSかパッケージの選択違いです（32ビット版の配布は終了しました）。詳しくは取扱説明書を参照してください。
+Raspberry Pi用のパッケージは `RudeBreaker-RaspberryPi-*.zip` です。Linuxと同じようにゲームファイルを加え、そのフォルダで `chmod +x rudebreaker`、`./rudebreaker` を実行します。Wayland でウィンドウがうまく出ない場合は `SDL_VIDEODRIVER=x11 ./rudebreaker` を、Pi OS Lite ではコンソールから `SDL_VIDEODRIVER=kmsdrm SDL_AUDIODRIVER=alsa ./rudebreaker` を試してください。Pi 4 または Pi 5 を推奨します。パッケージは2つあります：64ビット版 Raspberry Pi OS（`uname -m` が `aarch64`）用の `RudeBreaker-RaspberryPi-aarch64-v0.10.0.zip` と、32ビット版 Raspberry Pi OS（`armv6l` または `armv7l`、全モデル）用の `RudeBreaker-RaspberryPi-armhf-v0.10.0.zip` です。「cannot execute binary file」と出たら、もう一方のパッケージを使ってください。詳しくは取扱説明書を参照してください。
+
+### macOS
+`releases/RudeBreaker-macOS-Universal-v0.10.0.zip` には `Rude Breaker.app`（Apple Silicon と Intel、macOS 10.13以降）が入っています。ゲームファイルは `Rude Breaker.app/Contents/Resources` に置いてください（右クリック >「パッケージの内容を表示」）。アプリはアドホック署名のみで公証されていないので、初回は右クリック >「開く」で起動します。詳しくは zip 内の `README-Mac.txt` を参照してください。
 
 ### 配布に関する注意
 ゲームファイルは **配布しないでください**。ゲームファイルを使用できるのは、ゲームを正規に所有している方（*ディスクステーション Vol.10* のオリジナルディスク、またはプロジェクトEGGでの購入・会員登録）のみです。ゲームを所有していない場合は、**テスト目的に限り最長24時間** までプレイでき、その後はゲームファイルを削除しなければなりません。

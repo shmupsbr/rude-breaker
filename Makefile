@@ -30,6 +30,7 @@ CORE_SRCS := \
 	src/core/pace.c \
 	src/core/cfilter.c \
 	src/core/crt.c \
+	src/core/eq.c \
 	src/core/demo.c
 
 ifeq ($(PLATFORM),sdl2)
@@ -72,7 +73,7 @@ SRCS := $(CORE_SRCS) $(HAL_SRCS)
 OBJS := $(SRCS:%.c=$(BUILD)/$(PLATFORM)/%.o) \
         $(YMFM_SRCS:%.cpp=$(BUILD)/$(PLATFORM)/%.o)
 
-.PHONY: all linux clean test-assets test-endian vm-check dirs
+.PHONY: all linux clean test-assets test-endian vm-check cfg-check dirs
 
 all: dirs $(TARGET) test-endian
 
@@ -101,6 +102,13 @@ test-assets:
 vm-check: dirs
 	$(CC) $(CFLAGS) -o $(BUILD)/vm_check tools/vm_check.c tools/vm_stub.c \
 		src/core/vm.c src/core/gfx.c src/core/assets.c src/core/collision.c
+
+# Config load/save/defaults round trip; no game data needed.
+CFG_CHECK_OBJS := $(filter-out %/main.o %/game.o,$(OBJS))
+cfg-check: dirs $(CFG_CHECK_OBJS)
+	$(CC) $(CFLAGS) -Wno-unused-function -c -o $(BUILD)/cfg_check.o tools/cfg_check.c
+	$(LINK) -o $(BUILD)/cfg_check$(EXE) $(BUILD)/cfg_check.o $(CFG_CHECK_OBJS) $(LDFLAGS)
+	@if [ -z "$(EXE)" ]; then $(BUILD)/cfg_check; else echo "cross compile: skipped running cfg_check$(EXE)"; fi
 
 test-endian: dirs
 	$(CC) $(CFLAGS) -o $(BUILD)/test_endian$(EXE) tools/test_endian.c
