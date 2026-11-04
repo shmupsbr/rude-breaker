@@ -1591,6 +1591,60 @@ void panels_set_aspect(int a43)
     g_panels_43 = a43 ? 1 : 0;
 }
 
+/* Side-by-side half boxes keep the outer chamfers (top-left of the
+ * left box, bottom-right of the right one). The inner corners are
+ * squared so the pair shares one top edge and one bottom edge. */
+static void square_pair_corner(uint32_t *o, const PBox *b, int top_left)
+{
+    int px;
+    int py;
+    const int t = 3;
+
+    for (py = 0; py < b->h; py++) {
+        for (px = 0; px < b->w; px++) {
+            int cut = top_left ? (px + py < CHAMF)
+                               : ((b->w - 1 - px) + (b->h - 1 - py) < CHAMF);
+            int edge;
+
+            if (!cut) {
+                continue;
+            }
+            edge = px < t || py < t || px >= b->w - t || py >= b->h - t;
+            if (edge) {
+                blend(o, b->x + px, b->y + py, C_EDGE, 255);
+            } else if (b->head && py < HEAD) {
+                blend(o, b->x + px, b->y + py, C_HEAD, 255);
+            } else {
+                blend(o, b->x + px, b->y + py, C_FILL, 200);
+            }
+        }
+    }
+}
+
+static void square_pair_corners(uint32_t *o)
+{
+    int a;
+    int b;
+
+    for (a = 0; a < g_nbox; a++) {
+        for (b = 0; b < g_nbox; b++) {
+            const PBox *L = &g_boxes[a];
+            const PBox *R = &g_boxes[b];
+            int gap;
+
+            if (L->y != R->y || L->h != R->h || L->w > 250 || R->w > 250) {
+                continue;
+            }
+            gap = R->x - (L->x + L->w);
+            if (gap < 0 || gap > 24) {
+                continue;
+            }
+            square_pair_corner(o, L, 0);
+            square_pair_corner(o, R, 1);
+        }
+    }
+}
+
 void panels_render(uint32_t *out, const uint32_t *game, const RbPanelData *d)
 {
     static int map_x[FIELD_W];
@@ -1638,6 +1692,7 @@ void panels_render(uint32_t *out, const uint32_t *game, const RbPanelData *d)
     g_frame = d->frame;
     draw_left(out, game, d);
     draw_right(out, d);
+    square_pair_corners(out);
     if (((char *)0)) {
         pad_check(out);
     }
@@ -2081,6 +2136,11 @@ static int place_column(uint32_t *out, int ow, int oh, int side_x, int side_w,
             if (bh < 1) {
                 bh = 1;
             }
+            /* Half-column partners share one top and one bottom.
+             * Separate rounding per box is what made a staircase. */
+            if (rows[i].n > 1) {
+                bh = dh;
+            }
             if (bh > dh) {
                 bh = dh;
             }
@@ -2138,8 +2198,10 @@ static void fit_field(int w, int h, int *fx, int *fy, int *fw, int *fh)
     *fy = (h - *fh) / 2;
 }
 
-/* full=1 copies the whole 640x400 frame (4:3 / 5:4, no panels). full=0
- * copies the inner 480 columns the side panels sit beside. */
+/* full=1 is 4:3 / 5:4: the playfield and HUD (source columns 80..560)
+ * are drawn, and the black side margins of the 640 frame are the metal
+ * plate, same as the letterbox bars. full=0 copies only the inner 480
+ * columns the side panels sit beside. */
 static void blit_game(uint32_t *out, int ow, int fx, int fy, int fw, int fh,
                       const uint32_t *game, int full)
 {
@@ -2154,7 +2216,19 @@ static void blit_game(uint32_t *out, int ow, int fx, int fy, int fw, int fh,
         const uint32_t *src = game + (size_t)sy * 640;
 
         for (x = 0; x < fw; x++) {
-            dst[x] = src[x0 + x * sw / fw];
+            int sx = x0 + x * sw / fw;
+
+            if (sx < 0) {
+                sx = 0;
+            }
+            if (sx > 639) {
+                sx = 639;
+            }
+            if (full && (sx < 80 || sx > 560)) {
+                dst[x] = panels_plate_at(fx + x, fy + y);
+            } else {
+                dst[x] = src[sx];
+            }
         }
     }
 }

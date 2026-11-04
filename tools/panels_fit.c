@@ -12,13 +12,9 @@
 static uint32_t game[GW * GH];
 static int fails;
 
-enum {
-    PX_LEFT = 0xE10000FFu,
-    PX_PLAY_L = 0x00E100FFu,
-    PX_PLAY_R = 0x0000E1FFu,
-    PX_HUD = 0xE1E100FFu,
-    PX_RIGHT = 0xE100E1FFu
-};
+static const uint32_t PX_PLAY_L = 0x00E100FFu;
+static const uint32_t PX_PLAY_R = 0x0000E1FFu;
+static const uint32_t PX_HUD = 0xE1E100FFu;
 
 static int pure_black(uint32_t p)
 {
@@ -142,23 +138,54 @@ static void one(int w, int h, int tate)
             snprintf(label, sizeof label, "%dx%d widgets readable", w, h);
             expect(label, max_w >= h / 6);
         }
+        {
+            int stair = 0;
+            int a, b;
+
+            for (a = 0; a < g.n; a++) {
+                for (b = a + 1; b < g.n; b++) {
+                    int atop = g.y[a];
+                    int abot = g.y[a] + g.h[a];
+                    int btop = g.y[b];
+                    int bbot = g.y[b] + g.h[b];
+                    int overlap = (abot < bbot ? abot : bbot) - (atop > btop ? atop : btop);
+                    int ax2 = g.x[a] + g.w[a];
+                    int bx2 = g.x[b] + g.w[b];
+                    int gapx = g.x[a] < g.x[b] ? g.x[b] - ax2 : g.x[a] - bx2;
+                    int shorter = g.h[a] < g.h[b] ? g.h[a] : g.h[b];
+
+                    /* Neighbours in one column, not the two side strips. */
+                    if (gapx >= 0 && gapx <= 48 && overlap * 2 > shorter &&
+                        (atop != btop || abot != bbot)) {
+                        fprintf(stderr, "  stair %d,%d %dx%d vs %d,%d %dx%d\n", g.x[a], g.y[a],
+                                g.w[a], g.h[a], g.x[b], g.y[b], g.w[b], g.h[b]);
+                        stair++;
+                    }
+                }
+            }
+            snprintf(label, sizeof label, "%dx%d pairs share top and bottom", w, h);
+            expect(label, stair == 0);
+        }
     }
     if (!tate && (long)w * 10 < (long)h * 16) {
-        int seen_l = 0, seen_pl = 0, seen_pr = 0, seen_hud = 0, seen_r = 0;
+        int seen_pl = 0, seen_pr = 0, seen_hud = 0;
+        uint32_t left = out[(size_t)g.field_y * w + g.field_x];
+        uint32_t right = out[(size_t)g.field_y * w + g.field_x + g.field_w - 1];
 
         for (y = g.field_y; y < g.field_y + g.field_h; y++) {
             for (x = g.field_x; x < g.field_x + g.field_w; x++) {
                 uint32_t p = out[(size_t)y * w + x];
 
-                seen_l |= p == PX_LEFT;
                 seen_pl |= p == PX_PLAY_L;
                 seen_pr |= p == PX_PLAY_R;
                 seen_hud |= p == PX_HUD;
-                seen_r |= p == PX_RIGHT;
             }
         }
-        snprintf(label, sizeof label, "%dx%d full frame not clipped", w, h);
-        expect(label, seen_l && seen_pl && seen_pr && seen_hud && seen_r);
+        snprintf(label, sizeof label, "%dx%d playfield not clipped", w, h);
+        expect(label, seen_pl && seen_pr && seen_hud);
+        snprintf(label, sizeof label, "%dx%d side margins are plate", w, h);
+        expect(label, left == panels_plate_at(g.field_x, g.field_y) &&
+                          right == panels_plate_at(g.field_x + g.field_w - 1, g.field_y));
     }
     free(out);
 }
@@ -170,11 +197,9 @@ int main(void)
     for (i = 0; i < GW * GH; i++) {
         game[i] = 0x203040FFu;
     }
-    game[0] = PX_LEFT;
     game[80] = PX_PLAY_L;
     game[559] = PX_PLAY_R;
     game[560] = PX_HUD;
-    game[639] = PX_RIGHT;
     one(1920, 1080, 0);
     one(1920, 1200, 0);
     one(1680, 1050, 0);
