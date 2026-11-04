@@ -59,6 +59,13 @@ int gfx_rank_frame(void);
 const uint8_t *gfx_layer_mask(void);
 const uint8_t *gfx_kind_mask(void);
 const uint8_t *gfx_own_mask(void);
+/* Pre-grade luma of the last shown frame (palette level, not the grade). */
+const uint8_t *gfx_shade_mask(void);
+/* A sprite-grid stamped into the scrolling page (opcodes 0x38/0x39).
+ * Those pixels share the background index, so the filter would dither
+ * them as scenery. key identifies that one draw, stable across frames. */
+void gfx_stamp_begin(uint16_t key);
+void gfx_stamp_end(void);
 int gfx_world(const uint16_t **sid, const uint8_t **bgi);
 int gfx_text_mask(const uint8_t **mask, const uint32_t **pre);
 /* Background luma under sprite pixels (valid where the mask is 1). */

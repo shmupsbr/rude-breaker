@@ -1,5 +1,6 @@
 #include "cfilter.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -1289,11 +1290,10 @@ static void zx_clash(uint32_t *px, int w, int h)
 /* ---- ZX SPECTRUM, world-locked attributes -------------------------
  * Machine pixels are 2x2 host pixels and attribute cells 16x16 host
  * pixels (8x8 machine pixels), both on the scrolling page's own grid,
- * so the scenery's colours move with it and never crawl. Each scenery
- * cell gets INK + PAPER from the 8 base colours with one BRIGHT bit
- * (black paper preferred), worked out once from the cell's art and
- * kept until that art (or the palette) changes. Scenery stays on the
- * dark (non-BRIGHT) colours. Every sprite family gets one BRIGHT ink,
+ * so the scenery's colours move with it and never crawl. Scenery is one
+ * solid dark (non-BRIGHT) colour. The clouds stage is the exception:
+ * the sky is solid cyan and the clouds are white with a black dither.
+ * Every sprite family gets one BRIGHT ink,
  * voted over its first frames and then fixed for good; its pixels are
  * that ink or black, whatever it overlaps, so a sprite never changes
  * colour. Stars stay white (a later pass). */
@@ -1330,15 +1330,28 @@ static uint32_t g_zw_hash[ZW_CW * ZW_CH];
 static uint8_t g_zw_ink[ZW_CW * ZW_CH], g_zw_pap[ZW_CW * ZW_CH];
 static uint8_t g_zw_ok[ZW_CW * ZW_CH];
 static uint32_t g_zw_col[ZW_W * ZW_H];
+/* Stage 3 host colours, counted per machine pixel before the 2x2 average. */
+static uint8_t g_s3_sky[ZW_W * ZW_H];  /* #334455 */
+static uint8_t g_s3_hi[ZW_W * ZW_H];   /* #56687C cloud body */
+static uint8_t g_s3_mid[ZW_W * ZW_H];  /* #4D5669 cloud or a sky speck */
+static uint8_t g_s3_cloud[ZW_W * ZW_H];
 static uint32_t g_zw_out[ZW_W * ZW_H];
+static uint32_t g_zw_scn[ZW_W * ZW_H]; /* scenery colour under a 2x2, for 1 px holes */
 static uint8_t g_zw_spr[ZW_W * ZW_H];
 static uint8_t g_tblk[ZW_W * ZW_H];
 /* sprite family colour: votes over the first 12 frames, then locked */
 static uint8_t g_sf_ink[65536];
 static uint8_t g_sf_state[65536];     /* 0 new, 1..12 voting, 13 locked */
 static uint16_t g_sf_vote[65536][8];
-static uint8_t g_sf_big[65536];       /* stage 2 cruiser, sticky this stage */
 static int g_big_stage = -1;
+static int g_cr_n; /* how many stage-2 cruisers locked */
+static uint16_t g_cr_id[2]; /* sprite/stamp ids; [0] dark yellow, [1] cyan */
+static int g_hull_box[2][4]; /* page-space x0,y0,x1,y1 of a tile cruiser */
+static uint8_t g_hull_live[2];
+static uint16_t g_slot1_ids[16];
+static int g_slot1_n;
+static int g_slot1_parts; /* chunks joined into the first cruiser */
+static int g_slot1_gap;   /* largest empty gap inside that cruiser */
 static uint32_t g_zw_palh;
 static uint8_t g_zw_tag[ZW_W * ZW_H]; /* 1 enemy, 2 item/shot, 3 enemy bullet */
 static uint8_t g_zw_bgc[ZW_W * ZW_H]; /* spectrum index behind this pixel */
@@ -1356,6 +1369,46 @@ static int zx_dark_near(uint32_t rgb)
         }
     }
     return bj;
+}
+
+/* Dark (non-BRIGHT) ink from the hue. Distance would paint a dark green
+ * or a dark blue black, and the old fallback then painted every dim cell
+ * cyan. A second channel counts only when it is close to the strongest,
+ * so a slate blue stays blue and a teal stays cyan. */
+static int zx_hue_ink(uint32_t rgb)
+{
+    int r = (int)(rgb >> 16), g = (int)((rgb >> 8) & 255), b = (int)(rgb & 255);
+    int hi = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    int lo = r < g ? (r < b ? r : b) : (g < b ? g : b);
+
+    if (hi - lo <= 14) {
+        return LUM24(rgb) < 40 ? 0 : 7;
+    }
+    if (g >= r && g >= b) {
+        if (b * 4 >= g * 3 && b >= r) {
+            return 5;
+        }
+        if (r * 4 >= g * 3 && r >= b) {
+            return 6;
+        }
+        return 4;
+    }
+    if (r >= g && r >= b) {
+        if (b * 4 >= r * 3 && b >= g) {
+            return 3;
+        }
+        if (g * 4 >= r * 3 && g >= b) {
+            return 6;
+        }
+        return 2;
+    }
+    if (g * 4 >= b * 3 && g >= r) {
+        return 5;
+    }
+    if (r * 4 >= b * 3 && r >= g) {
+        return 3;
+    }
+    return 1;
 }
 
 /* Black backdrop plus white star dots. */
@@ -1400,6 +1453,434 @@ static int zx_is_space(uint32_t idx0)
     return dark > 350 && stars >= 4;
 }
 
+/* Bayer matrix, only for the clouds (white mixed with black). */
+static const uint8_t k_bayer[64] = {
+    0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26,
+    12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22,
+    3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25,
+    15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21
+};
+
+/* #56687C is the cloud. #4D5669 next to it is the cloud edge. A lone
+ * #4D5669 speck in the sky is not. */
+static void zx_stage3_mark(void)
+{
+    int i, pass;
+
+    memset(g_s3_cloud, 0, sizeof g_s3_cloud);
+    if (g_cf_stage != 3) {
+        return;
+    }
+    for (i = 0; i < ZW_W * ZW_H; i++) {
+        if (g_s3_hi[i]) {
+            g_s3_cloud[i] = 1;
+        }
+    }
+    for (pass = 0; pass < 2; pass++) {
+        static uint8_t nxt[ZW_W * ZW_H];
+        int x, y;
+
+        memcpy(nxt, g_s3_cloud, sizeof nxt);
+        for (y = 0; y < ZW_H; y++) {
+            for (x = 0; x < ZW_W; x++) {
+                int q = y * ZW_W + x, d;
+
+                if (g_s3_cloud[q] || !g_s3_mid[q]) {
+                    continue;
+                }
+                for (d = 0; d < 8; d++) {
+                    static const int dx[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+                    static const int dy[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+                    int nx = x + dx[d], ny = y + dy[d];
+
+                    if (nx < 0 || nx >= ZW_W || ny < 0 || ny >= ZW_H) {
+                        continue;
+                    }
+                    if (g_s3_cloud[ny * ZW_W + nx]) {
+                        nxt[q] = 1;
+                        break;
+                    }
+                }
+            }
+        }
+        memcpy(g_s3_cloud, nxt, sizeof nxt);
+    }
+}
+
+/* Scenery is one solid dark colour. The clouds stage is the exception:
+ * #334455 is solid cyan, and the #56687C / #4D5669 cloud is white with a
+ * black dither. A dark green field (a city) stays dark green. Dim
+ * scenery keeps the dark colour of its own hue (stage 1 asteroids stay
+ * dark magenta) with its dark lines black.
+ * Sprites are left alone. */
+static void zx_paint_scenery(void)
+{
+    static int green_cell[ZW_CW * ZW_CH];
+    int i, c;
+
+    zx_stage3_mark();
+    memset(green_cell, 0, sizeof green_cell);
+    {
+        static int rs[ZW_CW * ZW_CH], gs[ZW_CW * ZW_CH], bs[ZW_CW * ZW_CH], ns[ZW_CW * ZW_CH];
+
+        memset(rs, 0, sizeof rs);
+        memset(gs, 0, sizeof gs);
+        memset(bs, 0, sizeof bs);
+        memset(ns, 0, sizeof ns);
+        for (i = 0; i < ZW_W * ZW_H; i++) {
+            int mx = i % ZW_W, my = i / ZW_W, c0 = (my >> 3) * ZW_CW + (mx >> 3);
+
+            if (g_zw_spr[i] || !g_zw_n[i]) {
+                continue;
+            }
+            rs[c0] += (int)(g_zw_col[i] >> 16);
+            gs[c0] += (int)((g_zw_col[i] >> 8) & 255);
+            bs[c0] += (int)(g_zw_col[i] & 255);
+            ns[c0]++;
+        }
+        for (c = 0; c < ZW_CW * ZW_CH; c++) {
+            int n = ns[c] ? ns[c] : 1;
+            int ar = rs[c] / n, ag = gs[c] / n, ab = bs[c] / n;
+
+            /* city field: dark and green, not the clouds stage */
+            green_cell[c] = g_cf_stage != 3 && ns[c] >= 8 && ag > ar + 18 && ag > ab + 18 &&
+                            (ar + ag + ab) / 3 < 100;
+        }
+    }
+    for (i = 0; i < ZW_W * ZW_H; i++) {
+        int mx = i % ZW_W, my = i / ZW_W, c0 = (my >> 3) * ZW_CW + (mx >> 3);
+        int sel, l;
+
+        if (!g_zw_n[i]) {
+            continue;
+        }
+        if (g_zw_spr[i]) {
+            g_zw_scn[i] = k_zx16[g_zw_bgc[i] & 15];
+            continue;
+        }
+        l = LUM24(g_zw_col[i]);
+        if (green_cell[c0]) {
+            /* a dark green field is closer to black than to #00D700 */
+            sel = 4;
+        } else if (g_cf_stage == 3 && (g_s3_cloud[i] || g_s3_hi[i])) {
+            /* Cloud body and its edge: white with a black dither. */
+            int t = 6;
+
+            sel = (t * 8 > k_bayer[(my & 7) * 8 + (mx & 7)]) ? 15 : 0;
+        } else if (g_cf_stage == 3 && (g_s3_sky[i] || g_s3_mid[i])) {
+            /* #334455, and #4D5669 specks with no #56687C nearby. */
+            sel = 5;
+        } else if (g_zw_dim[c0]) {
+            int bn = g_zw_n[i] - g_zw_sn[i];
+            int bd = bn > 0 && g_zw_bd[i] * 2 >= bn;
+            int m = 0, cnt = 0;
+
+            if (mx > 0) { m += LUM24(g_zw_col[i - 1]); cnt++; }
+            if (mx < ZW_W - 1) { m += LUM24(g_zw_col[i + 1]); cnt++; }
+            if (my > 0) { m += LUM24(g_zw_col[i - ZW_W]); cnt++; }
+            if (my < ZW_H - 1) { m += LUM24(g_zw_col[i + ZW_W]); cnt++; }
+            m = cnt ? m / cnt : l;
+            /* stage 1 rocks are dark magenta; later stages keep their hue
+             * on the dark colours, not one forced cyan */
+            if (bd || l <= 16 || l < m - 24) {
+                sel = 0;
+            } else if (g_cf_stage == 1) {
+                sel = 3;
+            } else {
+                sel = zx_hue_ink(g_zw_col[i]);
+            }
+        } else {
+            int m = 0, cnt = 0;
+
+            if (mx > 0) { m += LUM24(g_zw_col[i - 1]); cnt++; }
+            if (mx < ZW_W - 1) { m += LUM24(g_zw_col[i + 1]); cnt++; }
+            if (my > 0) { m += LUM24(g_zw_col[i - ZW_W]); cnt++; }
+            if (my < ZW_H - 1) { m += LUM24(g_zw_col[i + ZW_W]); cnt++; }
+            m = cnt ? m / cnt : l;
+            /* a line darker than its neighbours stays black */
+            sel = (l <= 12 || l < m - 36) ? 0 : zx_hue_ink(g_zw_col[i]);
+        }
+        g_zw_out[i] = g_zw_scn[i] = k_zx16[sel];
+        g_zw_bgc[i] = (uint8_t)sel;
+    }
+}
+
+/* A cruiser pixel: scenery or an enemy sprite, not the player, an option
+ * or a bullet. Pink and red cores count; the black starfield does not. */
+static int zx_cr_cand(int i)
+{
+    uint16_t id;
+    int l;
+
+    if (i < 0 || i >= ZW_W * ZW_H || !g_zw_n[i]) {
+        return 0;
+    }
+    id = g_zw_id[i];
+    if (id >= 0xFFF0u || g_zw_tag[i] == 3) {
+        return 0;
+    }
+    l = LUM24(g_zw_col[i]);
+    return l > 16;
+}
+
+/* Stage 2 cruisers: a large mass, scenery or sprite. First one from the
+ * top is dark yellow, every later one is cyan. Every pixel of that mass
+ * is that colour or black. */
+static void zx_stage2_hull(void)
+{
+    static uint16_t lab[ZW_W * ZW_H];
+    static uint8_t den[ZW_W * ZW_H];
+    static int stk[ZW_W * ZW_H];
+    int i, nlab = 1;
+
+    if (g_cf_stage != 2) {
+        return;
+    }
+    memset(lab, 0, sizeof lab);
+    memset(den, 0, sizeof den);
+    /* The first cruiser's stamp ids. Once none of them are on the page,
+     * it has scrolled off: the stored box must not swallow the next ship. */
+    if (g_slot1_n > 0) {
+        int alive = 0, p;
+
+        for (p = 0; p < ZW_W * ZW_H && !alive; p++) {
+            int s;
+
+            if (!g_zw_id[p]) {
+                continue;
+            }
+            for (s = 0; s < g_slot1_n; s++) {
+                if (g_zw_id[p] == g_slot1_ids[s]) {
+                    alive = 1;
+                    break;
+                }
+            }
+        }
+        if (!alive) {
+            g_hull_live[0] = 0;
+        }
+    }
+    for (i = 0; i < ZW_W * ZW_H; i++) {
+        int x, y, c, d;
+
+        if (!zx_cr_cand(i)) {
+            continue;
+        }
+        x = i % ZW_W;
+        y = i / ZW_W;
+        c = 0;
+        for (d = 0; d < 8; d++) {
+            static const int dx[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+            static const int dy[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+            int nx = x + dx[d], ny = y + dy[d];
+
+            if (nx < 0 || nx >= ZW_W || ny < 0 || ny >= ZW_H) {
+                continue;
+            }
+            if (zx_cr_cand(ny * ZW_W + nx)) {
+                c++;
+            }
+        }
+        den[i] = (uint8_t)c;
+    }
+    for (i = 0; i < ZW_W * ZW_H; i++) {
+        int sp, cnt, x0, y0, x1, y1, mx, my, k;
+        int slot = 0, saw1 = 0, saw2 = 0;
+
+        /* Pink and red cores are part of the ship. Isolated stars are not:
+         * a gap is bridged only between two solid edges. */
+        if (lab[i] || !zx_cr_cand(i)) {
+            continue;
+        }
+        if (g_zw_id[i] && g_cr_n > 0 && g_zw_id[i] == g_cr_id[0]) {
+            saw1 = 1;
+        }
+        if (g_zw_id[i] && g_cr_n > 1 && g_zw_id[i] == g_cr_id[1]) {
+            saw2 = 1;
+        }
+        sp = 0;
+        cnt = 0;
+        x0 = y0 = 9999;
+        x1 = y1 = -1;
+        stk[sp++] = i;
+        lab[i] = (uint16_t)nlab;
+        while (sp) {
+            int q = stk[--sp], qx = q % ZW_W, qy = q / ZW_W, d;
+            cnt++;
+            if (qx < x0) x0 = qx;
+            if (qy < y0) y0 = qy;
+            if (qx > x1) x1 = qx;
+            if (qy > y1) y1 = qy;
+            for (d = 0; d < 8; d++) {
+                static const int dx[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+                static const int dy[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+                int dist;
+
+                /* dist 1 joins the body. dist 2..4 crosses a panel line
+                 * only when both sides are solid, so stars stay loose. */
+                for (dist = 1; dist <= 6; dist++) {
+                    int nx = qx + dx[d] * dist, ny = qy + dy[d] * dist, n;
+
+                    if (nx < 0 || nx >= ZW_W || ny < 0 || ny >= ZW_H) {
+                        continue;
+                    }
+                    if (dist > 1 && d >= 4) {
+                        break;
+                    }
+                    n = ny * ZW_W + nx;
+                    if (lab[n] || !zx_cr_cand(n)) {
+                        continue;
+                    }
+                    if (dist > 1 && (den[q] < 3 || den[n] < 3)) {
+                        continue;
+                    }
+                    if (g_zw_id[n] && g_cr_n > 0 && g_zw_id[n] == g_cr_id[0]) {
+                        saw1 = 1;
+                    }
+                    if (g_zw_id[n] && g_cr_n > 1 && g_zw_id[n] == g_cr_id[1]) {
+                        saw2 = 1;
+                    }
+                    lab[n] = (uint16_t)nlab;
+                    stk[sp++] = n;
+                }
+            }
+        }
+        /* A one-pixel gap with the hull on both sides is detail, not
+         * space. Do not grow outward: that would swallow the starfield. */
+        {
+            int yy, xx;
+
+            for (yy = y0; yy <= y1; yy++) {
+                for (xx = x0; xx <= x1; xx++) {
+                    int q = yy * ZW_W + xx;
+                    int left = xx > 0 && lab[q - 1] == (uint16_t)nlab;
+                    int right = xx + 1 < ZW_W && lab[q + 1] == (uint16_t)nlab;
+                    int up = yy > 0 && lab[q - ZW_W] == (uint16_t)nlab;
+                    int down = yy + 1 < ZW_H && lab[q + ZW_W] == (uint16_t)nlab;
+
+                    if (lab[q] || g_zw_spr[q] || !g_zw_n[q]) {
+                        continue;
+                    }
+                    if ((left && right) || (up && down)) {
+                        lab[q] = (uint16_t)nlab;
+                        cnt++;
+                    }
+                }
+            }
+        }
+        if (cnt < 80 || ((x1 - x0 + 1) < 12 && (y1 - y0 + 1) < 12)) {
+            nlab++;
+            continue;
+        }
+        /* A later stamp chunk of the same ship shares its column and
+         * the empty rows between them are no taller than the gaps
+         * already inside that ship. A ship beside it, or one that
+         * shows up after a taller gap, or after the first has left
+         * the page, is the next cruiser. */
+        for (k = 0; k < g_cr_n && k < 2 && !slot; k++) {
+            int bx0 = g_hull_box[k][0], by0 = g_hull_box[k][1];
+            int bx1 = g_hull_box[k][2], by1 = g_hull_box[k][3];
+            int ov, gap, yov, allow, cx, bcx, narrow;
+
+            if (!g_hull_live[k] || x1 < bx0 || bx1 < x0) {
+                continue;
+            }
+            ov = (x1 < bx1 ? x1 : bx1) - (x0 > bx0 ? x0 : bx0) + 1;
+            narrow = (x1 - x0) < (bx1 - bx0) ? (x1 - x0) : (bx1 - bx0);
+            narrow += 1;
+            if (ov * 2 < narrow) {
+                continue;
+            }
+            yov = 0;
+            if (y1 >= by0 && by1 >= y0) {
+                gap = 0;
+                yov = (y1 < by1 ? y1 : by1) - (y0 > by0 ? y0 : by0) + 1;
+            } else if (y1 < by0) {
+                gap = by0 - y1 - 1;
+            } else {
+                gap = y0 - by1 - 1;
+            }
+            cx = (x0 + x1) / 2;
+            bcx = (bx0 + bx1) / 2;
+            /* beside the ship, not a chunk stacked on it */
+            if (yov > 8 && (cx > bcx ? cx - bcx : bcx - cx) > narrow) {
+                continue;
+            }
+            /* still assembling: a couple of tiles. after that, only
+             * gaps no bigger than the ones already inside the ship */
+            allow = (k == 0 && g_slot1_parts >= 2 && g_slot1_gap >= 0) ? g_slot1_gap : 16;
+            if (gap <= allow) {
+                slot = k + 1;
+                if (k == 0 && gap > 0 && gap > g_slot1_gap) {
+                    g_slot1_gap = gap;
+                }
+            }
+        }
+        if (!slot && saw1) {
+            slot = 1;
+        } else if (!slot && saw2) {
+            slot = 2;
+        }
+        if (!slot) {
+            /* the first mass is yellow; every later cruiser is cyan */
+            slot = g_cr_n < 2 ? ++g_cr_n : 2;
+        }
+        if (slot) {
+            int *bx = g_hull_box[slot - 1];
+
+            if (!g_hull_live[slot - 1]) {
+                bx[0] = x0;
+                bx[1] = y0;
+                bx[2] = x1;
+                bx[3] = y1;
+                g_hull_live[slot - 1] = 1;
+            } else {
+                if (x0 < bx[0]) bx[0] = x0;
+                if (y0 < bx[1]) bx[1] = y0;
+                if (x1 > bx[2]) bx[2] = x1;
+                if (y1 > bx[3]) bx[3] = y1;
+            }
+            if (slot == 1) {
+                g_slot1_parts++;
+            }
+        }
+        if (!slot) {
+            nlab++;
+            continue;
+        }
+        fprintf(stderr, "zx cruiser slot %d pixels %d box %d,%d %dx%d\n",
+                slot, cnt, x0, y0, x1 - x0 + 1, y1 - y0 + 1);
+        for (my = y0; my <= y1; my++) {
+            for (mx = x0; mx <= x1; mx++) {
+                int q = my * ZW_W + mx;
+                int l, ink;
+
+                if (lab[q] != (uint16_t)nlab) {
+                    continue;
+                }
+                l = LUM24(g_zw_col[q]);
+                ink = slot == 1 ? 6 : 13;
+                g_zw_out[q] = k_zx16[l < 28 ? 0 : ink];
+                g_zw_spr[q] = 1;
+                if (slot == 1 && g_zw_id[q] && g_slot1_n < 16) {
+                    int s, seen = 0;
+
+                    for (s = 0; s < g_slot1_n; s++) {
+                        if (g_slot1_ids[s] == g_zw_id[q]) {
+                            seen = 1;
+                        }
+                    }
+                    if (!seen) {
+                        g_slot1_ids[g_slot1_n++] = g_zw_id[q];
+                    }
+                }
+            }
+        }
+        nlab++;
+        (void)k;
+    }
+}
+
 static void zx_world(uint32_t *px, int w, int h)
 {
     int x, y, i, sc = g_w_scroll;
@@ -1424,9 +1905,19 @@ static void zx_world(uint32_t *px, int w, int h)
     memset(g_zw_id, 0, sizeof g_zw_id);
     memset(g_zw_tag, 0, sizeof g_zw_tag);
     memset(g_zw_bgc, 0, sizeof g_zw_bgc);
+    memset(g_zw_scn, 0, sizeof g_zw_scn);
+    memset(g_s3_sky, 0, sizeof g_s3_sky);
+    memset(g_s3_hi, 0, sizeof g_s3_hi);
+    memset(g_s3_mid, 0, sizeof g_s3_mid);
     if (g_big_stage != g_cf_stage) {
-        memset(g_sf_big, 0, sizeof g_sf_big);
         g_big_stage = g_cf_stage;
+        g_cr_n = 0;
+        g_cr_id[0] = g_cr_id[1] = 0;
+        g_hull_live[0] = g_hull_live[1] = 0;
+        g_slot1_n = 0;
+        g_slot1_parts = 0;
+        g_slot1_gap = -1;
+        memset(g_hull_box, 0, sizeof g_hull_box);
     }
     {
         static uint32_t hsh[ZW_CW * ZW_CH];
@@ -1458,6 +1949,17 @@ static void zx_world(uint32_t *px, int w, int h)
                     g_zw_sum[q][0] += p >> 24;
                     g_zw_sum[q][1] += (p >> 16) & 0xFF;
                     g_zw_sum[q][2] += (p >> 8) & 0xFF;
+                    if (g_cf_stage == 3) {
+                        uint32_t rgb = p >> 8;
+
+                        if (rgb == 0x334455u) {
+                            g_s3_sky[q]++;
+                        } else if (rgb == 0x56687Cu) {
+                            g_s3_hi[q]++;
+                        } else if (rgb == 0x4D5669u) {
+                            g_s3_mid[q]++;
+                        }
+                    }
                     idxrgb[bi & 15] = p;
                 }
                 if (id) {
@@ -1479,6 +1981,11 @@ static void zx_world(uint32_t *px, int w, int h)
             int n = g_zw_n[i], sn = g_zw_sn[i], bn = n - sn;
             uint32_t r, g, b;
 
+            /* one sprite sample owns the machine pixel: a real sprite
+             * was dropped when the 2x2 was mostly scenery, so cruisers
+             * and small enemies were painted as the background */
+            /* Majority: a single ship pixel must not paint the whole 2x2,
+             * or the checker holes and the thin cannons disappear. */
             g_zw_spr[i] = n && sn * 2 >= n;
             if (g_zw_spr[i]) {
                 r = (g_zw_sum[i][0] >> 16) / (sn ? sn : 1);
@@ -1595,9 +2102,6 @@ static void zx_world(uint32_t *px, int w, int h)
                 if (my < ZW_H - 1) { m += LUM24(g_zw_col[i + ZW_W]); cnt++; }
                 m = cnt ? m / cnt : l;
                 ci = (!bd && l > 16 && l >= m - 24) ? (g_cf_stage == 1 ? 3 : 5) : 0;
-                if (g_cf_stage == 3 && bd && l < 170) {
-                    ci = 4;   /* city field: dark green */
-                }
             } else {
                 const uint16_t *d = g_zc_d[K24_12(g_zw_col[i])];
                 int side = d[B] < d[A], l = LUM24(g_zw_col[i]), m = 0, cnt = 0;
@@ -1616,14 +2120,13 @@ static void zx_world(uint32_t *px, int w, int h)
                     }
                 }
                 ci = side ? B : A;
-                if (g_cf_stage == 3 && bd && l < 170) {
-                    ci = 4;
-                }
             }
             g_zw_out[i] = k_zx16[ci];
             g_zw_bgc[i] = (uint8_t)ci;
         }
     }
+    /* Solid scenery colours. Sprites stay flat (painted next). */
+    zx_paint_scenery();
     /* background under sprites: the scenery that pixel covered, else the cell */
     {
         static uint8_t mode[ZW_CW * ZW_CH];
@@ -1782,8 +2285,19 @@ static void zx_world(uint32_t *px, int w, int h)
         for (k = 0; k < nf; k++) {
             int wdt = fx1[k] - fx0[k] + 1, hgt = fy1[k] - fy0[k] + 1;
 
-            if (ftag[k] == 1 && fn[k] >= 90 && (wdt >= 16 || hgt >= 16)) {
-                g_sf_big[fid[k]] = 1;
+            /* real sprite, large enough to be a cruiser: first one seen
+             * (top of the screen first) is dark yellow, the next is cyan */
+            if (ftag[k] == 1 && fn[k] >= 80 && (wdt >= 14 || hgt >= 14) && g_cr_n < 2) {
+                int s, seen = 0;
+
+                for (s = 0; s < g_cr_n; s++) {
+                    if (g_cr_id[s] == fid[k]) {
+                        seen = 1;
+                    }
+                }
+                if (!seen) {
+                    g_cr_id[g_cr_n++] = fid[k];
+                }
             }
         }
     }
@@ -1798,11 +2312,13 @@ static void zx_world(uint32_t *px, int w, int h)
         l = LUM24(g_zw_col[i]);
         tag = g_zw_tag[i];
         bg = g_zw_bgc[i] & 7;
-        big = id && g_sf_big[id];
+        big = (g_cr_n > 0 && id == g_cr_id[0]) ? 1 : (g_cr_n > 1 && id == g_cr_id[1]) ? 2 : 0;
         if (id >= 0xFFF1u && id <= 0xFFF5u) {
             ink = id == 0xFFF1u ? 10 : id == 0xFFF3u ? 14 : 9; /* V red, M yellow, L blue */
-        } else if (big) {
-            ink = 14;
+        } else if (big == 1) {
+            ink = 6; /* dark yellow */
+        } else if (big == 2) {
+            ink = 13; /* cyan */
         } else if (id && g_sf_ink[id]) {
             ink = g_sf_ink[id];
         } else {
@@ -1831,8 +2347,8 @@ static void zx_world(uint32_t *px, int w, int h)
                     m = ln;
                 }
             }
-            /* bright yellow, with more of the shading kept as black lines */
-            col = (m - l > 18 || l <= 100) ? 0 : 14;
+            /* flat cruiser colour; only the darker lines go black */
+            col = (l * 3 < m * 2) ? 0 : ink;
         } else if (tag == 3) {
             col = l > 36 ? ink : 0;
             if ((col & 7) == bg) {
@@ -1856,8 +2372,25 @@ static void zx_world(uint32_t *px, int w, int h)
         } else {
             col = l > 48 ? ink : 0;
         }
+        /* A sprite must not wear the colour of the background under it
+         * (white enemies on white clouds, same rule as enemy bullets). */
+        if (!big && col && (col & 7) == (bg & 7)) {
+            static const int alt[6] = {10, 14, 11, 12, 9, 13};
+            int a, s = (int)(id % 6);
+
+            col = 10;
+            for (a = 0; a < 6; a++) {
+                int c2 = alt[(s + a) % 6];
+
+                if ((c2 & 7) != (bg & 7)) {
+                    col = c2;
+                    break;
+                }
+            }
+        }
         g_zw_out[i] = k_zx16[col];
     }
+    zx_stage2_hull();
     if (g_w_txt) {
         for (y = 0; y < 400; y += 2) {
             for (x = 80; x < 560; x += 2) {
@@ -1901,6 +2434,35 @@ static void zx_world(uint32_t *px, int w, int h)
                     uint32_t c = t == 2 ? 0xFFFFFFFFu : 0x000000FFu;
 
                     px[q] = px[q + 1] = px[q + (size_t)w] = px[q + (size_t)w + 1] = c;
+                }
+            }
+        }
+        /* A black machine pixel around each lit glyph, so the white
+         * score still reads on the white cloud dither. */
+        for (y = 0; y < 400; y += 2) {
+            for (x = 80; x < 560; x += 2) {
+                int mx = (x - 80) >> 1, my = y >> 1, d;
+
+                if (g_tblk[my * ZW_W + mx] != 2) {
+                    continue;
+                }
+                for (d = 0; d < 8; d++) {
+                    static const int dx[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
+                    static const int dy[8] = {-1, -1, -1, 0, 0, 1, 1, 1};
+                    int nx = mx + dx[d], ny = my + dy[d];
+                    size_t nq;
+                    int sx, sy;
+
+                    if (nx < 0 || nx >= ZW_W || ny < 0 || ny >= ZW_H) {
+                        continue;
+                    }
+                    if (g_tblk[ny * ZW_W + nx]) {
+                        continue;
+                    }
+                    sx = 80 + nx * 2;
+                    sy = ny * 2;
+                    nq = (size_t)sy * w + sx;
+                    px[nq] = px[nq + 1] = px[nq + (size_t)w] = px[nq + (size_t)w + 1] = 0x000000FFu;
                 }
             }
         }
@@ -2591,8 +3153,6 @@ static void zx_detail(uint32_t *px, int w)
                 if (!spr && g_zd_m[y * 240 + x] >= 90 && g_zd_l[y * 240 + x - 1] < 40 &&
                     g_zd_l[y * 240 + x + 1] < 40) {
                     c = 0xFFFFFFFFu;
-                } else if (!spr && mx - l > 48 && l * 5 < mx * 3) {
-                    c = 0x000000FFu;             /* scenery outline / detail */
                 } else if (spr && mx - l > 18 && l * 5 < mx * 4) {
                     c = 0x000000FFu;             /* sprite inner detail */
                 } else {
@@ -2610,8 +3170,13 @@ static void zx_detail(uint32_t *px, int w)
  * stays legible in straight flight. Options and shots use the weapon
  * colour (red, blue or yellow). Where the I-FRAMES aura painted, that
  * mode colour replaces the ship, as before. */
-static const uint8_t *g_pl_own, *g_pl_aura;
+static const uint8_t *g_pl_own, *g_pl_aura, *g_shade;
 static int g_pl_aink = 10, g_pl_sink = 10;
+
+void cfilter_set_shade(const uint8_t *shade)
+{
+    g_shade = shade;
+}
 
 void cfilter_set_player(const uint8_t *own, const uint8_t *aura, int aura_ink, int shot_ink)
 {
@@ -2621,13 +3186,23 @@ void cfilter_set_player(const uint8_t *own, const uint8_t *aura, int aura_ink, i
     g_pl_sink = shot_ink & 15;
 }
 
+/* Art grey, before the grade lifts it. Grey shading on the ship collapses
+ * to white or black against the brightest pixel of that object. */
+static int pix_shade(size_t at)
+{
+    if (g_shade) {
+        return g_shade[at];
+    }
+    return LUM24(g_zd_src[at] >> 8);
+}
+
 static void zx_player(uint32_t *px, int w)
 {
     static uint8_t role[200 * 240];
     static uint8_t litn[200 * 240];
     static uint8_t maxl[200 * 240];
     static uint8_t aura[200 * 240];
-    int by, bx;
+    int by, bx, smax[4] = {0, 0, 0, 0};
 
     if (!g_pl_own) {
         return;
@@ -2672,9 +3247,12 @@ static void zx_player(uint32_t *px, int w)
                 if ((r == 1 && v != 1) || (r == 2 && v != 2) || (r == 3 && v != 3)) {
                     continue;
                 }
-                l = LUM24(g_zd_src[k4[k]] >> 8);
+                l = pix_shade(k4[k]);
                 if (l > mx) {
                     mx = l;
+                }
+                if (l > smax[r]) {
+                    smax[r] = l;
                 }
                 if (l >= 40) {
                     lit++;
@@ -2714,27 +3292,38 @@ static void zx_player(uint32_t *px, int w)
                 px[q] = px[q + 1] = px[q + (size_t)w] = px[q + (size_t)w + 1] = c;
                 continue;
             }
-            /* Straight-flight wing tip: one lit pixel at the silhouette
-             * end. Fill the 2x2 so it does not vanish into the black. */
-            tip = r != 3 && nb <= 1 && litn[ix] > 0 && maxl[ix] >= 28;
-            if (r == 3 || tip) {
-                c = maxl[ix] >= (r == 3 ? 40 : 28) ? (k_zx16[ink] << 8 | 0xFFu) : 0x000000FFu;
-                px[q] = px[q + 1] = px[q + (size_t)w] = px[q + (size_t)w + 1] = c;
-                continue;
-            }
             {
+                /* Light grey stays white (or the weapon colour). Mid-dark
+                 * panel seams go black too, still short of the lighter
+                 * wings and cannons. Every own pixel is kept at 1 px; a
+                 * hole in the 2x2 goes back to the scenery so the checker
+                 * and the cannons survive. */
                 const size_t k4[4] = {q, q + 1, q + (size_t)w, q + (size_t)w + 1};
-                int k;
+                int k, sc = g_w_scroll < 0 ? 0 : g_w_scroll;
 
+                (void)tip;
+                (void)nb;
+                (void)c;
+                (void)ink;
                 for (k = 0; k < 4; k++) {
                     int v = g_pl_own[k4[k]];
-                    int l;
+                    int hy = by * 2 + (k >= 2);
+                    int src = (hy + sc) % 400;
+                    int my = src >> 1;
+                    uint32_t scn = g_zw_scn[my * ZW_W + bx] << 8 | 0xFFu;
 
-                    if ((r == 1 && v != 1) || (r == 2 && v != 2)) {
-                        continue;
+                    if (v == 1 || v == 2 || v == 3) {
+                        int l = pix_shade(k4[k]);
+                        int use = v == 1 ? 15 : g_pl_sink;
+                        int lim = v == 3 ? 16 : (v == 1 ? smax[1] * 2 / 5 : smax[v] / 4);
+
+                        if (lim < 1) {
+                            lim = 1;
+                        }
+                        px[k4[k]] = (l >= lim ? k_zx16[use] : 0) << 8 | 0xFFu;
+                    } else {
+                        px[k4[k]] = scn;
                     }
-                    l = LUM24(g_zd_src[k4[k]] >> 8);
-                    px[k4[k]] = (l >= 40 ? k_zx16[ink] : 0) << 8 | 0xFFu;
                 }
             }
         }

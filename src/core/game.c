@@ -4677,6 +4677,7 @@ void game_render(const RbGame *g)
                  * 1 M yellow, 2 L blue). */
                 int w8 = g_vm ? vm_global_u8(g_vm, 0xD8) : 0;
 
+                cfilter_set_shade(gfx_shade_mask());
                 cfilter_set_player(gfx_own_mask(), g_aura_any ? g_aura_px : NULL,
                                    g_aura_on == 2 ? 12 : g_aura_on == 3 ? 9 : 10,
                                    w8 == 1 ? 14 : w8 == 2 ? 9 : 10);

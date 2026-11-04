@@ -2902,8 +2902,21 @@ static void op_grid(RbVm *vm, int ent, uint16_t si, uint16_t dest, int shift, in
     if (!bank) {
         return;
     }
+    /* kind 1 is a grid of sprite cells drawn into the page. Tag it so
+     * the filter does not dither that object as scenery. */
+    if (kind == 1) {
+        unsigned key = ((unsigned)vm->cof[ent] << 8) ^ (unsigned)si ^ ((unsigned)ent * 17u);
+
+        if (key >= 0xF000u || key == 0u) {
+            key = (key & 0x0FFFu) + 1u;
+        }
+        gfx_stamp_begin((uint16_t)key);
+    }
     gfx_blit_grid(vm->gfx, bank, blen, p + si + 3u, n - (uint32_t)si - 3u,
                   dest, cols, rows, kind, shift);
+    if (kind == 1) {
+        gfx_stamp_end();
+    }
 }
 
 static void op_span(RbVm *vm, uint8_t slot, uint16_t si, uint16_t dest,

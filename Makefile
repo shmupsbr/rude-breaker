@@ -73,7 +73,7 @@ SRCS := $(CORE_SRCS) $(HAL_SRCS)
 OBJS := $(SRCS:%.c=$(BUILD)/$(PLATFORM)/%.o) \
         $(YMFM_SRCS:%.cpp=$(BUILD)/$(PLATFORM)/%.o)
 
-.PHONY: all linux clean test-assets test-endian vm-check cfg-check dirs
+.PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test dirs
 
 all: dirs $(TARGET) test-endian
 
@@ -109,6 +109,12 @@ cfg-check: dirs $(CFG_CHECK_OBJS)
 	$(CC) $(CFLAGS) -Wno-unused-function -c -o $(BUILD)/cfg_check.o tools/cfg_check.c
 	$(LINK) -o $(BUILD)/cfg_check$(EXE) $(BUILD)/cfg_check.o $(CFG_CHECK_OBJS) $(LDFLAGS)
 	@if [ -z "$(EXE)" ]; then $(BUILD)/cfg_check; else echo "cross compile: skipped running cfg_check$(EXE)"; fi
+
+# ZX filter rules on synthetic frames (no game data).
+zx-test: dirs
+	$(CC) $(CFLAGS) -c -o $(BUILD)/cfilter_zx.o src/core/cfilter.c
+	$(CC) $(CFLAGS) -o $(BUILD)/zx_rules_test tools/zx_rules_test.c $(BUILD)/cfilter_zx.o
+	$(BUILD)/zx_rules_test
 
 test-endian: dirs
 	$(CC) $(CFLAGS) -o $(BUILD)/test_endian$(EXE) tools/test_endian.c
