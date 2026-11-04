@@ -173,13 +173,6 @@ static int          g_loop = 1;     /* current loop, 1 = first pass */
 static uint8_t      g_live_b2;      /* the difficulty's own B2 */
 static int          g_run_ok;
 static int          g_last_clear;
-/* 30th AE intro card before the Compile logo: about 3 s at the
- * game's 30.67 Hz logic rate, 12-frame fades in and out. */
-#define CARD_FRAMES CARD_TOTAL
-/* about 0.5 s at the start of the card where no press skips it */
-#define CARD_GRACE  15
-static int          g_card;
-static int          g_card_hold;
 /* Old settings files predate the pr9p defaults (modern palette, ship
  * select off). They are moved over once. */
 static int          g_cfg_v9p;
@@ -2849,11 +2842,7 @@ void game_init(RbGame *g, const RbDisk *disk)
         original_preset(g);
     }
     apply_host_options();
-    if (!((char *)0) && !0) {
-        /* The card shows the real logo, so decode it first. */
-        title_prewarm();
-        g_card = CARD_FRAMES;
-    }
+    /* Straight to the Compile logo, as in the original. */
     g->state = RB_STATE_TITLE;
     if (0 || ((char *)0)) {
         fprintf(stderr, "smoke: title\n");
@@ -4398,55 +4387,7 @@ void game_update(RbGame *g)
         break;
 
     case RB_STATE_TITLE:
-        if (g_vm && g_card > 0) {
-            if (g_card == CARD_FRAMES && ((char *)0)) {
-                fprintf(stderr, "card: start at frame %u\n", (unsigned)g->frame);
-            }
-            /* Anniversary card; any key or button skips it straight to
-             * the Compile logo. The VM waits until the button is let go,
-             * so the same press does not also skip the Compile logo.
-             * test hook=N fakes an unbound key press at frame N. */
-            const char *sk = ((char *)0);
-            int any = sys_any_press();
-            /* Startup grace: presses latched while the game was loading,
-             * keys or buttons still held from the launch, and the first
-             * frames after a window or pad appears do not skip the card. */
-            int grace = CARD_FRAMES - g_card < CARD_GRACE;
-
-            if (grace) {
-                any = 0;
-            }
-
-            if (sk && (unsigned)atoi(sk) == (unsigned)g->frame) {
-                any = 1;
-            }
-            /* Directions never skip: a drifting stick or an axis that
-             * rests off centre must not cut the card short. */
-            if (!grace && (any || btn_pressed(g, 0x0FF0u) ||
-                ((g->input.pad_buttons & ~g->input_prev.pad_buttons) & 0x0FF0u))) {
-                if (((char *)0)) {
-                    fprintf(stderr, "card: skipped at frame %u\n",
-                            (unsigned)g->frame);
-                }
-                g_card = 0;
-                g_card_hold = 1;
-            } else {
-                g_card--;
-            }
-            g_show_frame = 1;
-        } else if (g_vm && g_card_hold) {
-            if (!((g->input.buttons | g->input.pad_buttons) & 0x0FFFu)) {
-                g_card_hold = 0;
-            }
-            g_show_frame = 1;
-        } else if (g_vm) {
-            static int card_logged;
-
-            if (!card_logged && ((char *)0)) {
-                card_logged = 1;
-                fprintf(stderr, "card: done at frame %u, Compile logo starts\n",
-                        (unsigned)g->frame);
-            }
+        if (g_vm) {
             int busy = user_active(g) || menu_visible() || script_settings();
 
             g_idle = busy ? 0 : g_idle + 1;
@@ -4605,11 +4546,6 @@ void game_render(const RbGame *g)
         if (g_vm) {
             uint32_t *frame = sys_frame_pixels();
 
-            if (frame && (g_card > 0 || g_card_hold)) {
-                gfx_intro_card(frame, RB_NATIVE_W, RB_NATIVE_H,
-                               g_card_hold ? -1 : CARD_FRAMES - g_card, panels_title_pixels());
-                break;
-            }
             if (frame) {
                 vm_present(g_vm, frame, RB_NATIVE_W, RB_NATIVE_H);
                 {
@@ -4736,13 +4672,14 @@ void game_render(const RbGame *g)
             }
             aura_draw(px, g);
             {
-                /* ZX: ship white, aura in its mode colour, shots in the
-                 * weapon colour (global D8: 0 V, 1 M, 2 L, as the capsules) */
+                /* ZX: ship white, aura in its mode colour, shots and
+                 * options in the weapon colour (global D8: 0 V red,
+                 * 1 M yellow, 2 L blue). */
                 int w8 = g_vm ? vm_global_u8(g_vm, 0xD8) : 0;
 
                 cfilter_set_player(gfx_own_mask(), g_aura_any ? g_aura_px : NULL,
                                    g_aura_on == 2 ? 12 : g_aura_on == 3 ? 9 : 10,
-                                   w8 == 1 ? 7 : w8 == 2 ? 9 : 10);
+                                   w8 == 1 ? 14 : w8 == 2 ? 9 : 10);
             }
             cfilter_apply(px, RB_NATIVE_W, RB_NATIVE_H, g_cfilter);
             crt_apply(px, RB_NATIVE_W, 80, 0, 480, RB_NATIVE_H, g_crt, g->frame);

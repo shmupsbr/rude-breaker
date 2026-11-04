@@ -30,8 +30,7 @@ Este programa nasceu para criar alterações em um jogo do qual sou muito fã, d
 - **Troca de arma durante o jogo** (SHIP SELECT OFF) agora é o padrão: pegue as cápsulas V, L ou M pra trocar de arma.
 - O **Esc** só pausa durante a partida.
 - O tiro teleguiado do chefe final agora vira o traço na direção em que voa, como no original.
-- Um cartão curto do 30th AE ("Rude Breaker - 30th Anniversary Edition by ShmupsBR 2026") antes do logo da Compile; o tiro ou o Start pula.
-- Tela de título nova, com a marca 30th AE e o crédito © ShmupsBR 2026, e uma linha de crédito do 30th AE no final. A tela de ranking continua com o visual original.
+- Tela de título nova, com a marca 30th AE e o crédito © ShmupsBR 2026, e uma linha de crédito do 30th AE no final. A tela de ranking continua com o visual original. O jogo começa no logo da Compile, como no original.
 
 ### Por que os arquivos do jogo não estão incluídos
 Este repositório contém **só o motor** (o código escrito pra este port). Ele **não** inclui nenhum arquivo do jogo original, e nunca vai incluir:

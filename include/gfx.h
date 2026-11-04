@@ -63,9 +63,8 @@ int gfx_world(const uint16_t **sid, const uint8_t **bgi);
 int gfx_text_mask(const uint8_t **mask, const uint32_t **pre);
 /* Background luma under sprite pixels (valid where the mask is 1). */
 const uint8_t *gfx_bg_luma(void);
-/* Host intro card before the Compile logo, t frames from its start
- * (t < 0: black). Particles gather into the logo, it holds, the two
- * credit lines slide up from below, it holds, then fades. */
+/* 30th AE card draw. Boot does not show it: the game starts on the
+ * Compile logo. t is frames from the start (t < 0: black). */
 #define CARD_FORM   40
 #define CARD_HOLD1  18
 #define CARD_SLIDE  16
