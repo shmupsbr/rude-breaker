@@ -79,12 +79,15 @@ OBJS := $(SRCS:%.c=$(BUILD)/$(PLATFORM)/%.o) \
 
 .PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test dirs debug
 
+# `debug` must not be the first target: plain `make` is the release build.
+.DEFAULT_GOAL := all
+
+all: dirs $(TARGET) test-endian
+
 # Debug build: same game, plus F9 to jump into the Kraken fight.
 # Leave this target and the KRAKEN_DEBUG blocks out of a release build.
 debug:
 	$(MAKE) EXTRA_CFLAGS=-DKRAKEN_DEBUG=1 all
-
-all: dirs $(TARGET) test-endian
 
 linux:
 	$(MAKE) LINUX_BUNDLE=1 all
@@ -96,11 +99,20 @@ dirs:
 $(TARGET): $(OBJS)
 	$(LINK) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/$(PLATFORM)/%.o: %.c
+# Rebuild objects when the flags change, so `make debug` cannot leave
+# -DKRAKEN_DEBUG in the binary that a later plain `make` links.
+$(BUILD)/$(PLATFORM)/cflags.tag: FORCE
+	@mkdir -p $(dir $@)
+	@printf '%s\n' '$(CFLAGS)' | cmp -s - $@ || printf '%s\n' '$(CFLAGS)' > $@
+
+FORCE:
+.PHONY: FORCE
+
+$(BUILD)/$(PLATFORM)/%.o: %.c $(BUILD)/$(PLATFORM)/cflags.tag
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/$(PLATFORM)/%.o: %.cpp
+$(BUILD)/$(PLATFORM)/%.o: %.cpp $(BUILD)/$(PLATFORM)/cflags.tag
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
