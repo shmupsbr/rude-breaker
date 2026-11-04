@@ -3304,7 +3304,7 @@ static int panels_active(const RbGame *g)
 {
     return g_vm && g_panels_on && g_live && g->state == RB_STATE_PLAY &&
            !menu_visible() && vm_gfx_active(g_vm) &&
-           ((g_orient & 1) || sys_window_wide() || ((char *)0));
+           ((g_orient & 1) || sys_window_wide());
 }
 
 /* The panel logo and side art come from the game's own title screen.
@@ -3364,6 +3364,7 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
     uint32_t *wide = sys_wide_pixels();
 
     if (!wide) {
+        sys_compose_present(0);
         sys_set_wide(0);
         return;
     }
@@ -3555,13 +3556,30 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
     }
     d.time_cs = g_pt_frames * 300u / 92u;
     d.buttons = g_pt_buttons;
-    panels_render(wide, frame, &d);
-    if ((g_orient & 1) && sys_tate_pixels()) {
-        panels_render_tate(sys_tate_pixels(), wide, frame);
-        sys_set_wide(2);
-        return;
+    {
+        int dw = 0, dh = 0, hz = 0, tate = (g_orient & 1) ? 1 : 0;
+        uint32_t *comp;
+
+        if (sys_display(&dw, &dh, &hz) != 0 || dw < 320 || dh < 240) {
+            dw = tate ? RB_TATE_FW : RB_WIDE_W;
+            dh = tate ? RB_TATE_FH : RB_WIDE_H;
+        }
+        if (tate && dw > dh) {
+            int s = dw;
+
+            dw = dh;
+            dh = s;
+        }
+        comp = sys_compose_buf(dw, dh);
+        if (!comp) {
+            sys_compose_present(0);
+            sys_set_wide(0);
+            return;
+        }
+        panels_compose(comp, dw, dh, tate, frame, &d, NULL);
+        sys_compose_present(1);
+        sys_set_wide(tate ? 2 : 1);
     }
-    sys_set_wide(1);
 }
 
 /* ---- RANK MODE ADVANCED ------------------------------------------- */
@@ -4715,6 +4733,7 @@ void game_render(const RbGame *g)
     if (panels_active(g)) {
         panels_draw(g, sys_frame_pixels());
     } else {
+        sys_compose_present(0);
         sys_set_wide(0);
         if (g_training && g->state == RB_STATE_PLAY) {
             sys_draw_text(8, 8, "TRAINING", 0x40FF40FFu);

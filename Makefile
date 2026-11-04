@@ -73,7 +73,7 @@ SRCS := $(CORE_SRCS) $(HAL_SRCS)
 OBJS := $(SRCS:%.c=$(BUILD)/$(PLATFORM)/%.o) \
         $(YMFM_SRCS:%.cpp=$(BUILD)/$(PLATFORM)/%.o)
 
-.PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test dirs
+.PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test panels-fit dirs
 
 all: dirs $(TARGET) test-endian
 
@@ -115,6 +115,13 @@ zx-test: dirs
 	$(CC) $(CFLAGS) -c -o $(BUILD)/cfilter_zx.o src/core/cfilter.c
 	$(CC) $(CFLAGS) -o $(BUILD)/zx_rules_test tools/zx_rules_test.c $(BUILD)/cfilter_zx.o
 	$(BUILD)/zx_rules_test
+
+# Panel composite at several window sizes. No window, no game data.
+panels-fit: dirs
+	$(CC) $(CFLAGS) -c -o $(BUILD)/panels_fit_p.o src/core/panels.c
+	$(CC) $(CFLAGS) -c -o $(BUILD)/panels_fit_g.o src/core/gfx.c
+	$(CC) $(CFLAGS) -o $(BUILD)/panels_fit tools/panels_fit.c $(BUILD)/panels_fit_p.o $(BUILD)/panels_fit_g.o -lm
+	$(BUILD)/panels_fit
 
 test-endian: dirs
 	$(CC) $(CFLAGS) -o $(BUILD)/test_endian$(EXE) tools/test_endian.c

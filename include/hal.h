@@ -256,6 +256,14 @@ uint32_t *sys_frame_pixels(void);
 #define RB_WIDE_W 1920
 #define RB_WIDE_H 1080
 int       sys_window_wide(void);
+/* Current output size and the display's refresh, in Hz (0 if unknown).
+ * Reads the live window, so a resize or fullscreen toggle shows up on
+ * the next call. */
+int       sys_display(int *w, int *h, int *hz);
+/* RGBA buffer of w by h for the universal panel composite. */
+uint32_t *sys_compose_buf(int w, int h);
+/* Present that buffer, 1:1 with the window (no side letterbox). */
+void      sys_compose_present(int on);
 uint32_t *sys_wide_pixels(void);
 void      sys_set_wide(int on);
 /* TATE: mode 2 of sys_set_wide presents the 1080x1920 vertical frame

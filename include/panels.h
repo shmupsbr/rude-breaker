@@ -72,4 +72,19 @@ void panels_render(uint32_t *out, const uint32_t *game640, const RbPanelData *d)
 #define RB_TATE_H 1920
 void panels_render_tate(uint32_t *out, const uint32_t *wide, const uint32_t *game640);
 
+/* Where the playfield and the scaled widgets landed in a compose. */
+typedef struct RbPanelGeom {
+    int field_x, field_y, field_w, field_h;
+    int widgets; /* 1 when the side (or tate top/bottom) widgets are drawn */
+    int n;
+    int x[40], y[40], w[40], h[40];
+} RbPanelGeom;
+
+/* Host composite at an arbitrary window size. tate=0 is yoko. The metal
+ * plate is sampled at 1:1 and cropped; widgets keep the 1920x1080
+ * proportions inside the side area. out is w*h pixels, 0xRRGGBBAA. */
+void panels_compose(uint32_t *out, int w, int h, int tate,
+                    const uint32_t *game640, const RbPanelData *d,
+                    RbPanelGeom *geom);
+
 #endif

@@ -956,6 +956,13 @@ void sys_read_input(RbInput *out)
         if (ev.type == SDL_QUIT) {
             out->buttons |= RB_BTN_QUIT;
         }
+        if (ev.type == SDL_WINDOWEVENT &&
+            (ev.window.event == SDL_WINDOWEVENT_RESIZED ||
+             ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+             ev.window.event == SDL_WINDOWEVENT_DISPLAY_CHANGED)) {
+            /* The next sys_display() reads the new size and refresh. */
+            (void)ev;
+        }
         if (ev.type == SDL_JOYDEVICEADDED || ev.type == SDL_JOYDEVICEREMOVED ||
             ev.type == SDL_CONTROLLERDEVICEADDED ||
             ev.type == SDL_CONTROLLERDEVICEREMOVED) {
