@@ -18,6 +18,7 @@
 #include "gfx.h"
 #include "eq.h"
 #include "panels.h"
+#include "pngwrite.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -4592,6 +4593,8 @@ void game_update(RbGame *g)
 void game_render(const RbGame *g)
 {
     char line[80];
+    static uint32_t shot_copy[RB_NATIVE_W * RB_NATIVE_H];
+    static int shot_have;
 
     if (!g_show_frame) {
         return;
@@ -4605,6 +4608,7 @@ void game_render(const RbGame *g)
                  g_handoff != 0 || (g_suspend && !g_suspend_closed))) {
         return;
     }
+    shot_have = 0;
     host_menu_paint();
     sys_clear(8, 8, 24);
 
@@ -4751,6 +4755,12 @@ void game_render(const RbGame *g)
             }
             cfilter_apply(px, RB_NATIVE_W, RB_NATIVE_H, g_cfilter);
             crt_apply(px, RB_NATIVE_W, 80, 0, 480, RB_NATIVE_H, g_crt, g->frame);
+            /* F12 keeps this 640x400 frame: colour filter and CRT,
+             * before the hitbox overlay, host scaling and the panels. */
+            if (sys_screenshot_pending()) {
+                memcpy(shot_copy, px, sizeof shot_copy);
+                shot_have = 1;
+            }
             /* after the filters, so its 1 px sides stay crisp */
             hitbox_draw(px);
             memcpy(snap_f, px, n * 4u);
@@ -4840,6 +4850,14 @@ void game_render(const RbGame *g)
                     saved = 1;
                 }
             }
+        }
+    }
+    if (sys_screenshot_pending()) {
+        const uint32_t *src = shot_have ? shot_copy : sys_frame_pixels();
+
+        if (src) {
+            rb_save_screenshot(src, RB_NATIVE_W, RB_NATIVE_H, g->asset_dir);
+            (void)sys_take_screenshot_key();
         }
     }
 }

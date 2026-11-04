@@ -283,6 +283,9 @@ void sys_set_scaling(int mode);
 void sys_set_aspect(int a43);
 /* 1 once per F11 press since the last call. */
 int  sys_take_fullscreen_key(void);
+/* F12: 1 while a screenshot has been asked and not taken yet. */
+int  sys_screenshot_pending(void);
+int  sys_take_screenshot_key(void);
 void sys_draw_sprite(const RbSprite *spr);
 void sys_draw_rect(const RbRect *rect, uint32_t rgba);
 void sys_draw_text(int16_t x, int16_t y, const char *utf8, uint32_t rgba);

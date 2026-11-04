@@ -206,12 +206,27 @@ Teclado (padrão):
   Sair               F10
   Tela cheia         F11 (liga/desliga a qualquer momento; salvo
                      como a opção FULLSCREEN)
+  Captura de tela    F12 (PNG 640x400 da imagem do jogo, depois do
+                     filtro de cor, antes da escala e sem os painéis).
+                     Salvo em screenshots/RudeBreaker_AAAAMMDD_HHMMSS.png
+                     na pasta do jogo (junto do programa, ou em
+                     RUDEBR_ASSETS). Uma segunda captura no mesmo
+                     segundo ganha _2, _3, e assim por diante. A pasta
+                     é criada no primeiro F12.
   Info de tempo      F8 (mostra o ritmo dos quadros, veja a seção 7)
 
 Controle:
 
   Qualquer controle padrão de PC (XInput ou DirectInput) é detectado
   sozinho. Dá para ligar ou desligar o controle com o jogo rodando.
+  PlayStation 4 e 5, Xbox, Wii e Wii U Pro (por adaptador), 8BitDo em
+  todos os modos, fliperamas e USB comuns saem de uma lista embutida
+  no programa (um recorte do SDL Game Controller DB, licença zlib).
+  Um gamecontrollerdb.txt opcional junto do programa, ou em
+  RUDEBR_ASSETS, acrescenta ou substitui entradas. Um joystick fora
+  da lista ainda funciona: alavanca ou hat para mover, botões 1 a 4
+  para tiro, modo, especial e velocidade, e o botão 8 ou 10 (ou o
+  primeiro botão acima disso que você apertar) para pausa.
 
   Mover              Analógico esquerdo ou direcional
   Tiro / confirmar   Botão de baixo (A no controle do Xbox)

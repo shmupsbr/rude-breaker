@@ -27,6 +27,7 @@ CORE_SRCS := \
 	src/core/inflate.c \
 	src/core/vm.c \
 	src/core/gfx.c \
+	src/core/pngwrite.c \
 	src/core/pace.c \
 	src/core/cfilter.c \
 	src/core/crt.c \
@@ -73,7 +74,7 @@ SRCS := $(CORE_SRCS) $(HAL_SRCS)
 OBJS := $(SRCS:%.c=$(BUILD)/$(PLATFORM)/%.o) \
         $(YMFM_SRCS:%.cpp=$(BUILD)/$(PLATFORM)/%.o)
 
-.PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test panels-fit dirs
+.PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test panels-fit png-test gc-db dirs
 
 all: dirs $(TARGET) test-endian
 
@@ -115,6 +116,18 @@ zx-test: dirs
 	$(CC) $(CFLAGS) -c -o $(BUILD)/cfilter_zx.o src/core/cfilter.c
 	$(CC) $(CFLAGS) -o $(BUILD)/zx_rules_test tools/zx_rules_test.c $(BUILD)/cfilter_zx.o
 	$(BUILD)/zx_rules_test
+
+# F12 PNG writer: round trip and the _2 name when two shots share a second.
+png-test: dirs
+	$(CC) $(CFLAGS) -c -o $(BUILD)/pngwrite_t.o src/core/pngwrite.c
+	$(CC) $(CFLAGS) -c -o $(BUILD)/exepath_t.o src/core/exepath.c
+	$(CC) $(CFLAGS) -o $(BUILD)/png_shot_test tools/png_shot_test.c $(BUILD)/pngwrite_t.o $(BUILD)/exepath_t.o
+	$(BUILD)/png_shot_test
+
+# Embedded controller list: families present, every line accepted by SDL.
+gc-db: dirs
+	$(CC) $(CFLAGS) -o $(BUILD)/gc_db_check tools/gc_db_check.c $(SDL2_LIBS)
+	$(BUILD)/gc_db_check
 
 # Panel composite at several window sizes. No window, no game data.
 panels-fit: dirs
