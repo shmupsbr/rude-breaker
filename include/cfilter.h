@@ -32,6 +32,7 @@ void cfilter_set_layer(const uint8_t *mask);
 /* Background luma under sprite pixels for the next cfilter_apply, or NULL. */
 void cfilter_set_bg(const uint8_t *luma);
 void cfilter_set_kind(const uint8_t *kind);
+void cfilter_set_player(const uint8_t *own, const uint8_t *aura, int aura_ink, int shot_ink);
 void cfilter_set_stage(int stage);
 /* ZX: per shown pixel sprite family id (0 = scenery) and background
  * index, and the page scroll, so colours can follow the scenery. */

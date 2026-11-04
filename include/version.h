@@ -5,7 +5,7 @@
  * CONFIG page; the manuals carry the same number. A build can pass
  * -DRB_VERSION="..." to override it. */
 #ifndef RB_VERSION
-#define RB_VERSION "0.10.0"
+#define RB_VERSION "0.10.1"
 #endif
 
 /* Version as the CONFIG page prints it (the host font draws the
