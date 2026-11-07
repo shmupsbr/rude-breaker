@@ -269,6 +269,8 @@ static int g_comp_w, g_comp_h;
 static SDL_Texture *g_comp_tex;
 static int g_comp_tex_w, g_comp_tex_h;
 static int g_comp_on;
+static unsigned g_comp_gen;
+static unsigned g_comp_uploaded;
 
 uint32_t *sys_compose_buf(int w, int h)
 {
@@ -287,6 +289,9 @@ uint32_t *sys_compose_buf(int w, int h)
 void sys_compose_present(int on)
 {
     g_comp_on = on && g_comp ? 1 : 0;
+    if (g_comp_on) {
+        g_comp_gen++;
+    }
 }
 
 uint32_t *sys_tate_pixels(void)
@@ -324,6 +329,9 @@ static void scaling_apply(void)
     }
     if (g_tate_texture) {
         SDL_SetTextureScaleMode(g_tate_texture, m);
+    }
+    if (g_comp_tex) {
+        SDL_SetTextureScaleMode(g_comp_tex, m);
     }
 }
 
@@ -1386,10 +1394,20 @@ void sys_present(void)
                                            SDL_TEXTUREACCESS_STREAMING, g_comp_w, g_comp_h);
             g_comp_tex_w = g_comp_tex ? g_comp_w : 0;
             g_comp_tex_h = g_comp_tex ? g_comp_h : 0;
+            g_comp_uploaded = 0;
         }
         if (g_comp_tex) {
+            SDL_ScaleMode m = g_scaling == 0 ? SDL_ScaleModeLinear : SDL_ScaleModeNearest;
+
             SDL_GetRendererOutputSize(g_rb_renderer, &ow, &oh);
-            SDL_UpdateTexture(g_comp_tex, NULL, g_comp, g_comp_w * (int)sizeof(uint32_t));
+            SDL_SetTextureScaleMode(g_comp_tex, m);
+            /* Smooth mode presents the same logic frame for several
+             * refreshes. Uploading the 4K buffer every refresh was a
+             * second full copy on top of the composite. */
+            if (g_comp_uploaded != g_comp_gen) {
+                SDL_UpdateTexture(g_comp_tex, NULL, g_comp, g_comp_w * (int)sizeof(uint32_t));
+                g_comp_uploaded = g_comp_gen;
+            }
             full.x = 0;
             full.y = 0;
             full.w = ow;

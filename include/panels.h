@@ -92,4 +92,9 @@ void panels_compose(uint32_t *out, int w, int h, int tate,
 /* The grey metal plate at window pixel (x, y), 1:1, 0xRRGGBBAA. */
 uint32_t panels_plate_at(int x, int y);
 
+/* Size to rasterise. A 16:9 output uses the 1920x1080 reference and
+ * the GPU scales that picture, so 1080p and 4K are the same layout.
+ * 21:9, 16:10 and 4:3 stay at the output size. */
+void panels_output_size(int dw, int dh, int *cw, int *ch);
+
 #endif

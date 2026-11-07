@@ -434,6 +434,41 @@ static void step_bar(uint32_t *o, int x, int y, int w, int h, int n, const int *
 
 /* ---- background ---------------------------------------------------- */
 
+static int near_aspect(int w, int h, int aw, int ah)
+{
+    long d;
+
+    if (w <= 0 || h <= 0) {
+        return 0;
+    }
+    d = (long)w * ah - (long)h * aw;
+    if (d < 0) {
+        d = -d;
+    }
+    return d * 100 < (long)h * aw * 2;
+}
+
+void panels_output_size(int dw, int dh, int *cw, int *ch)
+{
+    int w = dw > 0 ? dw : 1;
+    int h = dh > 0 ? dh : 1;
+
+    /* 16:9 keeps the 1920x1080 reference. The GPU scales that picture
+     * onto the output, so 720p, 1080p, 1440p and 4K are the same
+     * layout. Rasterising 4K in software made the panels a different
+     * fraction of the screen and blew the frame budget. */
+    if (near_aspect(w, h, 16, 9)) {
+        w = RB_PANEL_W;
+        h = RB_PANEL_H;
+    }
+    if (cw) {
+        *cw = w;
+    }
+    if (ch) {
+        *ch = h;
+    }
+}
+
 /* Metal plate at 1:1. The same title-column tiling as the 1920 layout,
  * repeated, never stretched: a window just crops a bigger piece of it. */
 uint32_t panels_plate_at(int x, int y)
@@ -2151,6 +2186,18 @@ static int place_column(uint32_t *out, int ow, int oh, int side_x, int side_w,
                 dw = side_x + side_w - dx;
             }
             if (dw > 0 && bh > 0) {
+                int py;
+                int px;
+
+                /* Drop the previous frame's ink. The plate under the
+                 * box does not change with the window. */
+                for (py = 0; py < bh; py++) {
+                    uint32_t *row = out + (size_t)(y + py) * ow + dx;
+
+                    for (px = 0; px < dw; px++) {
+                        row[px] = panels_plate_at(dx + px, y + py);
+                    }
+                }
                 blit_ink(out, ow, oh, ref, PW, bg, b->x, b->y, b->w, b->h, dx, y, dw, bh);
                 if (geom && geom->n < 40) {
                     geom->x[geom->n] = dx;
@@ -2289,14 +2336,57 @@ void panels_compose(uint32_t *out, int w, int h, int tate, const uint32_t *game,
             fy = (h - fh) / 2;
         }
     }
+    if (!tate && near_aspect(w, h, 16, 9)) {
+        /* The approved 16:9 picture is the 1920x1080 reference:
+         * 420 px columns and a 1080 square field, scaled as a whole.
+         * The largest-4:3 fit left 240 px columns and shrank the
+         * widgets to about half. */
+        double s = (double)h / 1080.0;
+
+        if ((long)w * 9 < (long)h * 16) {
+            s = (double)w / 1920.0;
+        }
+        fw = (int)(1080.0 * s + 0.5);
+        fh = (int)(1080.0 * s + 0.5);
+        if (fw > w) {
+            fw = w;
+        }
+        if (fh > h) {
+            fh = h;
+        }
+        if (fw < 1) {
+            fw = 1;
+        }
+        if (fh < 1) {
+            fh = 1;
+        }
+        fx = (w - fw) / 2;
+        fy = (h - fh) / 2;
+    }
     if (g_back_ok != g_have_title) {
         build_back();
     }
-    for (i = 0; i < w * h; i++) {
-        int x = i % w;
-        int y = i / w;
+    {
+        /* The plate is a constant for a given window, so it is painted
+         * once. Later frames only repaint the field and the widget
+         * rects, which the draws below cover. A 4K frame is 8 million
+         * pixels; refilling all of them every logic tick was most of
+         * the host time and pushed the 30.67 Hz budget over on a 4K
+         * present. */
+        static int plate_w, plate_h, plate_title;
+        int refill = plate_w != w || plate_h != h || plate_title != g_have_title || !out;
 
-        out[i] = panels_plate_at(x, y);
+        if (refill) {
+            for (i = 0; i < w * h; i++) {
+                int x = i % w;
+                int y = i / w;
+
+                out[i] = panels_plate_at(x, y);
+            }
+            plate_w = w;
+            plate_h = h;
+            plate_title = g_have_title;
+        }
     }
     blit_game(out, w, fx, fy, fw, fh, game, !wide && !tate);
     if (geom) {

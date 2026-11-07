@@ -18,6 +18,7 @@
 #include "gfx.h"
 #include "eq.h"
 #include "panels.h"
+#include "pause_box.h"
 #include "pngwrite.h"
 
 #include <stdio.h>
@@ -2332,16 +2333,24 @@ static void host_menu_paint(void)
 
     if (g_pmenu == 1 && g_vm) {
         static const char *pitem[2] = {"RESUME", "MAIN MENU"};
+        RbPauseBox box;
 
-        /* Dark box in the middle of the playfield, the match's text
-         * (HUD) left as it is around it. */
-        gfx_set_panel(1, 208, 136, 432, 264);
-        for (row = 8; row <= 16; row++) {
-            vm_text_write(g_vm, 26, row, "", 14, 0);
+        /* One centred dialog. Lines share a centre, the selection bar
+         * is the same width on every row, and the box stays inside
+         * the playfield (columns 80..560) so the side plate cannot
+         * clip it. */
+        rb_pause_box(&box);
+        gfx_set_panel(1, box.box_x, box.box_y, box.box_x + box.box_w,
+                      box.box_y + box.box_h);
+        gfx_set_hilite(1, box.bar_x, box.item_row[g_pcur] * 16, box.bar_x + box.bar_w,
+                       box.item_row[g_pcur] * 16 + box.bar_h);
+        for (row = box.title_row - 1; row <= box.item_row[1] + 1; row++) {
+            vm_text_write(g_vm, 10, row, "", 60, 0);
         }
-        vm_text_write(g_vm, 35, 9, "PAUSE", 0, 0xE1u);
-        for (i = 0; i < 2; i++) {
-            paint_option_row(34, 0, 11 + i * 2, pitem[i], NULL, 0, i == g_pcur, 0);
+        vm_text_write(g_vm, box.title_col, box.title_row, "PAUSE", 0, 0xE1u);
+        for (i = 0; i < box.n_items; i++) {
+            paint_option_row(box.item_col[i], 0, box.item_row[i], pitem[i], NULL, 0,
+                             i == g_pcur, 0);
         }
         return;
     }
@@ -3620,6 +3629,14 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
             dw = dh;
             dh = s;
         }
+        if (!tate) {
+            int cw = dw;
+            int ch = dh;
+
+            panels_output_size(dw, dh, &cw, &ch);
+            dw = cw;
+            dh = ch;
+        }
         comp = sys_compose_buf(dw, dh);
         if (!comp) {
             sys_compose_present(0);
@@ -4788,6 +4805,10 @@ void game_render(const RbGame *g)
             }
         }
     }
+    /* F8 reads the native frame. It has to land before the composite
+     * copies that frame, or a 4K present never shows it and a 1:1
+     * stamp on the high-res buffer would be a few pixels tall. */
+    sys_pace_overlay_draw();
     aspect_follow_display();
     gfx_set_hud_inset(panels_active(g));
     if (panels_active(g) || plate_bars(g)) {
