@@ -85,4 +85,9 @@ int kr_core_open(int hp);
 int kr_same_shot(int scored, unsigned org, unsigned prev_org,
                  int x0, int y0, int x1, int y1);
 
+/* How many pictures a stage-5 skip paints. extra_per_update 0 means the
+ * skip finishes before the next present. 80 means every paced tick
+ * fast-forwards that many VM frames onto the screen. */
+int kr_seek_presents(int vm_frames, int extra_per_update);
+
 #endif
