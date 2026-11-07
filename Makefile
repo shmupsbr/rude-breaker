@@ -28,6 +28,7 @@ CORE_SRCS := \
 	src/core/vm.c \
 	src/core/gfx.c \
 	src/core/pngwrite.c \
+	src/core/pause_box.c \
 	src/core/pace.c \
 	src/core/cfilter.c \
 	src/core/crt.c \
@@ -74,7 +75,7 @@ SRCS := $(CORE_SRCS) $(HAL_SRCS)
 OBJS := $(SRCS:%.c=$(BUILD)/$(PLATFORM)/%.o) \
         $(YMFM_SRCS:%.cpp=$(BUILD)/$(PLATFORM)/%.o)
 
-.PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test panels-fit png-test gc-db dirs
+.PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test panels-fit png-test gc-db pause-box compose-bench dirs
 
 all: dirs $(TARGET) test-endian
 
@@ -116,6 +117,19 @@ zx-test: dirs
 	$(CC) $(CFLAGS) -c -o $(BUILD)/cfilter_zx.o src/core/cfilter.c
 	$(CC) $(CFLAGS) -o $(BUILD)/zx_rules_test tools/zx_rules_test.c $(BUILD)/cfilter_zx.o
 	$(BUILD)/zx_rules_test
+
+# Pause dialog: centred in the playfield, even padding, no clip.
+pause-box: dirs
+	$(CC) $(CFLAGS) -c -o $(BUILD)/pause_box.o src/core/pause_box.c
+	$(CC) $(CFLAGS) -o $(BUILD)/pause_box_test tools/pause_box_test.c $(BUILD)/pause_box.o
+	$(BUILD)/pause_box_test
+
+# Host composite cost at 1080p and 4K (CPU only, no SDL upload).
+compose-bench: dirs
+	$(CC) $(CFLAGS) -c -o $(BUILD)/compose_bench_p.o src/core/panels.c
+	$(CC) $(CFLAGS) -c -o $(BUILD)/compose_bench_g.o src/core/gfx.c
+	$(CC) $(CFLAGS) -o $(BUILD)/compose_bench tools/compose_bench.c $(BUILD)/compose_bench_p.o $(BUILD)/compose_bench_g.o -lm
+	$(BUILD)/compose_bench
 
 # F12 PNG writer: round trip and the _2 name when two shots share a second.
 png-test: dirs

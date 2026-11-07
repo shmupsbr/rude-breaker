@@ -11,6 +11,8 @@
 
 static uint32_t game[GW * GH];
 static int fails;
+static RbPanelGeom g1080, g2160;
+static int have1080, have2160;
 
 static const uint32_t PX_PLAY_L = 0x00E100FFu;
 static const uint32_t PX_PLAY_R = 0x0000E1FFu;
@@ -114,6 +116,14 @@ static void one(int w, int h, int tate)
     }
     printf("  field %d,%d %dx%d widgets=%d boxes=%d black=%d\n", g.field_x, g.field_y, g.field_w,
            g.field_h, g.widgets, g.n, black);
+    if (w == 1920 && h == 1080) {
+        g1080 = g;
+        have1080 = 1;
+    }
+    if (w == 3840 && h == 2160) {
+        g2160 = g;
+        have2160 = 1;
+    }
     if (!tate && (long)w * 10 >= (long)h * 16) {
         int min_h = g.field_h;
         int max_w = 0;
@@ -208,7 +218,53 @@ int main(void)
     one(1600, 1200, 0); /* 4:3: no panels, picture fills the frame */
     one(2560, 1080, 0);
     one(3440, 1440, 0);
+    one(3840, 2160, 0);
     one(1080, 1920, 1);
+    {
+        int cw = 0, ch = 0;
+
+        panels_output_size(3840, 2160, &cw, &ch);
+        expect("4K rasterises at 1080p", cw == 1920 && ch == 1080);
+        panels_output_size(1920, 1080, &cw, &ch);
+        expect("1080p rasterises at 1080p", cw == 1920 && ch == 1080);
+        panels_output_size(2560, 1080, &cw, &ch);
+        expect("21:9 stays 1:1", cw == 2560 && ch == 1080);
+        panels_output_size(1920, 1200, &cw, &ch);
+        expect("16:10 stays 1:1", cw == 1920 && ch == 1200);
+        panels_output_size(2560, 1440, &cw, &ch);
+        expect("1440p rasterises at 1080p", cw == 1920 && ch == 1080);
+    }
+    expect("1080p field is the reference", have1080 && g1080.field_x == 420 &&
+                                               g1080.field_y == 0 && g1080.field_w == 1080 &&
+                                               g1080.field_h == 1080);
+    expect("1080p columns are the reference width",
+           have1080 && g1080.n > 0 && g1080.w[0] >= 370 && g1080.w[0] <= 400);
+    if (have1080 && have2160 && g1080.n == g2160.n && g1080.n > 0) {
+        int i;
+        int bad = 0;
+
+        expect("4K field is 2x 1080p", g2160.field_w == g1080.field_w * 2 &&
+                                            g2160.field_h == g1080.field_h * 2 &&
+                                            g2160.field_x == g1080.field_x * 2 &&
+                                            g2160.field_y == g1080.field_y * 2);
+        for (i = 0; i < g1080.n; i++) {
+            int dx = g2160.x[i] - g1080.x[i] * 2;
+            int dy = g2160.y[i] - g1080.y[i] * 2;
+            int dw = g2160.w[i] - g1080.w[i] * 2;
+            int dh = g2160.h[i] - g1080.h[i] * 2;
+
+            if (dx < -1 || dx > 1 || dy < -1 || dy > 1 || dw < -1 || dw > 1 || dh < -1 ||
+                dh > 1) {
+                fprintf(stderr, "  scale box %d 1080 %d,%d %dx%d  4k %d,%d %dx%d\n", i,
+                        g1080.x[i], g1080.y[i], g1080.w[i], g1080.h[i], g2160.x[i], g2160.y[i],
+                        g2160.w[i], g2160.h[i]);
+                bad++;
+            }
+        }
+        expect("4K widgets are 2x 1080p", bad == 0);
+    } else {
+        expect("4K and 1080p both measured", 0);
+    }
     if (fails) {
         fprintf(stderr, "%d failed\n", fails);
         return 1;
