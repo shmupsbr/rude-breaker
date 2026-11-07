@@ -441,18 +441,30 @@ void kraken_debug_arm(void)
 int kraken_debug_ready(const RbVm *vm)
 {
     RbVmInfo info;
+    RbEntView core;
     const uint8_t *script;
     uint32_t n = 0;
     int ship = 0;
     int i;
+    int slot;
     uint16_t worg = 0;
     int pat_ok;
     int bg;
+    int ctx;
     int ready;
+    int x = 0;
+    int y = 0;
+    int cw = 0;
+    int ch = 0;
     static int logs;
+    static KrF9Watch watch;
 
     if (!vm) {
         return 0;
+    }
+    if (!s_arm) {
+        watch.have = 0;
+        watch.held = 0;
     }
     vm_info(vm, &info);
     script = vm_chunk_bytes(vm, CORE_CH, &n);
@@ -467,17 +479,28 @@ int kraken_debug_ready(const RbVm *vm)
             ship = 1;
         }
     }
-    ready = kr_f9_ready((int)info.chunk, live_core(vm), pat_ok, bg, ship,
-                        weapon_ready(vm, &worg));
+    slot = find_core(vm, &core);
+    if (slot >= 0) {
+        x = core.x;
+        y = core.y;
+        cw = core.w;
+        ch = core.h;
+    }
+    ctx = kr_f9_ready((int)info.chunk, slot >= 0, pat_ok, bg, ship,
+                      weapon_ready(vm, &worg), x, y, cw, ch,
+                      RB_NATIVE_W, RB_NATIVE_H);
+    /* Mode is passed and ignored. Original and Black Label share this. */
+    ready = kr_f9_poll(0, &watch, ctx, x, y, KR_F9_SLACK, KR_F9_SETTLE);
     logs++;
     if (ready || logs == 1 || (logs % 2400) == 0) {
         uint32_t blen = 0;
         const RbGfx *gfx = vm_gfx(vm);
 
         fprintf(stderr,
-                "kraken f9: chunk=%u bg=%d ship=%d weapon=%04X core=%d pat_ok=%d bank36=%d\n",
-                (unsigned)info.chunk, bg, ship, (unsigned)worg, live_core(vm), pat_ok,
-                gfx && gfx_bank_data(gfx, CORE_BANK, &blen) && blen > 128u ? 1 : 0);
+                "kraken f9: chunk=%u bg=%d ship=%d weapon=%04X core=%d pat_ok=%d bank36=%d x=%d y=%d onscreen=%d settle=%d/%d\n",
+                (unsigned)info.chunk, bg, ship, (unsigned)worg, slot >= 0, pat_ok,
+                gfx && gfx_bank_data(gfx, CORE_BANK, &blen) && blen > 128u ? 1 : 0,
+                x, y, ctx, watch.held, KR_F9_SETTLE);
         fflush(stderr);
     }
     return ready;
@@ -1703,7 +1726,9 @@ static void start_fight(RbVm *vm)
     vm_set_kraken_take(vm, 0);
     vm_set_kraken_hold(vm, 1);
     flags = vm_global_u16(vm, 0x72);
-    flags = (uint16_t)(flags & (uint16_t)~0x0800u);
+    /* 0x0100 is the immunity the ship script checks. 0x0800 is only
+     * the debug-key gate. The fight itself is not immune. */
+    flags = (uint16_t)(flags & (uint16_t)~(0x0800u | 0x0100u));
     vm_set_global_u8(vm, 0x72, (uint8_t)flags);
     vm_set_global_u8(vm, 0x73, (uint8_t)(flags >> 8));
     for (i = 0; i < 256; i++) {

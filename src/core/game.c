@@ -3910,7 +3910,14 @@ static void live_update(RbGame *g)
         /* Original ends after stage 5. Infinite and Black Label go
          * back to stage 1. Black Label stops looping only while Kraken
          * is on screen; beating Kraken loads the ending itself. */
-        vm_set_loop(g_vm, g_mode != MODE_ORIGINAL && !kraken_active(),
+        /* F9 plays one stage 5 in every mode. Leaving the loop redirect
+         * on would send Black Label off this stage before the boss. */
+        vm_set_loop(g_vm,
+                    g_mode != MODE_ORIGINAL && !kraken_active()
+#if KRAKEN_DEBUG
+                    && !(kraken_debug_armed() && !kraken_active())
+#endif
+                    ,
                     g_training ? g_live_c9 : k_c9[nb],
                     g_training ? (g_live_b2 ? g_live_b2 : 2u) : k_b2[nb]);
     }
@@ -4424,10 +4431,10 @@ void game_update(RbGame *g)
     }
     apply_host_options();
 #if KRAKEN_DEBUG
-    /* F9: the debug build runs stage 5 up to the live core, then the
-     * same in-place transform the counted loop uses. Release builds
-     * do not compile this, and the key is not read. One stage entry
-     * only; resetting every frame left a black screen. */
+    /* F9: every mode loads stage 5 and runs it until the live core is
+     * fully on screen and holding still, then the same in-place
+     * transform the counted loop uses. Release builds do not compile
+     * this, and the key is not read. One stage entry only. */
     {
         static int sought;
 
@@ -4436,9 +4443,7 @@ void game_update(RbGame *g)
             kraken_dump_screen(g_vm);
         }
         if ((user_buttons & RB_BTN_BOSS) && !(g->input_prev.buttons & RB_BTN_BOSS)) {
-            /* Mode, stage and the open menu do not matter. Stage 5 is
-             * loaded from scratch, then run until its own end boss, its
-             * picture and the weapon controller are up. */
+            /* Mode, stage and the open menu do not matter. */
             if (g_demo) {
                 demo_end(g);
             }
@@ -4455,17 +4460,40 @@ void game_update(RbGame *g)
         if (kraken_debug_armed() && !kraken_active() && g_vm) {
             int n;
 
-            set_flag_word((uint16_t)(flag_word() | 0x0800u));
-            if (vm_global_u8(g_vm, 0xD2) < 3) {
-                vm_set_global_u8(g_vm, 0xD2, 3);
-            }
-            vm_set_input(g_vm, &g->input);
-            for (n = 0; n < 80 && sought < 30000 && !kraken_debug_ready(g_vm); n++) {
+            /* Same stage script in Original and Black Label. Bit 0x0100
+             * is what the ship script checks before applying a hit.
+             * Bit 0x0800 only opens the debug keys, including the one
+             * that sets the ending flag, so it stays off. */
+            vm_set_loop(g_vm, 0, vm_global_u8(g_vm, 0xC9), vm_global_u8(g_vm, 0xB2));
+            for (n = 0; n < 80 && sought < 90000 && !kraken_debug_ready(g_vm); n++) {
+                uint16_t f = (uint16_t)((flag_word() | 0x0100u) & (uint16_t)~0x0800u);
+
+                set_flag_word(f);
+                if (vm_global_u8(g_vm, 0xD2) < 3) {
+                    vm_set_global_u8(g_vm, 0xD2, 3);
+                }
+                vm_set_input(g_vm, &g->input);
                 vm_frame(g_vm);
                 sought++;
+                if ((sought % 2400) == 0) {
+                    RbVmInfo info;
+
+                    vm_info(g_vm, &info);
+                    fprintf(stderr,
+                            "kraken f9: seek mode=%d chunk=%u cell=%u speed=%d lives=%u flags=%04X frames=%d\n",
+                            g_mode, (unsigned)info.chunk, (unsigned)info.cell,
+                            (int)info.speed, (unsigned)vm_global_u8(g_vm, 0xD2),
+                            (unsigned)flag_word(), sought);
+                    fflush(stderr);
+                }
             }
-            if (sought == 30000) {
-                fprintf(stderr, "kraken f9: stage 5 never reached its core\n");
+            if (sought == 90000) {
+                RbVmInfo info;
+
+                vm_info(g_vm, &info);
+                fprintf(stderr,
+                        "kraken f9: stage 5 never reached a visible core (mode=%d chunk=%u cell=%u)\n",
+                        g_mode, (unsigned)info.chunk, (unsigned)info.cell);
                 fflush(stderr);
                 sought++;
             }

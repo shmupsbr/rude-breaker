@@ -111,10 +111,54 @@ int kr_pat_is_core(const uint8_t *b, int n)
     return 1;
 }
 
-int kr_f9_ready(int chunk, int live_core, int pat_ok, int bg_lit,
-                int ship, int weapon)
+int kr_sprite_inside(int x, int y, int w, int h, int sw, int sh)
 {
-    return chunk == 6 && live_core && pat_ok && bg_lit >= 80 && ship && weapon;
+    int left;
+    int top;
+    int right;
+    int bottom;
+
+    if (w < 1 || h < 1 || sw < 1 || sh < 1) {
+        return 0;
+    }
+    left = x - w * 8;
+    top = y - h * 8;
+    right = x + w * 8;
+    bottom = y + h * 8;
+    return left >= 0 && top >= 0 && right <= sw && bottom <= sh;
+}
+
+int kr_f9_ready(int chunk, int live_core, int pat_ok, int bg_lit,
+                int ship, int weapon, int x, int y, int w, int h,
+                int sw, int sh)
+{
+    return chunk == 6 && live_core && pat_ok && bg_lit >= 80 && ship && weapon &&
+           kr_sprite_inside(x, y, w, h, sw, sh);
+}
+
+int kr_f9_poll(int mode, KrF9Watch *w, int ready, int x, int y,
+               int slack, int need)
+{
+    (void)mode;
+    if (!w || slack < 0 || need < 1) {
+        return 0;
+    }
+    if (!ready) {
+        w->have = 0;
+        w->held = 0;
+        return 0;
+    }
+    if (w->have && (x > w->x + slack || x < w->x - slack ||
+                    y > w->y + slack || y < w->y - slack)) {
+        w->held = 0;
+    }
+    w->x = x;
+    w->y = y;
+    w->have = 1;
+    if (w->held < need) {
+        w->held++;
+    }
+    return w->held >= need;
 }
 
 /* 0: not our death. 1: become Kraken where the core already is.
