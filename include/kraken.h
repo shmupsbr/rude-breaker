@@ -1,12 +1,12 @@
 /**
  * Kraken, the true last boss.
  *
- * Black Label only. After loop 2's stage 5, if every medal from both
- * loops was taken and the ship never went down, the stage 5 core falls
- * off the bottom, the white flash plays, and three seconds later that
- * core returns with four arms. The hull cannot be hurt until those
- * arms are gone. Missing the condition does not end the run, and a
- * later loop does not get another try.
+ * Black Label only. Kraken starts when two whole loops have each been
+ * cleared with every secret medal and no death. The loops need not be
+ * the first two, and they need not be consecutive: a failed loop drops
+ * only itself. The stage 5 core then falls off the bottom, the white
+ * flash plays, and three seconds later that core returns with four
+ * arms. The hull cannot be hurt until those arms are gone.
  *
  * KRAKEN_DEBUG (off unless the debug make target defines it) adds F9,
  * which plays that appearance on stage 5 without the medal check, and

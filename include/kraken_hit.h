@@ -19,4 +19,23 @@ int kr_core_hit(int hx, int hy, int x, int y);
 int kr_is_projectile(unsigned type, unsigned kind, unsigned origin,
                      unsigned seg, int w, int h);
 
+/* One loop of Black Label. banked is how many earlier loops already
+ * qualified. medals/deaths are this loop only. need is every secret
+ * medal in one five-stage loop. */
+typedef struct KrLoops {
+    int banked;
+    int medals;
+    int deaths;
+    int need;
+} KrLoops;
+
+/* This loop had no death and every secret medal. */
+int kr_loop_clean(const KrLoops *k);
+/* The loop in progress is the second qualifying one, so Kraken starts. */
+int kr_tlb_ready(const KrLoops *k);
+/* The loop ended without Kraken. A clean loop is banked. A failed one
+ * is dropped and does not change banked. Counters for the next loop
+ * are cleared. */
+void kr_finish_loop(KrLoops *k);
+
 #endif
