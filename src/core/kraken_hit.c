@@ -116,3 +116,19 @@ int kr_f9_ready(int chunk, int live_core, int pat_ok, int bg_lit,
 {
     return chunk == 6 && live_core && pat_ok && bg_lit >= 80 && ship && weapon;
 }
+
+/* 0: not our death. 1: become Kraken where the core already is.
+ * 2: Black Label, but this loop does not count, so the core falls away. */
+int kr_core_fate(int black, int tlb_ready, int hp_gone)
+{
+    if (!hp_gone) {
+        return 0;
+    }
+    if (black && tlb_ready) {
+        return 1;
+    }
+    if (black) {
+        return 2;
+    }
+    return 0;
+}

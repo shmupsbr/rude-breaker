@@ -1,11 +1,10 @@
 /**
  * Kraken. Host fight drawn over the stage the ship is already in.
  *
- * The stage 5 boss falls off the bottom while it breaks apart, then
- * the game's own white flash plays. If this is not the true last
- * fight, the run continues. If it is, the central part rises back
- * after three seconds, puts out four arms, and the fight starts.
- * Beating it explodes that part in place. The hull is the stage 5
+ * When the stage 5 core would die and this loop counts, it stays
+ * where it is and puts out four arms. A Black Label core that does
+ * not count still falls off the bottom. Beating Kraken explodes it
+ * in the middle of the screen. The hull is the stage 5
  * boss core (chunk 6, bank 36, pattern 41223, 3x5).
  */
 #include "kraken.h"
@@ -32,6 +31,7 @@ enum {
     PH_LEAVE,
     PH_WAIT,
     PH_RETURN,
+    PH_EMIT,
     PH_FIGHT,
     PH_DEAD
 };
@@ -132,6 +132,10 @@ static int16_t s_px0[256];
 static int16_t s_py0[256];
 static int s_slot[KR_TENT][KR_SEGS];
 static int s_hull_slot;
+static int s_core_slot = -1;
+static int s_seen_x;
+static int s_seen_y;
+static int s_seen;
 static int s_ang[KR_TENT][KR_SEGS];
 static int s_px[KR_TENT][KR_SEGS];
 static int s_py[KR_TENT][KR_SEGS];
@@ -352,6 +356,7 @@ static void slots_init(void)
         }
     }
     s_hull_slot = -1;
+    s_core_slot = -1;
     s_gen = -1;
     s_nhom = 0;
     s_dash = 0;
@@ -393,6 +398,8 @@ void kraken_reset(void)
     s_drop_done = 0;
     s_saw_fort = 0;
     s_quiet = 0;
+    s_core_slot = -1;
+    s_seen = 0;
     memset(s_applied, 0, sizeof s_applied);
     memset(s_last_y, 0, sizeof s_last_y);
     memset(s_drop_org, 0, sizeof s_drop_org);
@@ -410,6 +417,9 @@ int kraken_active(void)
 }
 
 static int live_core(const RbVm *vm);
+static int find_core(const RbVm *vm, RbEntView *out);
+static void start_fight(RbVm *vm);
+static void hold_core(RbVm *vm);
 #if KRAKEN_DEBUG
 static int weapon_ready(const RbVm *vm, uint16_t *org_out);
 #endif
@@ -795,9 +805,6 @@ static void pose_at(int shipx, int shipy, int stretch_all)
 {
     int ti;
 
-    if (s_phase == PH_FIGHT) {
-        s_hy = 96 + ksin(s_timer * 2) / 40;
-    }
     for (ti = 0; ti < KR_TENT; ti++) {
         int stretch = stretch_all;
         int aim;
@@ -1446,6 +1453,9 @@ static void watch_drop(RbVm *vm, int stage)
         if (v.hp > 0 && !(v.type & 0x0400u)) {
             living++;
             s_saw_fort = 1;
+            s_seen_x = v.x;
+            s_seen_y = v.y;
+            s_seen = 1;
         } else {
             dead++;
         }
@@ -1465,6 +1475,11 @@ static void watch_drop(RbVm *vm, int stage)
     /* hp 0 starts at once. A vanished core waits two frames so a
      * one-frame gap during the solo fight does not drop it. */
     if (s_saw_fort && s_quiet >= 2 && !s_drop && !s_drop_done) {
+        /* Eligible: stay here and grow arms. Otherwise fall off. */
+        if (kr_core_fate(s_black, qualified(vm), 1) == 1) {
+            start_fight(vm);
+            return;
+        }
         s_drop = 1;
         s_drop_dy = 0;
         memset(s_applied, 0, sizeof s_applied);
@@ -1479,27 +1494,6 @@ static void watch_drop(RbVm *vm, int stage)
     if (s_drop_dy >= 480) {
         s_drop = 0;
         s_drop_done = 1;
-    }
-}
-
-static void ship_ready(RbVm *vm)
-{
-    int i;
-
-    for (i = 0; i < 256; i++) {
-        RbEntView v;
-
-        if (!vm_ent_view(vm, i, &v)) {
-            continue;
-        }
-        if (v.kind != 0x0012u && v.kind != 0x0014u) {
-            continue;
-        }
-        if (v.y >= 200) {
-            continue;
-        }
-        vm_ent_place(vm, i, v.x, 330, v.bl, v.br, v.bt, v.bb);
-        vm_ent_unhide(vm, i);
     }
 }
 
@@ -1534,12 +1528,12 @@ static void hull_say(const char *msg)
 #endif
 }
 
-static int live_core(const RbVm *vm)
+static int find_core(const RbVm *vm, RbEntView *out)
 {
     int i;
 
     if (!vm) {
-        return 0;
+        return -1;
     }
     for (i = 0; i < 256; i++) {
         RbEntView v;
@@ -1548,10 +1542,18 @@ static int live_core(const RbVm *vm)
             continue;
         }
         if (v.cof == CORE_CH && v.seg == CORE_BANK && v.w == CORE_TW && v.h >= CORE_TH) {
-            return 1;
+            if (out) {
+                *out = v;
+            }
+            return i;
         }
     }
-    return 0;
+    return -1;
+}
+
+static int live_core(const RbVm *vm)
+{
+    return find_core(vm, 0) >= 0;
 }
 
 #if KRAKEN_DEBUG
@@ -1668,13 +1670,26 @@ static int load_core(RbVm *vm)
     return 1;
 }
 
+static void hold_core(RbVm *vm)
+{
+    RbEntView held;
+
+    if (!vm || s_core_slot < 0 || !vm_ent_view(vm, s_core_slot, &held)) {
+        return;
+    }
+    vm_ent_place(vm, s_core_slot, (int16_t)s_hx, (int16_t)s_hy,
+                 held.bl, held.br, held.bt, held.bb);
+    vm_ent_freeze(vm, s_core_slot);
+    vm_ent_set_origin(vm, s_core_slot, KR_SENT);
+}
+
 static void start_fight(RbVm *vm)
 {
     int base;
     int i;
     uint16_t flags;
 
-    if (!load_core(vm)) {
+    if (!load_core(vm) && find_core(vm, 0) < 0) {
 #if KRAKEN_DEBUG
         fprintf(stderr, "kraken: not starting, core sprite is not the stage 5 bank\n");
         fflush(stderr);
@@ -1699,8 +1714,6 @@ static void start_fight(RbVm *vm)
             vm_ent_unhide(vm, i);
         }
     }
-    vm_kraken_isolate(vm);
-    vm_redraw(vm);
     slots_init();
     /* Half of Kraken's life per arm, and a hit is a fixed slice of that
      * so the arm can actually be shot down. A raw boss word in the
@@ -1722,21 +1735,41 @@ static void start_fight(RbVm *vm)
     }
     s_drop = 0;
     s_drop_done = 1;
-    s_hx = 320;
-    s_hy = 440;
     s_timer = 0;
-#if KRAKEN_DEBUG
-    /* F9 plays the whole appearance: the core falls off, the white
-     * flash, the three-second wait, then the rise and the arms. */
-    if (s_arm) {
-        s_phase = PH_FALL;
-        s_hy = 72;
-    } else
-#endif
+    s_phase = PH_EMIT;
     {
-        s_phase = PH_WAIT;
+        RbEntView core;
+        int slot = find_core(vm, &core);
+
+        if (slot >= 0) {
+            s_hx = core.x;
+            s_hy = core.y;
+            s_seen_x = core.x;
+            s_seen_y = core.y;
+            s_seen = 1;
+            s_core_slot = slot;
+            /* Drop the boss shot/hurt bits so the weapon script does not
+             * eat bullets on this sprite. The cells and position stay. */
+            vm_ent_set_type(vm, slot, 0x0008u);
+            vm_ent_set_hp(vm, slot, 1);
+            vm_ent_set_origin(vm, slot, KR_SENT);
+            vm_ent_freeze(vm, slot);
+            vm_ent_unhide(vm, slot);
+            vm_ent_place(vm, slot, core.x, core.y, core.bl, core.br, core.bt, core.bb);
+#if KRAKEN_DEBUG
+            fprintf(stderr, "kraken transform: in place x=%d y=%d slot=%d\n",
+                    core.x, core.y, slot);
+            fflush(stderr);
+#endif
+        } else if (s_seen) {
+            s_hx = s_seen_x;
+            s_hy = s_seen_y;
+            s_core_slot = -1;
+        }
     }
-    ship_ready(vm);
+    vm_kraken_isolate(vm);
+    vm_redraw(vm);
+    vm_set_kraken_take(vm, 1);
     s_noship = 0;
     s_big = 0;
     s_cyc_i = 0;
@@ -1754,6 +1787,7 @@ static void stop_fight(RbVm *vm, int ending)
 {
     clear_parts(vm);
     vm_set_kraken_hold(vm, 0);
+    s_core_slot = -1;
     s_phase = PH_OFF;
     if (ending) {
         vm_add_score(vm, 2000);
@@ -1790,7 +1824,12 @@ void kraken_before(RbVm *vm, int deaths, int fair, int loop, int stage, int paus
         place_parts(vm);
         return;
     }
-    if (s_phase == PH_RETURN) {
+    if (s_phase == PH_EMIT) {
+        stretch = s_timer * 256 / 40;
+        if (stretch > 256) {
+            stretch = 256;
+        }
+    } else if (s_phase == PH_RETURN) {
         /* The central part rises first. The arms come out after it arrives. */
         if (s_timer < 50) {
             stretch = 0;
@@ -1821,7 +1860,7 @@ void kraken_before(RbVm *vm, int deaths, int fair, int loop, int stage, int paus
             s_hy = 96;
         }
     }
-    if (s_phase == PH_FIGHT || (s_phase == PH_RETURN && stretch > 0)) {
+    if (s_phase == PH_FIGHT || s_phase == PH_EMIT || (s_phase == PH_RETURN && stretch > 0)) {
         if (stretch < 8) {
             stretch = 8;
         }
@@ -1856,19 +1895,24 @@ void kraken_after(RbVm *vm, int stage, int paused)
     scan_patterns(vm);
     if (s_phase == PH_OFF) {
         watch_drop(vm, stage);
-        if (vm_take_kraken(vm)) {
-            start_fight(vm);
-        }
+        if (s_phase == PH_OFF) {
+            if (vm_take_kraken(vm)) {
+                start_fight(vm);
+            }
 #if KRAKEN_DEBUG
-        else if (s_arm && kraken_debug_ready(vm)) {
-            start_fight(vm);
-        }
+            else if (s_arm && kraken_debug_ready(vm)) {
+                start_fight(vm);
+            }
 #endif
+        }
         return;
     }
+    /* A stage ending that arrives after the transform must not restart it. */
+    (void)vm_take_kraken(vm);
     /* Drop stage actors every frame so a director cannot put them back.
      * The ship, its shots, and Kraken's own parts are kept. */
     vm_kraken_isolate(vm);
+    hold_core(vm);
     if (paused) {
         vm_redraw(vm);
         return;
@@ -1912,6 +1956,11 @@ void kraken_after(RbVm *vm, int stage, int paused)
         s_hy = 96;
         spawn_parts(vm);
         cycle_begin(vm);
+    } else if (s_phase == PH_EMIT && s_timer >= 40) {
+        s_phase = PH_FIGHT;
+        s_timer = 0;
+        spawn_parts(vm);
+        cycle_begin(vm);
     } else if (s_phase == PH_FIGHT) {
         spawn_parts(vm);
         apply_damage(vm);
@@ -1947,6 +1996,7 @@ void kraken_after(RbVm *vm, int stage, int paused)
             s_hx = 320;
             s_hy = 150;
             s_phase = PH_DEAD;
+            hold_core(vm);
             s_timer = 0;
             s_big = 28;
             clear_parts(vm);
@@ -2262,13 +2312,19 @@ void kraken_draw(RbVm *vm, const RbGfx *gfx, uint32_t *px, int w, int h)
             draw_boom(px, w, h, gfx, s_bx[i], s_by[i], s_boom[i], 0);
             continue;
         }
-        if (s_phase == PH_FIGHT || (s_phase == PH_RETURN && s_timer >= 50)) {
+        if (s_phase == PH_FIGHT || s_phase == PH_EMIT ||
+            (s_phase == PH_RETURN && s_timer >= 50)) {
             draw_arm(px, w, h, i);
         }
     }
-    /* Hull stays up after the arms are gone. It is the thing you shoot. */
-    if (s_phase == PH_RETURN || s_phase == PH_FIGHT || s_phase == PH_DEAD) {
-        blit_hull(px, w, h, s_hx, s_hy);
+    /* The live core keeps drawing itself. The snapshot is only if it is gone. */
+    if (s_phase == PH_EMIT || s_phase == PH_RETURN || s_phase == PH_FIGHT ||
+        s_phase == PH_DEAD) {
+        RbEntView held;
+
+        if (s_core_slot < 0 || !vm || !vm_ent_view(vm, s_core_slot, &held)) {
+            blit_hull(px, w, h, s_hx, s_hy);
+        }
     }
     for (i = 0; i < s_nhom; i++) {
         RbEntView v;

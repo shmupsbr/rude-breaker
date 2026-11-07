@@ -5720,6 +5720,20 @@ void vm_ent_set_type(RbVm *vm, int i, uint16_t type)
     }
 }
 
+void vm_ent_freeze(RbVm *vm, int i)
+{
+    if (vm && i >= 0 && i < ENT_N && eu16(vm, i, 0) != 0) {
+        vm->mode[i] = MODE_FOREVER;
+    }
+}
+
+void vm_ent_set_origin(RbVm *vm, int i, uint16_t origin)
+{
+    if (vm && i >= 0 && i < ENT_N && eu16(vm, i, 0) != 0) {
+        vm->origin[i] = origin;
+    }
+}
+
 int vm_ensure_record(RbVm *vm, int rec)
 {
     if (!vm || rec < 0) {

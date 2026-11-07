@@ -4424,10 +4424,10 @@ void game_update(RbGame *g)
     }
     apply_host_options();
 #if KRAKEN_DEBUG
-    /* F9: the debug build plays the Kraken appearance on stage 5
-     * (fall, white flash, three-second wait, return, arms, fight).
-     * Release builds do not compile this, and the key is not read.
-     * One stage entry only; resetting every frame left a black screen. */
+    /* F9: the debug build runs stage 5 up to the live core, then the
+     * same in-place transform the counted loop uses. Release builds
+     * do not compile this, and the key is not read. One stage entry
+     * only; resetting every frame left a black screen. */
     {
         static int sought;
 
