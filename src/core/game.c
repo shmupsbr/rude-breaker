@@ -4429,29 +4429,46 @@ void game_update(RbGame *g)
      * Release builds do not compile this, and the key is not read.
      * One stage entry only; resetting every frame left a black screen. */
     {
-        static int dbg_stage;
+        static int sought;
 
         if (sys_take_sprite_dump()) {
             /* F10: sprite ids of everything on screen. Does not quit. */
             kraken_dump_screen(g_vm);
         }
         if ((user_buttons & RB_BTN_BOSS) && !(g->input_prev.buttons & RB_BTN_BOSS)) {
-            kraken_debug_arm();
-            dbg_stage = 0;
-        }
-        if (kraken_debug_armed() && !kraken_active() && g_vm && !dbg_stage) {
-            RbVmInfo kinfo;
-            int on_title = g->state == RB_STATE_TITLE || g->state == RB_STATE_BOOT;
-
-            vm_info(g_vm, &kinfo);
-            /* Title has no stage picture. Load stage 5 once and let it
-             * paint before the fight replaces its actors. */
-            if (on_title || kinfo.chunk < 2 || kinfo.chunk > 6) {
-                begin_stage(g, 5, 1);
-                g->state = RB_STATE_PLAY;
-                g_loop = 2;
+            /* Mode, stage and the open menu do not matter. Stage 5 is
+             * loaded from scratch, then run until its own end boss, its
+             * picture and the weapon controller are up. */
+            if (g_demo) {
+                demo_end(g);
             }
-            dbg_stage = 1;
+            g_menu_latched = 0;
+            g_pmenu = 0;
+            g_suspend = 0;
+            g_handoff = 0;
+            g_loop = 1;
+            kraken_debug_arm();
+            begin_stage(g, 5, 1);
+            g->state = RB_STATE_PLAY;
+            sought = 0;
+        }
+        if (kraken_debug_armed() && !kraken_active() && g_vm) {
+            int n;
+
+            set_flag_word((uint16_t)(flag_word() | 0x0800u));
+            if (vm_global_u8(g_vm, 0xD2) < 3) {
+                vm_set_global_u8(g_vm, 0xD2, 3);
+            }
+            vm_set_input(g_vm, &g->input);
+            for (n = 0; n < 80 && sought < 30000 && !kraken_debug_ready(g_vm); n++) {
+                vm_frame(g_vm);
+                sought++;
+            }
+            if (sought == 30000) {
+                fprintf(stderr, "kraken f9: stage 5 never reached its core\n");
+                fflush(stderr);
+                sought++;
+            }
         }
     }
 #endif

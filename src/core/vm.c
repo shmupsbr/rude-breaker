@@ -121,6 +121,7 @@ struct RbVm {
      * the entities the host spawned to replay the fortress patterns. */
     int kraken_take;
     int kraken_event;
+    int kraken_hold;
     uint8_t haste[ENT_N];
     uint16_t bp_type[256];
     int16_t bp_x[256], bp_y[256];
@@ -4198,6 +4199,7 @@ void vm_reset_boot(RbVm *vm)
     memset(vm->script_entered, 0, sizeof vm->script_entered);
     vm->kraken_take = 0;
     vm->kraken_event = 0;
+    vm->kraken_hold = 0;
     vm->disp_al = 0;
     vm->spawns = 0;
     vm->step_faults = 0;
@@ -4281,6 +4283,7 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
     memset(vm->script_entered, 0, sizeof vm->script_entered);
     vm->kraken_take = 0;
     vm->kraken_event = 0;
+    vm->kraken_hold = 0;
     vm->disp_al = 0;
     vm->spawns = 0;
     vm->step_faults = 0;
@@ -5613,6 +5616,13 @@ void vm_set_kraken_take(RbVm *vm, int on)
     }
 }
 
+void vm_set_kraken_hold(RbVm *vm, int on)
+{
+    if (vm) {
+        vm->kraken_hold = on != 0;
+    }
+}
+
 int vm_take_kraken(RbVm *vm)
 {
     int e;
@@ -5643,6 +5653,11 @@ static int kraken_keep_ent(const RbVm *vm, int i)
     if (player_body_origin(org)) {
         return 1;
     }
+    /* Shot controller and its bullets, by the script addresses. */
+    if (org == 0x62E3u || org == 0x62E9u || org == 0x6331u || org == 0x6498u ||
+        org == 0x6337u || org == 0x649Eu) {
+        return 1;
+    }
     if (t & 0x1000u) {
         return 1;
     }
@@ -5660,6 +5675,10 @@ static int kraken_keep_ent(const RbVm *vm, int i)
      * enemy bullets (0x0080). Anything else stays, including the shot
      * controller, so the ship keeps firing after the foes are gone. */
     if ((t & 0x0080u) || ((t & 0x0060u) && !(t & 0x1000u))) {
+        return 0;
+    }
+    /* The stage timeline. Dropping it freezes the picture already drawn. */
+    if (vm->kraken_hold && t == 0x4000u) {
         return 0;
     }
     return 1;
@@ -5742,6 +5761,7 @@ void vm_force_ending(RbVm *vm)
     vm->loop_on = 0;
     vm->kraken_take = 0;
     vm->kraken_event = 0;
+    vm->kraken_hold = 0;
     s = alloc_span(vm, 0, ENT_N);
     if (s < 0) {
         s = 0;

@@ -92,3 +92,27 @@ void kr_finish_loop(KrLoops *k)
     k->medals = 0;
     k->deaths = 0;
 }
+
+int kr_pat_is_core(const uint8_t *b, int n)
+{
+    static const uint8_t want[12] = {
+        26, 27, 28, 74, 75, 76, 90, 91, 92, 106, 107, 108
+    };
+    int i;
+
+    if (!b || n < 12) {
+        return 0;
+    }
+    for (i = 0; i < 12; i++) {
+        if (b[i] != want[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int kr_f9_ready(int chunk, int live_core, int pat_ok, int bg_lit,
+                int ship, int weapon)
+{
+    return chunk == 6 && live_core && pat_ok && bg_lit >= 80 && ship && weapon;
+}
