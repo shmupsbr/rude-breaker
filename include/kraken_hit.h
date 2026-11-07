@@ -43,10 +43,34 @@ void kr_finish_loop(KrLoops *k);
 /* 1 when the first 12 pattern bytes are the stage 5 core frame. */
 int kr_pat_is_core(const uint8_t *b, int n);
 
+/* 1 when a w-by-h cell sprite centered on (x,y) lies fully inside
+ * the screen. The reported debug miss is (320,-123) on a 640x400 frame. */
+int kr_sprite_inside(int x, int y, int w, int h, int sw, int sh);
+
+/* How still the core must be, and for how many frames, before F9
+ * may transform it. The real death does not use this. */
+#define KR_F9_SLACK  2
+#define KR_F9_SETTLE 8
+
+typedef struct KrF9Watch {
+    int x;
+    int y;
+    int held;
+    int have;
+} KrF9Watch;
+
 /* F9 may start only with stage 5, the live core bank, that pattern,
- * a painted background, the ship, and the weapon controller. */
+ * a painted background, the ship, the weapon controller, and the
+ * whole core sprite on screen. */
 int kr_f9_ready(int chunk, int live_core, int pat_ok, int bg_lit,
-                int ship, int weapon);
+                int ship, int weapon, int x, int y, int w, int h,
+                int sw, int sh);
+
+/* mode is not read. Consecutive calls return 1 only after the core
+ * has been ready and has stayed within slack pixels for need frames.
+ * A miss or a larger move starts that wait over. */
+int kr_f9_poll(int mode, KrF9Watch *w, int ready, int x, int y,
+               int slack, int need);
 
 /* 0: not our death. 1: Kraken where the core is. 2: Black Label fall. */
 int kr_core_fate(int black, int tlb_ready, int hp_gone);

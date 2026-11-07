@@ -8,7 +8,8 @@
  * four arms. The hull cannot be hurt until those arms are gone.
  *
  * KRAKEN_DEBUG (off unless the debug make target defines it) adds F9,
- * which reaches that same stage 5 core and uses the same transform, and
+ * which plays stage 5 until that same core is fully on screen and
+ * still, then uses the same transform, and
  * F10, which dumps live sprite ids. Delete the debug target and the
  * KRAKEN_DEBUG blocks to drop both before a release build.
  */
