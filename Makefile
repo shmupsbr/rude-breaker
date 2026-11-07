@@ -136,8 +136,13 @@ cfg-check: dirs $(CFG_CHECK_OBJS)
 # Kraken hit rules. No game data.
 hit-check:
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) -o $(BUILD)/kraken_hit_test tools/kraken_hit_test.c src/core/kraken_hit.c
+	$(CC) $(CFLAGS) -o $(BUILD)/kraken_hit_test tools/kraken_hit_test.c src/core/kraken_hit.c src/core/pace.c
 	$(BUILD)/kraken_hit_test
+
+pad-check:
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -o $(BUILD)/pad_check tools/pad_check.c src/hal/sdl2/input_sdl2.c $(SDL2_LIBS)
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy $(BUILD)/pad_check
 
 zx-test: dirs
 	$(CC) $(CFLAGS) -c -o $(BUILD)/cfilter_zx.o src/core/cfilter.c
