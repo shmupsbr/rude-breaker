@@ -185,6 +185,36 @@ int main(void)
         }
     }
 
+    {
+        int hp = 480;
+        int hits = 0;
+        int skipped = 0;
+        int i;
+
+        for (i = 0; i < 33; i++) {
+            if (!kr_core_open(hp)) {
+                skipped++;
+                continue;
+            }
+            hp -= 15;
+            if (hp < 0) {
+                hp = 0;
+            }
+            hits++;
+        }
+        expect(hits == 32, "the lethal shot is the 32nd");
+        expect(skipped == 1, "the shot after the lethal one is refused");
+        expect(hp == 0, "the core stays at 0");
+        expect(kr_same_shot(1, 0x6331u, 0x6331u, 200, 180, 200, 156),
+               "a shot that moved one frame is the same shot");
+        expect(!kr_same_shot(1, 0x6331u, 0x6331u, 200, 180, 320, 340),
+               "a reused slot is a new shot");
+        expect(!kr_same_shot(1, 0x6331u, 0x6498u, 200, 180, 210, 170),
+               "a different origin is a new shot");
+        expect(!kr_same_shot(0, 0x6331u, 0x6331u, 200, 180, 200, 156),
+               "an unscored slot can still hit");
+    }
+
     if (g_fail) {
         return 1;
     }
