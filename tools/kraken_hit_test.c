@@ -3,6 +3,7 @@
 #include "kraken_hit.h"
 
 #include <stdio.h>
+#include <string.h>
 
 static int g_fail;
 
@@ -56,6 +57,59 @@ int main(void)
            "the ship is not a bullet");
     expect(!kr_is_projectile(0x0080u, 0, 0xCE11u, 0, 1, 1),
            "a Kraken shot is not a player bullet");
+
+    /* Two clean loops are required. A failed loop does not erase one
+     * that already counted, and it only spoils itself. */
+    {
+        KrLoops k;
+        const int need = 50;
+
+        memset(&k, 0, sizeof k);
+        k.need = need;
+
+        k.medals = need;
+        expect(!kr_tlb_ready(&k), "one clean loop does not start Kraken");
+        kr_finish_loop(&k);
+        expect(k.banked == 1 && k.medals == 0 && k.deaths == 0,
+               "the first clean loop is banked");
+        expect(!kr_tlb_ready(&k), "still no Kraken with only one banked");
+
+        /* perfect, then bad, then perfect. */
+        k.medals = need;
+        k.deaths = 1;
+        expect(!kr_tlb_ready(&k), "a death blocks this loop");
+        kr_finish_loop(&k);
+        expect(k.banked == 1, "a death does not erase the banked loop");
+
+        k.medals = need;
+        k.deaths = 0;
+        expect(kr_tlb_ready(&k), "perfect, bad, perfect starts Kraken");
+
+        /* bad, then perfect, then perfect. */
+        memset(&k, 0, sizeof k);
+        k.need = need;
+        k.deaths = 1;
+        k.medals = need;
+        kr_finish_loop(&k);
+        expect(k.banked == 0, "a first-loop death banks nothing");
+        k.medals = need;
+        kr_finish_loop(&k);
+        expect(k.banked == 1 && !kr_tlb_ready(&k), "the first clean loop waits");
+        k.medals = need;
+        expect(kr_tlb_ready(&k), "bad, perfect, perfect starts Kraken");
+
+        /* A missed medal spoils only that loop. */
+        memset(&k, 0, sizeof k);
+        k.need = need;
+        k.medals = need;
+        kr_finish_loop(&k);
+        k.medals = need - 1;
+        expect(!kr_loop_clean(&k), "a missed medal spoils this loop");
+        kr_finish_loop(&k);
+        expect(k.banked == 1, "a missed medal does not erase the banked loop");
+        k.medals = need;
+        expect(kr_tlb_ready(&k), "a later clean loop still completes the pair");
+    }
 
     if (g_fail) {
         return 1;
