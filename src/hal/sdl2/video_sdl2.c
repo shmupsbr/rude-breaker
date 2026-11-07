@@ -213,8 +213,46 @@ int sys_window_wide(void)
     if (!g_rb_renderer || SDL_GetRendererOutputSize(g_rb_renderer, &w, &h) != 0 || h <= 0) {
         return 0;
     }
-    /* Wider than about 17:10: 16:9 gets panels, 16:10 and 4:3 do not. */
-    return w * 10 > h * 17;
+    /* 16:10 or wider (16:9, ultrawide). 4:3 and 5:4 stay on the classic
+     * picture: there is no side strip for the panels. */
+    return (long)w * 10 >= (long)h * 16;
+}
+
+int sys_display(int *w, int *h, int *hz)
+{
+    int ww = 0;
+    int hh = 0;
+    int rate = 0;
+    static int lw, lh, lr = -1;
+
+    if (!g_rb_renderer || SDL_GetRendererOutputSize(g_rb_renderer, &ww, &hh) != 0 ||
+        ww <= 0 || hh <= 0) {
+        return -1;
+    }
+    if (g_rb_window) {
+        int idx = SDL_GetWindowDisplayIndex(g_rb_window);
+        SDL_DisplayMode mode;
+
+        if (idx >= 0 && SDL_GetCurrentDisplayMode(idx, &mode) == 0 && mode.refresh_rate > 0) {
+            rate = (int)mode.refresh_rate;
+        }
+    }
+    if (ww != lw || hh != lh || rate != lr) {
+        fprintf(stderr, "display %dx%d %d Hz\n", ww, hh, rate);
+        lw = ww;
+        lh = hh;
+        lr = rate;
+    }
+    if (w) {
+        *w = ww;
+    }
+    if (h) {
+        *h = hh;
+    }
+    if (hz) {
+        *hz = rate;
+    }
+    return 0;
 }
 
 uint32_t *sys_wide_pixels(void)
@@ -224,6 +262,36 @@ uint32_t *sys_wide_pixels(void)
                                            sizeof(uint32_t));
     }
     return g_wide_pixels;
+}
+
+static uint32_t *g_comp;
+static int g_comp_w, g_comp_h;
+static SDL_Texture *g_comp_tex;
+static int g_comp_tex_w, g_comp_tex_h;
+static int g_comp_on;
+static unsigned g_comp_gen;
+static unsigned g_comp_uploaded;
+
+uint32_t *sys_compose_buf(int w, int h)
+{
+    if (w <= 0 || h <= 0) {
+        return NULL;
+    }
+    if (w != g_comp_w || h != g_comp_h || !g_comp) {
+        free(g_comp);
+        g_comp = (uint32_t *)calloc((size_t)w * (size_t)h, sizeof(uint32_t));
+        g_comp_w = g_comp ? w : 0;
+        g_comp_h = g_comp ? h : 0;
+    }
+    return g_comp;
+}
+
+void sys_compose_present(int on)
+{
+    g_comp_on = on && g_comp ? 1 : 0;
+    if (g_comp_on) {
+        g_comp_gen++;
+    }
 }
 
 uint32_t *sys_tate_pixels(void)
@@ -261,6 +329,9 @@ static void scaling_apply(void)
     }
     if (g_tate_texture) {
         SDL_SetTextureScaleMode(g_tate_texture, m);
+    }
+    if (g_comp_tex) {
+        SDL_SetTextureScaleMode(g_comp_tex, m);
     }
 }
 
@@ -1311,6 +1382,42 @@ void sys_present(void)
     }
     SDL_SetRenderDrawColor(g_rb_renderer, 0, 0, 0, 255);
     SDL_RenderClear(g_rb_renderer);
+    if (g_comp_on && g_comp && g_comp_w > 0 && g_comp_h > 0) {
+        int ow = 0, oh = 0;
+        SDL_Rect full;
+
+        if (!g_comp_tex || g_comp_tex_w != g_comp_w || g_comp_tex_h != g_comp_h) {
+            if (g_comp_tex) {
+                SDL_DestroyTexture(g_comp_tex);
+            }
+            g_comp_tex = SDL_CreateTexture(g_rb_renderer, SDL_PIXELFORMAT_RGBA8888,
+                                           SDL_TEXTUREACCESS_STREAMING, g_comp_w, g_comp_h);
+            g_comp_tex_w = g_comp_tex ? g_comp_w : 0;
+            g_comp_tex_h = g_comp_tex ? g_comp_h : 0;
+            g_comp_uploaded = 0;
+        }
+        if (g_comp_tex) {
+            SDL_ScaleMode m = g_scaling == 0 ? SDL_ScaleModeLinear : SDL_ScaleModeNearest;
+
+            SDL_GetRendererOutputSize(g_rb_renderer, &ow, &oh);
+            SDL_SetTextureScaleMode(g_comp_tex, m);
+            /* Smooth mode presents the same logic frame for several
+             * refreshes. Uploading the 4K buffer every refresh was a
+             * second full copy on top of the composite. */
+            if (g_comp_uploaded != g_comp_gen) {
+                SDL_UpdateTexture(g_comp_tex, NULL, g_comp, g_comp_w * (int)sizeof(uint32_t));
+                g_comp_uploaded = g_comp_gen;
+            }
+            full.x = 0;
+            full.y = 0;
+            full.w = ow;
+            full.h = oh;
+            SDL_RenderCopy(g_rb_renderer, g_comp_tex, NULL, &full);
+            SDL_RenderPresent(g_rb_renderer);
+            pace_note_present();
+            return;
+        }
+    }
     if (g_wide_on == 2 && g_tate_texture) {
         SDL_UpdateTexture(g_tate_texture, NULL, g_tate_pixels,
                           RB_TATE_FW * (int)sizeof(uint32_t));

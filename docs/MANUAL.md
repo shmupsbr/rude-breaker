@@ -203,13 +203,28 @@ Keyboard (defaults):
   Quit              F10
   Fullscreen        F11 (on/off at any time; saved like the
                     FULLSCREEN option)
+  Screenshot        F12 (a 640x400 PNG of the game picture, after the
+                    colour filter, before scaling, and without the
+                    side panels). Saved as
+                    screenshots/RudeBreaker_YYYYMMDD_HHMMSS.png in the
+                    game folder (next to the program, or in
+                    RUDEBR_ASSETS). A second shot in the same second
+                    is named _2, _3, and so on. The folder is created
+                    on the first press.
   Timing overlay    F8 (shows the frame pacing info, see section 7)
 
 Gamepad:
 
   Any standard PC gamepad (XInput or DirectInput) is detected
   automatically. You can plug it in or unplug it while the game is
-  running.
+  running. PlayStation 4 and 5, Xbox, Wii and Wii U Pro (through an
+  adapter), 8BitDo in every mode, arcade sticks and common USB pads
+  are named from a list built into the program (a subset of the SDL
+  Game Controller DB, zlib license). An optional gamecontrollerdb.txt
+  next to the program, or in RUDEBR_ASSETS, adds or replaces entries.
+  A joystick that is not in the list still works: stick or hat to
+  move, buttons 1-4 for fire, mode, special and speed, and button 8
+  or 10 (or the first higher button you press) for pause.
 
   Move              Left stick or D-pad
   Fire / confirm    South button (A on Xbox pads)
@@ -432,14 +447,14 @@ GRAPHICS
                    Best with FULLSCREEN ON. SCALING and ASPECT apply as
                    usual. Saved in rudebreaker.cfg as orientation.
 
-  SIDE PANELS      ON (default) or OFF. ON: in a 16:9 window or full screen, the
+  SIDE PANELS      ON (default) or OFF. ON: in a window that is 16:10 or wider, or full screen on such a display, the
                    playfield sits in the middle with info panels on
                    both sides: rank graph, loadout, extends, i-frames,
                    speed, score, hit ratio, medals, level, time, NO
                    DEATH and an arcade stick that shows your input.
                    The logo and side art are taken from your own
                    title screen.
-                   OFF, or a 4:3 / 16:10 window: the classic look.
+                   OFF: the classic look. A 4:3 or 5:4 window (or anything narrower than 16:10) has no panels; the picture is 4:3 and any leftover bars are only the grey metal plate (no widgets, no text).
                    LOADOUT shows two levels, one block per level, level
                    1 included (it fills the first block). SHOT is the
                    main shot: 4 levels, so 4 blocks; levels 2, 3 and 4

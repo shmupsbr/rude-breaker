@@ -10,6 +10,9 @@
  * A saved bind replaces one action. The first attached device is used:
  * a mapped game controller when SDL recognizes it, otherwise the
  * joystick API. Unplug and replug are picked up on the next poll.
+ * Mappings come from the embedded SDL Game Controller DB subset, then
+ * an optional gamecontrollerdb.txt beside the program. F12 asks the
+ * game to save the native frame.
  */
 #include "hal.h"
 
@@ -17,6 +20,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+
+#include "exepath.h"
+#include "gc_db.inc"
 
 /* Declared in video_sdl2.c */
 extern SDL_Window *g_rb_window;
@@ -115,6 +122,7 @@ static void open_index(int i)
         g_dev_is_pad = 1;
         g_dev_index = i;
         remember_name(SDL_GameControllerName(g_pad));
+        fprintf(stderr, "input: %s (mapped)\n", g_joy_name);
         return;
     }
     g_joy = SDL_JoystickOpen(i);
@@ -124,6 +132,10 @@ static void open_index(int i)
     g_dev_is_pad = 0;
     g_dev_index = i;
     remember_name(SDL_JoystickName(g_joy));
+    /* No SDL mapping (Pi GPIO pads, DragonRise and other generic USB
+     * sticks). Stick or hat moves; buttons 1-4 are fire, mode, special
+     * and speed; 8 or 10, or the first higher button, is pause. */
+    fprintf(stderr, "input: %s (unmapped, fallback)\n", g_joy_name);
 }
 
 /* START on a plain joystick (no SDL controller mapping). 7 and 9 are
@@ -139,20 +151,59 @@ static void learn_start(int button)
     }
 }
 
+static void try_map_file(const char *path)
+{
+    struct stat st;
+    int n;
+
+    if (!path || !path[0] || stat(path, &st) != 0 || !S_ISREG(st.st_mode)) {
+        return;
+    }
+    n = SDL_GameControllerAddMappingsFromFile(path);
+    if (n > 0) {
+        fprintf(stderr, "input: %s (%d)\n", path, n);
+    }
+}
+
+static void load_controller_db(void)
+{
+    static int once;
+    char exe[1024];
+    char path[1100];
+    const char *env;
+    int i;
+    int added = 0;
+
+    if (once) {
+        return;
+    }
+    once = 1;
+    for (i = 0; i < rb_gc_map_count; i++) {
+        if (SDL_GameControllerAddMapping(rb_gc_map[i]) >= 0) {
+            added++;
+        }
+    }
+    fprintf(stderr, "input: controller map %d/%d\n", added, rb_gc_map_count);
+    /* Optional gamecontrollerdb.txt beside the game overrides the
+     * embedded list (same GUID, later mapping wins). */
+    if (rb_exe_dir(exe, sizeof exe) == 0) {
+        snprintf(path, sizeof path, "%s/gamecontrollerdb.txt", exe);
+        try_map_file(path);
+    }
+    env = getenv("RUDEBR_ASSETS");
+    if (env && env[0]) {
+        snprintf(path, sizeof path, "%s/gamecontrollerdb.txt", env);
+        try_map_file(path);
+    }
+    try_map_file("gamecontrollerdb.txt");
+}
+
 static void bind_device(void)
 {
     int i;
     int n;
-    static int db_loaded;
 
-    if (!db_loaded) {
-        /* Optional gamecontrollerdb.txt beside the game: more pads get
-         * the named mapping (START included). */
-        db_loaded = 1;
-        if (SDL_GameControllerAddMappingsFromFile("gamecontrollerdb.txt") > 0) {
-            fprintf(stderr, "input: gamecontrollerdb.txt loaded\n");
-        }
-    }
+    load_controller_db();
     SDL_JoystickEventState(SDL_ENABLE);
     SDL_GameControllerEventState(SDL_ENABLE);
     if (dev_alive()) {
@@ -925,12 +976,26 @@ static void note_capture(const SDL_Event *ev)
 
 static int g_any_press;
 static int g_f11;
+static int g_f12;
 
 int sys_take_fullscreen_key(void)
 {
     int r = g_f11;
 
     g_f11 = 0;
+    return r;
+}
+
+int sys_screenshot_pending(void)
+{
+    return g_f12;
+}
+
+int sys_take_screenshot_key(void)
+{
+    int r = g_f12;
+
+    g_f12 = 0;
     return r;
 }
 
@@ -956,6 +1021,13 @@ void sys_read_input(RbInput *out)
         if (ev.type == SDL_QUIT) {
             out->buttons |= RB_BTN_QUIT;
         }
+        if (ev.type == SDL_WINDOWEVENT &&
+            (ev.window.event == SDL_WINDOWEVENT_RESIZED ||
+             ev.window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+             ev.window.event == SDL_WINDOWEVENT_DISPLAY_CHANGED)) {
+            /* The next sys_display() reads the new size and refresh. */
+            (void)ev;
+        }
         if (ev.type == SDL_JOYDEVICEADDED || ev.type == SDL_JOYDEVICEREMOVED ||
             ev.type == SDL_CONTROLLERDEVICEADDED ||
             ev.type == SDL_CONTROLLERDEVICEREMOVED) {
@@ -978,6 +1050,10 @@ void sys_read_input(RbInput *out)
         if (ev.type == SDL_KEYDOWN && !ev.key.repeat && !g_cap &&
             ev.key.keysym.scancode == SDL_SCANCODE_F11) {
             g_f11 = 1;
+        }
+        if (ev.type == SDL_KEYDOWN && !ev.key.repeat && !g_cap &&
+            ev.key.keysym.scancode == SDL_SCANCODE_F12) {
+            g_f12 = 1;
         }
         note_capture(&ev);
     }

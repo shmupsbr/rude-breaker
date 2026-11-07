@@ -18,6 +18,8 @@
 #include "gfx.h"
 #include "eq.h"
 #include "panels.h"
+#include "pause_box.h"
+#include "pngwrite.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -2331,16 +2333,24 @@ static void host_menu_paint(void)
 
     if (g_pmenu == 1 && g_vm) {
         static const char *pitem[2] = {"RESUME", "MAIN MENU"};
+        RbPauseBox box;
 
-        /* Dark box in the middle of the playfield, the match's text
-         * (HUD) left as it is around it. */
-        gfx_set_panel(1, 208, 136, 432, 264);
-        for (row = 8; row <= 16; row++) {
-            vm_text_write(g_vm, 26, row, "", 14, 0);
+        /* One centred dialog. Lines share a centre, the selection bar
+         * is the same width on every row, and the box stays inside
+         * the playfield (columns 80..560) so the side plate cannot
+         * clip it. */
+        rb_pause_box(&box);
+        gfx_set_panel(1, box.box_x, box.box_y, box.box_x + box.box_w,
+                      box.box_y + box.box_h);
+        gfx_set_hilite(1, box.bar_x, box.item_row[g_pcur] * 16, box.bar_x + box.bar_w,
+                       box.item_row[g_pcur] * 16 + box.bar_h);
+        for (row = box.title_row - 1; row <= box.item_row[1] + 1; row++) {
+            vm_text_write(g_vm, 10, row, "", 60, 0);
         }
-        vm_text_write(g_vm, 35, 9, "PAUSE", 0, 0xE1u);
-        for (i = 0; i < 2; i++) {
-            paint_option_row(34, 0, 11 + i * 2, pitem[i], NULL, 0, i == g_pcur, 0);
+        vm_text_write(g_vm, box.title_col, box.title_row, "PAUSE", 0, 0xE1u);
+        for (i = 0; i < box.n_items; i++) {
+            paint_option_row(box.item_col[i], 0, box.item_row[i], pitem[i], NULL, 0,
+                             i == g_pcur, 0);
         }
         return;
     }
@@ -3300,11 +3310,60 @@ static void pt_update(const RbGame *g, int died, uint16_t flags)
     }
 }
 
+/* True when w/h is within about 3% of aw/ah. */
+static int aspect_near(int w, int h, int aw, int ah)
+{
+    long d = (long)w * ah - (long)h * aw;
+
+    if (d < 0) {
+        d = -d;
+    }
+    return d * 100 < (long)h * aw * 3;
+}
+
+/* 4:3 and 5:4 monitors use the 4:3 picture. There is no 5:4 aspect
+ * mode; 5:4 is treated as 4:3. Other shapes keep the saved setting. */
+static void aspect_follow_display(void)
+{
+    int w = 0, h = 0, hz = 0;
+    static int lw, lh;
+
+    if (sys_display(&w, &h, &hz) != 0) {
+        return;
+    }
+    if (w == lw && h == lh) {
+        return;
+    }
+    lw = w;
+    lh = h;
+    if (aspect_near(w, h, 4, 3) || aspect_near(w, h, 5, 4)) {
+        g_aspect43 = 1;
+        sys_set_aspect(1);
+        panels_set_aspect(1);
+    }
+}
+
 static int panels_active(const RbGame *g)
 {
     return g_vm && g_panels_on && g_live && g->state == RB_STATE_PLAY &&
            !menu_visible() && vm_gfx_active(g_vm) &&
-           ((g_orient & 1) || sys_window_wide() || ((char *)0));
+           ((g_orient & 1) || sys_window_wide());
+}
+
+/* 4:3 and 5:4: no side panels. The picture stays 4:3 and the bars
+ * around it are only the grey metal plate: no widgets, no text. */
+static int plate_bars(const RbGame *g)
+{
+    int w = 0, h = 0, hz = 0;
+
+    if ((g_orient & 1) || !g_vm || !g_live || g->state != RB_STATE_PLAY ||
+        menu_visible() || !vm_gfx_active(g_vm)) {
+        return 0;
+    }
+    if (sys_display(&w, &h, &hz) != 0) {
+        return 0;
+    }
+    return aspect_near(w, h, 4, 3) || aspect_near(w, h, 5, 4);
 }
 
 /* The panel logo and side art come from the game's own title screen.
@@ -3364,6 +3423,7 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
     uint32_t *wide = sys_wide_pixels();
 
     if (!wide) {
+        sys_compose_present(0);
         sys_set_wide(0);
         return;
     }
@@ -3555,13 +3615,38 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
     }
     d.time_cs = g_pt_frames * 300u / 92u;
     d.buttons = g_pt_buttons;
-    panels_render(wide, frame, &d);
-    if ((g_orient & 1) && sys_tate_pixels()) {
-        panels_render_tate(sys_tate_pixels(), wide, frame);
-        sys_set_wide(2);
-        return;
+    {
+        int dw = 0, dh = 0, hz = 0, tate = (g_orient & 1) ? 1 : 0;
+        uint32_t *comp;
+
+        if (sys_display(&dw, &dh, &hz) != 0 || dw < 320 || dh < 240) {
+            dw = tate ? RB_TATE_FW : RB_WIDE_W;
+            dh = tate ? RB_TATE_FH : RB_WIDE_H;
+        }
+        if (tate && dw > dh) {
+            int s = dw;
+
+            dw = dh;
+            dh = s;
+        }
+        if (!tate) {
+            int cw = dw;
+            int ch = dh;
+
+            panels_output_size(dw, dh, &cw, &ch);
+            dw = cw;
+            dh = ch;
+        }
+        comp = sys_compose_buf(dw, dh);
+        if (!comp) {
+            sys_compose_present(0);
+            sys_set_wide(0);
+            return;
+        }
+        panels_compose(comp, dw, dh, tate, frame, &d, NULL);
+        sys_compose_present(1);
+        sys_set_wide(tate ? 2 : 1);
     }
-    sys_set_wide(1);
 }
 
 /* ---- RANK MODE ADVANCED ------------------------------------------- */
@@ -4525,6 +4610,8 @@ void game_update(RbGame *g)
 void game_render(const RbGame *g)
 {
     char line[80];
+    static uint32_t shot_copy[RB_NATIVE_W * RB_NATIVE_H];
+    static int shot_have;
 
     if (!g_show_frame) {
         return;
@@ -4538,6 +4625,7 @@ void game_render(const RbGame *g)
                  g_handoff != 0 || (g_suspend && !g_suspend_closed))) {
         return;
     }
+    shot_have = 0;
     host_menu_paint();
     sys_clear(8, 8, 24);
 
@@ -4684,6 +4772,12 @@ void game_render(const RbGame *g)
             }
             cfilter_apply(px, RB_NATIVE_W, RB_NATIVE_H, g_cfilter);
             crt_apply(px, RB_NATIVE_W, 80, 0, 480, RB_NATIVE_H, g_crt, g->frame);
+            /* F12 keeps this 640x400 frame: colour filter and CRT,
+             * before the hitbox overlay, host scaling and the panels. */
+            if (sys_screenshot_pending()) {
+                memcpy(shot_copy, px, sizeof shot_copy);
+                shot_have = 1;
+            }
             /* after the filters, so its 1 px sides stay crisp */
             hitbox_draw(px);
             memcpy(snap_f, px, n * 4u);
@@ -4711,10 +4805,16 @@ void game_render(const RbGame *g)
             }
         }
     }
+    /* F8 reads the native frame. It has to land before the composite
+     * copies that frame, or a 4K present never shows it and a 1:1
+     * stamp on the high-res buffer would be a few pixels tall. */
+    sys_pace_overlay_draw();
+    aspect_follow_display();
     gfx_set_hud_inset(panels_active(g));
-    if (panels_active(g)) {
+    if (panels_active(g) || plate_bars(g)) {
         panels_draw(g, sys_frame_pixels());
     } else {
+        sys_compose_present(0);
         sys_set_wide(0);
         if (g_training && g->state == RB_STATE_PLAY) {
             sys_draw_text(8, 8, "TRAINING", 0x40FF40FFu);
@@ -4771,6 +4871,14 @@ void game_render(const RbGame *g)
                     saved = 1;
                 }
             }
+        }
+    }
+    if (sys_screenshot_pending()) {
+        const uint32_t *src = shot_have ? shot_copy : sys_frame_pixels();
+
+        if (src) {
+            rb_save_screenshot(src, RB_NATIVE_W, RB_NATIVE_H, g->asset_dir);
+            (void)sys_take_screenshot_key();
         }
     }
 }

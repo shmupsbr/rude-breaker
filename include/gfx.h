@@ -115,6 +115,8 @@ void gfx_set_clock(uint32_t frame);
 void gfx_halo(uint32_t *rgba, int w, int h, int x0, int y0, int x1, int y1, int amt);
 int gfx_glow_level(uint32_t frame);
 void gfx_set_panel(int on, int x0, int y0, int x1, int y1);
+/* Selection bar inside the panel, drawn under the text. x1/y1 exclusive. */
+void gfx_set_hilite(int on, int x0, int y0, int x1, int y1);
 /* blank_sides forces the 80 px columns black. The stage playfield does
  * that; the logo, title, and menus are drawn across the full 640. */
 void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,

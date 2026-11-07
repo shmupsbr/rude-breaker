@@ -3236,6 +3236,17 @@ static int row_in_tail(int scroll, int row)
 
 
 static int g_panel[4];
+static int g_hilite_on;
+static int g_hilite[4];
+
+void gfx_set_hilite(int on, int x0, int y0, int x1, int y1)
+{
+    g_hilite_on = on ? 1 : 0;
+    g_hilite[0] = x0 < 0 ? 0 : x0;
+    g_hilite[1] = y0 < 0 ? 0 : y0;
+    g_hilite[2] = x1 > RB_GFX_W ? RB_GFX_W : x1;
+    g_hilite[3] = y1 > RB_GFX_H ? RB_GFX_H : y1;
+}
 
 void gfx_set_panel(int on, int x0, int y0, int x1, int y1)
 {
@@ -3244,6 +3255,9 @@ void gfx_set_panel(int on, int x0, int y0, int x1, int y1)
     g_panel[1] = y0 < 0 ? 0 : y0;
     g_panel[2] = x1 > RB_GFX_W ? RB_GFX_W : x1;
     g_panel[3] = y1 > RB_GFX_H ? RB_GFX_H : y1;
+    if (!on) {
+        g_hilite_on = 0;
+    }
 }
 
 static void dim_panel(uint32_t *rgba, int w)
@@ -3267,6 +3281,15 @@ static void dim_panel(uint32_t *rgba, int w)
             b = ((b * 46u) >> 8) + 6u;
             rgba[(size_t)y * (size_t)w + (size_t)x] =
                 (r << 24) | (g << 16) | (b << 8) | 0xFFu;
+        }
+    }
+    if (!g_hilite_on) {
+        return;
+    }
+    for (y = g_hilite[1]; y < g_hilite[3]; y++) {
+        for (x = g_hilite[0]; x < g_hilite[2]; x++) {
+            /* Same width for every row, darker than the text. */
+            rgba[(size_t)y * (size_t)w + (size_t)x] = 0x301848FFu;
         }
     }
 }

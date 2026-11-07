@@ -72,4 +72,36 @@ void panels_render(uint32_t *out, const uint32_t *game640, const RbPanelData *d)
 #define RB_TATE_H 1920
 void panels_render_tate(uint32_t *out, const uint32_t *wide, const uint32_t *game640);
 
+/* Where the playfield and the scaled widgets landed in a compose. */
+typedef struct RbPanelGeom {
+    int field_x, field_y, field_w, field_h;
+    int widgets; /* 1 when the side (or tate top/bottom) widgets are drawn */
+    int n;
+    int x[40], y[40], w[40], h[40];
+} RbPanelGeom;
+
+/* Host composite at an arbitrary window size. tate=0 is yoko. The metal
+ * plate is sampled at 1:1 and cropped; widgets keep the 1920x1080
+ * proportions inside the side area. On a window narrower than 16:10 the
+ * bars around the 4:3 picture are that plate only: no widgets, no text.
+ * out is w*h pixels, 0xRRGGBBAA. */
+void panels_compose(uint32_t *out, int w, int h, int tate,
+                    const uint32_t *game640, const RbPanelData *d,
+                    RbPanelGeom *geom);
+
+/* The grey metal plate at window pixel (x, y), 1:1, 0xRRGGBBAA. */
+uint32_t panels_plate_at(int x, int y);
+
+/* Size to rasterise. A 16:9 output uses the 1920x1080 reference and
+ * the GPU scales that picture, so 1080p and 4K are the same layout.
+ * 21:9, 16:10 and 4:3 stay at the output size. */
+void panels_output_size(int dw, int dh, int *cw, int *ch);
+
+/* Minimum dashboard gutters in 1920x1080 design pixels. They scale
+ * with the window height (24 and 16 at 4K). Horizontal: between a
+ * widget and the outer screen edge, and between a widget and the
+ * playfield. Vertical: between stacked widgets. */
+#define RB_DASH_GUTTER_X 12
+#define RB_DASH_GUTTER_Y 8
+
 #endif
