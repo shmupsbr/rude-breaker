@@ -12,6 +12,7 @@
 #include "assets.h"
 #include "exepath.h"
 #include "vm.h"
+#include "controls.h"
 #include "cfilter.h"
 #include "crt.h"
 #include "demo.h"
@@ -3288,10 +3289,8 @@ static void pt_reset(void)
 /* Called each live frame. Time runs at the logic rate of 92/3 Hz. */
 static void pt_update(const RbGame *g, int died, uint16_t flags)
 {
-    g_pt_buttons = g->input.buttons;
-    if (flags & 0x0400u) {
-        g_pt_buttons = (uint16_t)(g_pt_buttons | g->input.pad_buttons);
-    }
+    g_pt_buttons = rb_control_bits(g->input.buttons, g->input.pad_buttons,
+                                   (flags & 0x0400u) != 0);
     if (g_pt_stage != (int)g->stage) {
         if (((char *)0)) {
             uint32_t seen;
@@ -3943,10 +3942,8 @@ static void live_update(RbGame *g)
         return;
     }
     flags = flag_word();
-    btn = g->input.buttons;
-    if (flags & 0x0400u) {
-        btn = (uint16_t)(btn | g->input.pad_buttons);
-    }
+    btn = rb_control_bits(g->input.buttons, g->input.pad_buttons,
+                          (flags & 0x0400u) != 0);
     btn = (uint16_t)(btn & RB_BTN_SPEED);
     if ((flags & 0x8000u) == 0u && btn && !(g_live_prev_btn & RB_BTN_SPEED)) {
         /* LOW MID MAX MID LOW ... */
@@ -4376,10 +4373,8 @@ static void ship_move_adjust(RbGame *g)
     if (!g_aspect43) {
         my = my * 120 / 100;
     }
-    btn = g->input.buttons;
-    if (flag_word() & 0x0400u) {
-        btn = (uint16_t)(btn | g->input.pad_buttons);
-    }
+    btn = rb_control_bits(g->input.buttons, g->input.pad_buttons,
+                          (flag_word() & 0x0400u) != 0);
     ex = sp_axis(x - g_sp_px, (btn & (RB_BTN_LEFT | RB_BTN_RIGHT)) != 0, mx, &g_sp_ax);
     ey = sp_axis(y - g_sp_py, (btn & (RB_BTN_UP | RB_BTN_DOWN)) != 0, my, &g_sp_ay);
     /* Stay inside the box the game itself keeps the ship in. */
@@ -4457,24 +4452,44 @@ void game_update(RbGame *g)
             g->state = RB_STATE_PLAY;
             sought = 0;
         }
-        if (kraken_debug_armed() && !kraken_active() && g_vm) {
-            int n;
+        if (kraken_debug_armed() && !kraken_active() && g_vm && sought <= 90000) {
+            int before = sought;
+            RbInput idle;
 
-            /* Same stage script in Original and Black Label. Bit 0x0100
-             * is what the ship script checks before applying a hit.
-             * Bit 0x0800 only opens the debug keys, including the one
-             * that sets the ending flag, so it stays off. */
+            /* One blocking skip, then the pace clock starts clean.
+             * Running 80 VM frames inside every paced tick painted the
+             * stage at a sprint and made the next ticks catch up, so
+             * the picture raced and the pad never had a normal frame.
+             * Events are pumped so the window and the pad stay alive.
+             * The picture on screen stays the pre-F9 frame until the
+             * boss is ready. */
+            memset(&idle, 0, sizeof idle);
+            if (sought == 0) {
+                fprintf(stderr, "kraken f9: seeking stage 5\n");
+                fflush(stderr);
+            }
             vm_set_loop(g_vm, 0, vm_global_u8(g_vm, 0xC9), vm_global_u8(g_vm, 0xB2));
-            for (n = 0; n < 80 && sought < 90000 && !kraken_debug_ready(g_vm); n++) {
+            while (sought < 90000 && !kraken_debug_ready(g_vm)) {
                 uint16_t f = (uint16_t)((flag_word() | 0x0100u) & (uint16_t)~0x0800u);
+                RbInput pump;
 
+                if (!g_joy_lockout && sys_joy_present()) {
+                    f = (uint16_t)(f | 0x0400u);
+                }
                 set_flag_word(f);
                 if (vm_global_u8(g_vm, 0xD2) < 3) {
                     vm_set_global_u8(g_vm, 0xD2, 3);
                 }
-                vm_set_input(g_vm, &g->input);
+                vm_set_input(g_vm, &idle);
                 vm_frame(g_vm);
                 sought++;
+                if ((sought % 120) == 0) {
+                    sys_read_input(&pump);
+                    if (pump.buttons & RB_BTN_QUIT) {
+                        g->state = RB_STATE_QUIT;
+                        break;
+                    }
+                }
                 if ((sought % 2400) == 0) {
                     RbVmInfo info;
 
@@ -4487,7 +4502,15 @@ void game_update(RbGame *g)
                     fflush(stderr);
                 }
             }
-            if (sought == 90000) {
+            if (sought != before) {
+                if (!g_joy_lockout && sys_joy_present()) {
+                    set_flag_word((uint16_t)(flag_word() | 0x0400u));
+                }
+                sys_pace_resync();
+                fprintf(stderr, "kraken f9: seek done frames=%d\n", sought);
+                fflush(stderr);
+            }
+            if (sought >= 90000 && !kraken_debug_ready(g_vm)) {
                 RbVmInfo info;
 
                 vm_info(g_vm, &info);
@@ -4495,7 +4518,7 @@ void game_update(RbGame *g)
                         "kraken f9: stage 5 never reached a visible core (mode=%d chunk=%u cell=%u)\n",
                         g_mode, (unsigned)info.chunk, (unsigned)info.cell);
                 fflush(stderr);
-                sought++;
+                sought = 90001;
             }
         }
     }

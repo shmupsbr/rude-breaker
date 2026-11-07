@@ -203,3 +203,14 @@ int kr_same_shot(int scored, unsigned org, unsigned prev_org,
      * new shot that reused the slot. */
     return dx <= 36 && dy <= 36;
 }
+
+int kr_seek_presents(int vm_frames, int extra_per_update)
+{
+    if (vm_frames < 1) {
+        return 0;
+    }
+    if (extra_per_update < 1) {
+        return 1;
+    }
+    return (vm_frames + extra_per_update - 1) / extra_per_update;
+}

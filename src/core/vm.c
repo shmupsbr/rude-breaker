@@ -14,6 +14,7 @@
  * by the spin word, it does not snap to the target heading.
  */
 #include "vm.h"
+#include "controls.h"
 #include "collision.h"
 #include "gfx.h"
 
@@ -4744,22 +4745,23 @@ void vm_set_input(RbVm *vm, const RbInput *in)
     if (!vm) {
         return;
     }
-    held = held_from(in);
-    flags = gu16(vm, 0x72);
-    /* A connected pad is the port's stand-in for the READJS driver.
-     * The joystick row will not set bit 0x400 until B9 bit 3 is on. */
     if (in && in->pad) {
         vm->g[0xB9] = (uint8_t)(vm->g[0xB9] | 0x08u);
     }
-    if (in && (flags & 0x0400u)) {
-        RbInput pad;
+    if (in) {
+        RbInput merged = *in;
 
-        memset(&pad, 0, sizeof pad);
-        pad.buttons = (uint16_t)(in->pad_buttons &
-                                 (RB_BTN_UP | RB_BTN_DOWN | RB_BTN_LEFT |
-                                  RB_BTN_RIGHT | RB_BTN_A | RB_BTN_B | RB_BTN_C));
-        held = (uint16_t)(held | held_from(&pad));
+        merged.buttons = rb_control_bits(
+            in->buttons,
+            (uint16_t)(in->pad_buttons & (RB_BTN_UP | RB_BTN_DOWN | RB_BTN_LEFT |
+                                          RB_BTN_RIGHT | RB_BTN_A | RB_BTN_B |
+                                          RB_BTN_C)),
+            (gu16(vm, 0x72) & 0x0400u) != 0);
+        held = held_from(&merged);
+    } else {
+        held = 0;
     }
+    flags = gu16(vm, 0x72);
     /* Poll 0x7997. Bit 0x200 exchanges fire and mode. */
     if (flags & 0x0200u) {
         uint16_t fire = (uint16_t)(held & 0x0010u);

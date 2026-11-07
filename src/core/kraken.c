@@ -1754,9 +1754,9 @@ static void start_fight(RbVm *vm)
     vm_set_kraken_take(vm, 0);
     vm_set_kraken_hold(vm, 1);
     flags = vm_global_u16(vm, 0x72);
-    /* 0x0800 only opens the debug keys. 0x0100 is the ship's own
-     * immunity bit; leave it so a held invincibility still applies. */
-    flags = (uint16_t)(flags & (uint16_t)~0x0800u);
+    /* The skip sets 0x0100 so the ship survives the fast run to the
+     * boss. The fight itself is not immune. 0x0400 (joystick) stays. */
+    flags = (uint16_t)(flags & (uint16_t)~(0x0800u | 0x0100u));
     vm_set_global_u8(vm, 0x72, (uint8_t)flags);
     vm_set_global_u8(vm, 0x73, (uint8_t)(flags >> 8));
     for (i = 0; i < 256; i++) {
