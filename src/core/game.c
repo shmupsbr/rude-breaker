@@ -20,6 +20,7 @@
 #include "eq.h"
 #include "panels.h"
 #include "kraken.h"
+#include "kraken_hit.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -4464,18 +4465,22 @@ void game_update(RbGame *g)
              * The picture on screen stays the pre-F9 frame until the
              * boss is ready. */
             memset(&idle, 0, sizeof idle);
+            /* The stage stops scroll while counted enemies live. A
+             * zero button word never shoots them, so the cell stays
+             * put. Hold the real fire bit; do not touch weapons. */
+            idle.buttons = KR_F9_SKIP_FIRE;
             if (sought == 0) {
                 fprintf(stderr, "kraken f9: seeking stage 5\n");
                 fflush(stderr);
             }
             vm_set_loop(g_vm, 0, vm_global_u8(g_vm, 0xC9), vm_global_u8(g_vm, 0xB2));
             while (sought < 90000 && !kraken_debug_ready(g_vm)) {
-                uint16_t f = (uint16_t)((flag_word() | 0x0100u) & (uint16_t)~0x0800u);
+                /* 0x0100 only. 0x0400 is restored after the skip: the
+                 * run that reached the boss did not have it set here. */
+                uint16_t f = (uint16_t)((flag_word() | 0x0100u) &
+                                        (uint16_t)~(0x0800u | 0x0400u));
                 RbInput pump;
 
-                if (!g_joy_lockout && sys_joy_present()) {
-                    f = (uint16_t)(f | 0x0400u);
-                }
                 set_flag_word(f);
                 if (vm_global_u8(g_vm, 0xD2) < 3) {
                     vm_set_global_u8(g_vm, 0xD2, 3);
@@ -4495,9 +4500,10 @@ void game_update(RbGame *g)
 
                     vm_info(g_vm, &info);
                     fprintf(stderr,
-                            "kraken f9: seek mode=%d chunk=%u cell=%u speed=%d lives=%u flags=%04X frames=%d\n",
+                            "kraken f9: seek mode=%d chunk=%u cell=%u speed=%d ae=%u ship=%d lives=%u flags=%04X frames=%d\n",
                             g_mode, (unsigned)info.chunk, (unsigned)info.cell,
-                            (int)info.speed, (unsigned)vm_global_u8(g_vm, 0xD2),
+                            (int)info.speed, (unsigned)vm_global_u16(g_vm, 0xAE),
+                            (int)info.ship_x, (unsigned)vm_global_u8(g_vm, 0xD2),
                             (unsigned)flag_word(), sought);
                     fflush(stderr);
                 }
@@ -4515,8 +4521,9 @@ void game_update(RbGame *g)
 
                 vm_info(g_vm, &info);
                 fprintf(stderr,
-                        "kraken f9: stage 5 never reached a visible core (mode=%d chunk=%u cell=%u)\n",
-                        g_mode, (unsigned)info.chunk, (unsigned)info.cell);
+                        "kraken f9: stage 5 never reached a visible core (mode=%d chunk=%u cell=%u speed=%d ae=%u)\n",
+                        g_mode, (unsigned)info.chunk, (unsigned)info.cell,
+                        (int)info.speed, (unsigned)vm_global_u16(g_vm, 0xAE));
                 fflush(stderr);
                 sought = 90001;
             }
