@@ -4,12 +4,11 @@
  * Black Label only. Kraken starts when two whole loops have each been
  * cleared with every secret medal and no death. The loops need not be
  * the first two, and they need not be consecutive: a failed loop drops
- * only itself. The stage 5 core then falls off the bottom, the white
- * flash plays, and three seconds later that core returns with four
- * arms. The hull cannot be hurt until those arms are gone.
+ * only itself. The stage 5 core then stays where it is and puts out
+ * four arms. The hull cannot be hurt until those arms are gone.
  *
  * KRAKEN_DEBUG (off unless the debug make target defines it) adds F9,
- * which plays that appearance on stage 5 without the medal check, and
+ * which reaches that same stage 5 core and uses the same transform, and
  * F10, which dumps live sprite ids. Delete the debug target and the
  * KRAKEN_DEBUG blocks to drop both before a release build.
  */

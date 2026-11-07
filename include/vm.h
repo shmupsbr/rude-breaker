@@ -113,6 +113,9 @@ void vm_kraken_isolate(RbVm *vm);
 void vm_redraw(RbVm *vm);
 void vm_ent_unhide(RbVm *vm, int i);
 void vm_ent_set_type(RbVm *vm, int i, uint16_t type);
+/* Stop the script and keep the sprite. Origin 0xCE11 is kept in the fight. */
+void vm_ent_freeze(RbVm *vm, int i);
+void vm_ent_set_origin(RbVm *vm, int i, uint16_t origin);
 /* Bind an SGM1 record as a sprite bank (opcode 0x32). */
 int  vm_bind_record(RbVm *vm, uint8_t slot, uint8_t rec);
 int  vm_ensure_record(RbVm *vm, int rec);

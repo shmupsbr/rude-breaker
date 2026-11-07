@@ -48,4 +48,7 @@ int kr_pat_is_core(const uint8_t *b, int n);
 int kr_f9_ready(int chunk, int live_core, int pat_ok, int bg_lit,
                 int ship, int weapon);
 
+/* 0: not our death. 1: Kraken where the core is. 2: Black Label fall. */
+int kr_core_fate(int black, int tlb_ready, int hp_gone);
+
 #endif
