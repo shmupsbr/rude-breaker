@@ -75,6 +75,7 @@ int main(void)
              "some_future_key=42\n# a comment\n\nweird line without equals\n");
     load_cfg(&g);
     CHECK(g_sndx == 1);
+    CHECK(g_mode == 1); /* loop=on is Infinite */
     CHECK(g_attract_on == 0);
     CHECK(g_aura_on == 3);     /* NEW - BLUE: the 0.10.1 default */
     CHECK(g_mvol == 100);
@@ -89,6 +90,15 @@ int main(void)
     CHECK(g_aura_on == 1);
     CHECK(g_mvol == 40);
     CHECK(g_joy_off_saved == 1);
+    CHECK(g_mode == 0); /* loop=off is Original */
+    put(cfg, "mode=blacklabel\n");
+    load_cfg(&g);
+    CHECK(g_mode == 2);
+    g_mode = 2;
+    save_cfg(&g);
+    g_mode = 0;
+    load_cfg(&g);
+    CHECK(g_mode == 2);
     /* 2b. I-FRAMES colours (new = fire), VU style, 0.10.1 scaling. */
     put(cfg, "iframes=lime\nvu=spectrum\n");
     load_cfg(&g);
