@@ -121,17 +121,68 @@ int main(void)
         bad[3] = 0;
         expect(kr_pat_is_core(core, 12), "core pattern bytes match");
         expect(!kr_pat_is_core(bad, 12), "a different pattern is rejected");
-        expect(!kr_f9_ready(2, 1, 1, 200, 1, 1), "stage 1 is not accepted");
-        expect(!kr_f9_ready(6, 0, 1, 200, 1, 1), "no live core is not accepted");
-        expect(!kr_f9_ready(6, 1, 0, 200, 1, 1), "wrong pattern is not accepted");
-        expect(!kr_f9_ready(6, 1, 1, 10, 1, 1), "an unpainted background is not accepted");
-        expect(!kr_f9_ready(6, 1, 1, 200, 1, 0), "no weapon is not accepted");
-        expect(kr_f9_ready(6, 1, 1, 200, 1, 1), "stage 5 core context is accepted");
-        expect(!kr_f9_ready(6, 1, 1, 200, 0, 1), "no ship is not accepted");
+        expect(!kr_f9_ready(2, 1, 1, 200, 1, 1, 380, 86, 3, 5, 640, 400),
+               "stage 1 is not accepted");
+        expect(!kr_f9_ready(6, 0, 1, 200, 1, 1, 380, 86, 3, 5, 640, 400),
+               "no live core is not accepted");
+        expect(!kr_f9_ready(6, 1, 0, 200, 1, 1, 380, 86, 3, 5, 640, 400),
+               "wrong pattern is not accepted");
+        expect(!kr_f9_ready(6, 1, 1, 10, 1, 1, 380, 86, 3, 5, 640, 400),
+               "an unpainted background is not accepted");
+        expect(!kr_f9_ready(6, 1, 1, 200, 1, 0, 380, 86, 3, 5, 640, 400),
+               "no weapon is not accepted");
+        expect(kr_f9_ready(6, 1, 1, 200, 1, 1, 380, 86, 3, 5, 640, 400),
+               "stage 5 core context is accepted");
+        expect(!kr_f9_ready(6, 1, 1, 200, 0, 1, 380, 86, 3, 5, 640, 400),
+               "no ship is not accepted");
+        expect(!kr_sprite_inside(320, -123, 3, 5, 640, 400),
+               "y=-123 is above the screen");
+        expect(!kr_f9_ready(6, 1, 1, 10304, 1, 1, 320, -123, 3, 5, 640, 400),
+               "the reported offscreen frame is not ready");
+        expect(!kr_sprite_inside(320, 20, 3, 5, 640, 400),
+               "a clipped top is not fully visible");
+        expect(kr_sprite_inside(380, 86, 3, 5, 640, 400),
+               "the fight position is fully visible");
         expect(kr_core_fate(1, 1, 1) == 1, "a counted loop stays in place");
         expect(kr_core_fate(1, 0, 1) == 2, "a failed loop still falls");
         expect(kr_core_fate(0, 1, 1) == 0, "other modes do not transform");
         expect(kr_core_fate(1, 1, 0) == 0, "a living core is not transformed");
+        {
+            int mode;
+            int opened[3];
+
+            for (mode = 0; mode < 3; mode++) {
+                KrF9Watch w;
+                int frame;
+                int got = -1;
+
+                memset(&w, 0, sizeof w);
+                for (frame = 0; frame < 40; frame++) {
+                    int x = 320;
+                    int y = -123;
+                    int ready;
+
+                    if (frame >= 4 && frame < 8) {
+                        y = 20;
+                    } else if (frame >= 8 && frame < 12) {
+                        y = 70 + (frame - 8) * 4;
+                    } else if (frame >= 12) {
+                        x = 380;
+                        y = 86;
+                    }
+                    ready = kr_f9_ready(6, 1, 1, 10304, 1, 1, x, y, 3, 5, 640, 400);
+                    if (kr_f9_poll(mode, &w, ready, x, y, KR_F9_SLACK, KR_F9_SETTLE) &&
+                        got < 0) {
+                        got = frame;
+                    }
+                }
+                opened[mode] = got;
+            }
+            expect(opened[0] == 12 + KR_F9_SETTLE - 1, "opens on the settled frame");
+            expect(opened[0] > 0, "does not open on the offscreen frame");
+            expect(opened[0] == opened[1] && opened[1] == opened[2],
+                   "original, infinite and black label open on the same frame");
+        }
     }
 
     if (g_fail) {
