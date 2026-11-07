@@ -1726,9 +1726,9 @@ static void start_fight(RbVm *vm)
     vm_set_kraken_take(vm, 0);
     vm_set_kraken_hold(vm, 1);
     flags = vm_global_u16(vm, 0x72);
-    /* 0x0100 is the immunity the ship script checks. 0x0800 is only
-     * the debug-key gate. The fight itself is not immune. */
-    flags = (uint16_t)(flags & (uint16_t)~(0x0800u | 0x0100u));
+    /* 0x0800 only opens the debug keys. 0x0100 is the ship's own
+     * immunity bit; leave it so a held invincibility still applies. */
+    flags = (uint16_t)(flags & (uint16_t)~0x0800u);
     vm_set_global_u8(vm, 0x72, (uint8_t)flags);
     vm_set_global_u8(vm, 0x73, (uint8_t)(flags >> 8));
     for (i = 0; i < 256; i++) {
@@ -1906,6 +1906,80 @@ void kraken_before(RbVm *vm, int deaths, int fair, int loop, int stage, int paus
     }
 }
 
+#if KRAKEN_DEBUG
+/* One line that separates a dropped Z hold, a missing shot controller,
+ * and a controller that is alive but not spawning. */
+static void gun_watch(RbVm *vm)
+{
+    static int ticks;
+    static int dry;
+    static int reported;
+    int i;
+    int shots = 0;
+    int vis = 0;
+    int free_lo = 0;
+    int free_hi = 0;
+    int ctrl = -1;
+    uint16_t corg = 0;
+    uint16_t ctype = 0;
+    int cmode = -1;
+    int fire;
+
+    if (!vm || s_phase != PH_FIGHT) {
+        ticks = 0;
+        dry = 0;
+        reported = 0;
+        return;
+    }
+    for (i = 0; i < 256; i++) {
+        RbEntView v;
+
+        if (!vm_ent_view(vm, i, &v)) {
+            if (i < 176) {
+                free_lo++;
+            } else {
+                free_hi++;
+            }
+            continue;
+        }
+        if (ctrl < 0 && (v.origin == 0x62E3u || v.origin == 0x62E9u)) {
+            ctrl = i;
+            corg = v.origin;
+            ctype = v.type;
+            cmode = vm_ent_mode(vm, i);
+        }
+        if (!is_player_shot(&v)) {
+            continue;
+        }
+        shots++;
+        if (v.x >= 80 && v.x < 560 && v.y >= 0 && v.y < 400) {
+            vis++;
+        }
+    }
+    fire = (vm_held(vm) & 0x0010u) != 0;
+    if (fire && shots == 0) {
+        dry++;
+    } else {
+        dry = 0;
+        reported = 0;
+    }
+    ticks++;
+    if ((ticks % 30) == 0 || (dry == 20 && !reported)) {
+        fprintf(stderr,
+                "kraken gun: fire=%d d5=%u d6=%u df=%u ctrl=%d org=%04X type=%04X cmode=%d shots=%d vis=%d free_lo=%d free_hi=%d flags=%04X lives=%u%s\n",
+                fire, (unsigned)vm_global_u8(vm, 0xD5), (unsigned)vm_global_u8(vm, 0xD6),
+                (unsigned)vm_global_u8(vm, 0xDF), ctrl, (unsigned)corg, (unsigned)ctype,
+                cmode, shots, vis, free_lo, free_hi,
+                (unsigned)vm_global_u16(vm, 0x72), (unsigned)vm_global_u8(vm, 0xD2),
+                (dry >= 20) ? " STOP" : "");
+        fflush(stderr);
+        if (dry >= 20) {
+            reported = 1;
+        }
+    }
+}
+#endif
+
 void kraken_after(RbVm *vm, int stage, int paused)
 {
     int i;
@@ -2042,6 +2116,9 @@ void kraken_after(RbVm *vm, int stage, int paused)
     if (s_phase != PH_OFF) {
         vm_redraw(vm);
     }
+#if KRAKEN_DEBUG
+    gun_watch(vm);
+#endif
 }
 
 static void put_px(uint32_t *px, int w, int h, int x, int y, uint32_t c)

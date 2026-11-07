@@ -1173,6 +1173,15 @@ static int alloc_back(RbVm *vm)
     return -1;
 }
 
+/* Player shots are opcode 0x16: the first free slot at or after the
+ * shot controller. The stage 5 core sits near slot 133, so that window
+ * is only the slots between the controller and the core. Kraken holds
+ * must not take those slots or the controller stops after one burst. */
+static int alloc_kraken(RbVm *vm)
+{
+    return alloc_span(vm, 176, ENT_N - 176);
+}
+
 static void finish_spawn(RbVm *vm, int parent, int slot, uint16_t child, uint16_t typ)
 {
     if (slot < 0) {
@@ -5734,6 +5743,19 @@ void vm_ent_set_origin(RbVm *vm, int i, uint16_t origin)
     }
 }
 
+int vm_ent_mode(const RbVm *vm, int i)
+{
+    if (!vm || i < 0 || i >= ENT_N || eu16(vm, i, 0) == 0) {
+        return -1;
+    }
+    return (int)vm->mode[i];
+}
+
+uint16_t vm_held(const RbVm *vm)
+{
+    return vm ? vm->held : 0;
+}
+
 int vm_ensure_record(RbVm *vm, int rec)
 {
     if (!vm || rec < 0) {
@@ -5888,7 +5910,7 @@ int vm_spawn_hold(RbVm *vm, uint16_t type, int16_t x, int16_t y, uint16_t hp,
     if (!vm) {
         return -1;
     }
-    s = alloc_span(vm, 0, ENT_N);
+    s = alloc_kraken(vm);
     if (s < 0) {
         return -1;
     }
@@ -5914,7 +5936,7 @@ int vm_spawn_haste(RbVm *vm, int chunk, uint16_t ip, uint16_t type,
     if (!vm || chunk < 0 || chunk >= CHUNK_N || !vm->chunk[chunk]) {
         return -1;
     }
-    s = alloc_span(vm, 0, ENT_N);
+    s = alloc_kraken(vm);
     if (s < 0) {
         return -1;
     }
@@ -5937,7 +5959,7 @@ int vm_spawn_snap(RbVm *vm, const uint8_t raw[82], uint8_t cof, uint16_t ip,
     if (!vm || !raw || cof >= CHUNK_N || !vm->chunk[cof]) {
         return -1;
     }
-    s = alloc_span(vm, 0, ENT_N);
+    s = alloc_kraken(vm);
     if (s < 0) {
         return -1;
     }
