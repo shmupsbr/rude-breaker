@@ -128,6 +128,10 @@ int main(void)
         expect(!kr_f9_ready(6, 1, 1, 200, 1, 0), "no weapon is not accepted");
         expect(kr_f9_ready(6, 1, 1, 200, 1, 1), "stage 5 core context is accepted");
         expect(!kr_f9_ready(6, 1, 1, 200, 0, 1), "no ship is not accepted");
+        expect(kr_core_fate(1, 1, 1) == 1, "a counted loop stays in place");
+        expect(kr_core_fate(1, 0, 1) == 2, "a failed loop still falls");
+        expect(kr_core_fate(0, 1, 1) == 0, "other modes do not transform");
+        expect(kr_core_fate(1, 1, 0) == 0, "a living core is not transformed");
     }
 
     if (g_fail) {
