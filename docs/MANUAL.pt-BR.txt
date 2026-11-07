@@ -937,15 +937,15 @@ game over do próprio jogo, não numa vida perdida. A partir do loop 2:
   - No Training, a fase 1 ainda recomeça depois da fase 5, mas a
     dificuldade e o multiplicador não mudam.
 
-KRAKEN é o chefe final verdadeiro, e só o BLACK LABEL tem ele. Ele
-aparece depois da fase 5 do loop 2, e só se você pegou todas as medalhas
-escondidas nos dois loops e nunca perdeu a nave. O chefe da fase 5 cai
-pela borda de baixo da tela enquanto se desfaz, e o clarão branco
-continua, então a explosão não acontece no meio da tela. Se o Kraken
-não for acontecer, a partida não acaba: a fase 1 recomeça, e ele não
-aparece num loop seguinte. Se for, três segundos depois do clarão a
-parte central sobe de volta, solta quatro braços segmentados, e a luta
-começa. Derrotar o Kraken encerra a partida.
+KRAKEN é o chefe final verdadeiro, e só o BLACK LABEL tem ele. Um loop
+conta quando nele você pegou todas as medalhas escondidas e não perdeu
+a nave. São necessários dois loops assim. Não precisam ser os dois
+primeiros nem seguidos: um loop falho anula só a si mesmo e não apaga
+um que já contou. Quando o segundo loop contado derrota o chefe da
+fase 5, ele cai pela borda de baixo enquanto se desfaz, o clarão branco
+toca, e três segundos depois a parte central sobe, solta quatro braços,
+e a luta começa. Derrotar o Kraken encerra a partida. Um único loop
+contado, ou um loop falho, não começa a luta.
 Cada braço termina numa esfera que brilha e se curva na direção da sua nave. O Kraken não leva
 dano até os quatro braços caírem. Cada braço tem metade dos pontos de
 vida do Kraken. O Kraken dispara todos os padrões da fortaleza da fase

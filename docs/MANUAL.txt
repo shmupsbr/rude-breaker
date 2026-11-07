@@ -933,15 +933,15 @@ loop 2 on:
   - In Training, stage 1 still starts again after stage 5, but the
     difficulty and the multiplier do not change.
 
-KRAKEN is the true last boss, and only BLACK LABEL has it. It appears
-after stage 5 of loop 2, and only when you took every hidden medal in
-both loops and never lost a ship. The stage 5 boss falls off the bottom
-of the screen while it breaks apart, and the white flash still plays,
-so that blast is not seen in the middle of the screen. If Kraken is
-not due, the run does not end: stage 1 starts again, and Kraken will
-not appear on a later loop. If it is due, three seconds after the flash
-the boss's central part rises back, puts out four segmented arms, and
-the fight starts. Beating Kraken ends the run.
+KRAKEN is the true last boss, and only BLACK LABEL has it. A loop
+counts when that loop had every secret medal and no death. Two such
+loops are required. They do not have to be the first two, or next to
+each other: a failed loop drops only itself and leaves a counted loop
+in place. When the second counted loop's stage 5 boss is defeated, it
+falls off the bottom while it breaks apart, the white flash plays, and
+three seconds later its central part rises, puts out four arms, and
+the fight starts. Beating Kraken ends the run. One counted loop, or a
+failed loop, does not.
 Each arm ends in a glowing orb and bends toward your ship. Kraken
 cannot be hit until all four arms are destroyed. Each arm has half of
 Kraken's hit points. Kraken fires every pattern the stage 5 fortress
