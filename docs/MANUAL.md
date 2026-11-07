@@ -293,8 +293,17 @@ so saves from earlier builds load unchanged.
 
 GAMEPLAY
 
-  Options, in this order: DIFFICULTY, RANK, SUICIDE BULLETS, SHIP
-  SELECT, SHIP SPEED, TRAINING, ATTRACT MODE, I-FRAMES and BACK.
+  Options, in this order: DIFFICULTY, GAME MODE, RANK, SUICIDE BULLETS,
+  SHIP SELECT, SHIP SPEED, TRAINING, ATTRACT MODE, I-FRAMES and BACK.
+
+  GAME MODE        ORIGINAL (default), INFINITE or BLACK LABEL.
+                   ORIGINAL is the game as shipped: one pass, and
+                   clearing stage 5 plays the ending. No Kraken.
+                   INFINITE repeats loops, keeping score, lives and
+                   weapons, until the game's own game over. A lost life
+                   is still just a lost life. No Kraken.
+                   BLACK LABEL repeats loops until Kraken is beaten,
+                   which ends the run. Kraken is only in this mode.
 
   DIFFICULTY       VERY EASY, EASY, NORMAL, HARD, VERY HARD. These are
                    the original game's own difficulty levels. NORMAL
@@ -888,13 +897,14 @@ The rate and number of enemy shots are not changed: in the game data
 each enemy's shot timing is its own counter inside its script, so it
 cannot be changed for all enemies without changing their patterns.
 Loop 2 starts rank 100 higher and allows it 50 higher (at most 1000),
-and rank rises twice as fast (see TWO LOOPS below).
+and rank rises with the loop number (see GAME MODE below).
 Not in Training. RANK OFF turns all of this off.
 
-TWO LOOPS is how every run is played. There is no LOOP option.
-Clearing stage 5 does not show the ending: stage 1 starts again as
-loop 2, and you keep your score, lives and weapons. After stage 5 of
-loop 2 the run ends, unless Kraken appears (below). In loop 2:
+GAME MODE chooses how a clear of stage 5 continues. ORIGINAL
+(the default) plays the ending. INFINITE and BLACK LABEL start
+stage 1 again, and you keep your score, lives and weapons. The run
+ends on the game's own game over, not on a single lost life. From
+loop 2 on:
 
   - The base difficulty is one level above the DIFFICULTY you chose
     (VERY EASY -> EASY -> NORMAL -> HARD -> VERY HARD). At VERY HARD
@@ -923,14 +933,15 @@ loop 2 the run ends, unless Kraken appears (below). In loop 2:
   - In Training, stage 1 still starts again after stage 5, but the
     difficulty and the multiplier do not change.
 
-KRAKEN is the true last boss. It appears only after stage 5 of loop 2,
-and only when you took every hidden medal in both loops and never lost
-a ship. The stage 5 boss falls off the bottom of the screen while it
-breaks apart, and the white flash still plays, so that blast is not
-seen in the middle of the screen. If Kraken is not due, the run then
-ends as usual. If it is, three seconds after the flash the boss's
-central part rises back, puts out four segmented arms, and the fight
-starts.
+KRAKEN is the true last boss, and only BLACK LABEL has it. It appears
+after stage 5 of loop 2, and only when you took every hidden medal in
+both loops and never lost a ship. The stage 5 boss falls off the bottom
+of the screen while it breaks apart, and the white flash still plays,
+so that blast is not seen in the middle of the screen. If Kraken is
+not due, the run does not end: stage 1 starts again, and Kraken will
+not appear on a later loop. If it is due, three seconds after the flash
+the boss's central part rises back, puts out four segmented arms, and
+the fight starts. Beating Kraken ends the run.
 Each arm ends in a glowing orb and bends toward your ship. Kraken
 cannot be hit until all four arms are destroyed. Each arm has half of
 Kraken's hit points. Kraken fires every pattern the stage 5 fortress

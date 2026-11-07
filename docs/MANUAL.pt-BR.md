@@ -907,10 +907,10 @@ O loop 2 começa o rank 100 mais alto e permite 50 a mais (no máximo
 1000), e o rank sobe duas vezes mais rápido (veja DOIS LOOPS abaixo).
 Não vale no Training. RANK OFF desliga tudo isso.
 
-DOIS LOOPS é como toda partida é jogada. Não há opção LOOP. Vencer a
-fase 5 não mostra o final: a fase 1 começa de novo como loop 2, e você
-mantém pontuação, vidas e armas. Depois da fase 5 do loop 2 a partida
-termina, salvo se o Kraken aparecer (abaixo). No loop 2:
+GAME MODE escolhe o que acontece ao vencer a fase 5. ORIGINAL
+(o padrão) mostra o final. INFINITE e BLACK LABEL começam a fase 1
+de novo, e você mantém pontuação, vidas e armas. A partida acaba no
+game over do próprio jogo, não numa vida perdida. A partir do loop 2:
 
   - A dificuldade base fica um nível acima da DIFFICULTY escolhida
     (VERY EASY -> EASY -> NORMAL -> HARD -> VERY HARD). Em VERY HARD
@@ -937,13 +937,15 @@ termina, salvo se o Kraken aparecer (abaixo). No loop 2:
   - No Training, a fase 1 ainda recomeça depois da fase 5, mas a
     dificuldade e o multiplicador não mudam.
 
-KRAKEN é o chefe final verdadeiro. Ele só aparece depois da fase 5 do
-loop 2, e só se você pegou todas as medalhas escondidas nos dois loops
-e nunca perdeu a nave. O chefe da fase 5 cai pela borda de baixo da
-tela enquanto se desfaz, e o clarão branco continua, então a explosão
-não acontece no meio da tela. Se o Kraken não for acontecer, a partida
-segue o final de sempre. Se for, três segundos depois do clarão a parte
-central sobe de volta, solta quatro braços segmentados, e a luta começa.
+KRAKEN é o chefe final verdadeiro, e só o BLACK LABEL tem ele. Ele
+aparece depois da fase 5 do loop 2, e só se você pegou todas as medalhas
+escondidas nos dois loops e nunca perdeu a nave. O chefe da fase 5 cai
+pela borda de baixo da tela enquanto se desfaz, e o clarão branco
+continua, então a explosão não acontece no meio da tela. Se o Kraken
+não for acontecer, a partida não acaba: a fase 1 recomeça, e ele não
+aparece num loop seguinte. Se for, três segundos depois do clarão a
+parte central sobe de volta, solta quatro braços segmentados, e a luta
+começa. Derrotar o Kraken encerra a partida.
 Cada braço termina numa esfera que brilha e se curva na direção da sua nave. O Kraken não leva
 dano até os quatro braços caírem. Cada braço tem metade dos pontos de
 vida do Kraken. O Kraken dispara todos os padrões da fortaleza da fase
