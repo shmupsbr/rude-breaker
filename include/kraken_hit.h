@@ -5,6 +5,8 @@
 #ifndef RUDEBREAKER_KRAKEN_HIT_H
 #define RUDEBREAKER_KRAKEN_HIT_H
 
+#include <stdint.h>
+
 /* Damage taken from one connecting shot. core_max is Kraken's own HP. */
 int kr_shot_damage(int core_max);
 
@@ -37,5 +39,13 @@ int kr_tlb_ready(const KrLoops *k);
  * is dropped and does not change banked. Counters for the next loop
  * are cleared. */
 void kr_finish_loop(KrLoops *k);
+
+/* 1 when the first 12 pattern bytes are the stage 5 core frame. */
+int kr_pat_is_core(const uint8_t *b, int n);
+
+/* F9 may start only with stage 5, the live core bank, that pattern,
+ * a painted background, the ship, and the weapon controller. */
+int kr_f9_ready(int chunk, int live_core, int pat_ok, int bg_lit,
+                int ship, int weapon);
 
 #endif

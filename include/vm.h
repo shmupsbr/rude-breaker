@@ -102,6 +102,9 @@ int  vm_take_loop(RbVm *vm);
 /* When take is set, the ending load after stage 5 is swallowed once
  * and vm_take_kraken returns 1. The stage stays up for the host fight. */
 void vm_set_kraken_take(RbVm *vm, int on);
+/* While on, the stage timeline (type 0x4000) is not kept. The picture
+ * already in the background stays. The ship and its weapon stay. */
+void vm_set_kraken_hold(RbVm *vm, int on);
 int  vm_take_kraken(RbVm *vm);
 /* Drop every entity that is not the ship, its options, or its shots. */
 void vm_kraken_isolate(RbVm *vm);

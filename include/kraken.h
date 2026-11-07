@@ -30,6 +30,9 @@ int  kraken_active(void);
 #if KRAKEN_DEBUG
 void kraken_debug_arm(void);
 int  kraken_debug_armed(void);
+/* 1 when stage 5 is at its end boss, the core bank is the real one,
+ * the background is painted, and the ship can fire. */
+int  kraken_debug_ready(const RbVm *vm);
 /* F10 in the debug build: one stderr line per live object. */
 void kraken_dump_screen(const RbVm *vm);
 #endif
