@@ -941,11 +941,11 @@ KRAKEN é o chefe final verdadeiro, e só o BLACK LABEL tem ele. Um loop
 conta quando nele você pegou todas as medalhas escondidas e não perdeu
 a nave. São necessários dois loops assim. Não precisam ser os dois
 primeiros nem seguidos: um loop falho anula só a si mesmo e não apaga
-um que já contou. Quando o segundo loop contado derrota o chefe da
-fase 5, ele cai pela borda de baixo enquanto se desfaz, o clarão branco
-toca, e três segundos depois a parte central sobe, solta quatro braços,
+um que já contou. Quando o segundo loop contado está para destruir o
+chefe da fase 5, a parte central fica onde está, solta quatro braços,
 e a luta começa. Derrotar o Kraken encerra a partida. Um único loop
-contado, ou um loop falho, não começa a luta.
+contado, ou um loop falho, não começa o Kraken. No Black Label esse
+chefe cai pela borda de baixo e o loop continua.
 Cada braço termina numa esfera que brilha e se curva na direção da sua nave. O Kraken não leva
 dano até os quatro braços caírem. Cada braço tem metade dos pontos de
 vida do Kraken. O Kraken dispara todos os padrões da fortaleza da fase

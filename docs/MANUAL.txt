@@ -937,11 +937,11 @@ KRAKEN is the true last boss, and only BLACK LABEL has it. A loop
 counts when that loop had every secret medal and no death. Two such
 loops are required. They do not have to be the first two, or next to
 each other: a failed loop drops only itself and leaves a counted loop
-in place. When the second counted loop's stage 5 boss is defeated, it
-falls off the bottom while it breaks apart, the white flash plays, and
-three seconds later its central part rises, puts out four arms, and
+in place. When the second counted loop's stage 5 boss would be
+destroyed, its central part stays where it is, puts out four arms, and
 the fight starts. Beating Kraken ends the run. One counted loop, or a
-failed loop, does not.
+failed loop, does not start Kraken. In Black Label that boss then
+falls off the bottom and the loop continues.
 Each arm ends in a glowing orb and bends toward your ship. Kraken
 cannot be hit until all four arms are destroyed. Each arm has half of
 Kraken's hit points. Kraken fires every pattern the stage 5 fortress
