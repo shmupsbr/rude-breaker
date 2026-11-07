@@ -35,7 +35,8 @@ CORE_SRCS := \
 	src/core/crt.c \
 	src/core/eq.c \
 	src/core/demo.c \
-	src/core/kraken.c
+	src/core/kraken.c \
+	src/core/kraken_hit.c
 
 ifeq ($(PLATFORM),sdl2)
   HAL_SRCS := \
@@ -77,14 +78,14 @@ SRCS := $(CORE_SRCS) $(HAL_SRCS)
 OBJS := $(SRCS:%.c=$(BUILD)/$(PLATFORM)/%.o) \
         $(YMFM_SRCS:%.cpp=$(BUILD)/$(PLATFORM)/%.o)
 
-.PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test dirs debug
+.PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test hit-check dirs debug
 
 # `debug` must not be the first target: plain `make` is the release build.
 .DEFAULT_GOAL := all
 
-all: dirs $(TARGET) test-endian
+all: dirs $(TARGET) test-endian hit-check
 
-# Debug build: same game, plus F9 to jump into the Kraken fight.
+# Debug build: same game, plus F9 for the Kraken appearance sequence.
 # Leave this target and the KRAKEN_DEBUG blocks out of a release build.
 debug:
 	$(MAKE) EXTRA_CFLAGS=-DKRAKEN_DEBUG=1 all
@@ -132,6 +133,12 @@ cfg-check: dirs $(CFG_CHECK_OBJS)
 	@if [ -z "$(EXE)" ]; then $(BUILD)/cfg_check; else echo "cross compile: skipped running cfg_check$(EXE)"; fi
 
 # ZX filter rules on synthetic frames (no game data).
+# Kraken hit rules. No game data.
+hit-check:
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -o $(BUILD)/kraken_hit_test tools/kraken_hit_test.c src/core/kraken_hit.c
+	$(BUILD)/kraken_hit_test
+
 zx-test: dirs
 	$(CC) $(CFLAGS) -c -o $(BUILD)/cfilter_zx.o src/core/cfilter.c
 	$(CC) $(CFLAGS) -o $(BUILD)/zx_rules_test tools/zx_rules_test.c $(BUILD)/cfilter_zx.o
