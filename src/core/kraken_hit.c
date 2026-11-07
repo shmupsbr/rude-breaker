@@ -176,3 +176,30 @@ int kr_core_fate(int black, int tlb_ready, int hp_gone)
     }
     return 0;
 }
+
+int kr_core_open(int hp)
+{
+    return hp > 0;
+}
+
+int kr_same_shot(int scored, unsigned org, unsigned prev_org,
+                 int x0, int y0, int x1, int y1)
+{
+    int dx;
+    int dy;
+
+    if (!scored || org != prev_org) {
+        return 0;
+    }
+    dx = x1 - x0;
+    dy = y1 - y0;
+    if (dx < 0) {
+        dx = -dx;
+    }
+    if (dy < 0) {
+        dy = -dy;
+    }
+    /* A player shot steps 24 pixels a frame. Farther than that is a
+     * new shot that reused the slot. */
+    return dx <= 36 && dy <= 36;
+}

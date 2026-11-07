@@ -1180,6 +1180,9 @@ static void apply_damage(RbVm *vm)
      * Clearing the entity here skips that exit, and the gun stops for
      * good once the count is full. */
     static uint8_t scored[256];
+    static uint16_t scored_org[256];
+    static int16_t scored_x[256];
+    static int16_t scored_y[256];
 
     for (sh = 0; sh < 256; sh++) {
         RbEntView shot;
@@ -1199,11 +1202,18 @@ static void apply_damage(RbVm *vm)
             scored[sh] = 0;
             continue;
         }
-        if (scored[sh]) {
-            if (!alive) {
-                scored[sh] = 0;
-            }
+        if (alive && scored[sh] &&
+            kr_same_shot(1, shot.origin, scored_org[sh],
+                         scored_x[sh], scored_y[sh], shot.x, shot.y)) {
             continue;
+        }
+        if (!alive && scored[sh]) {
+            scored[sh] = 0;
+            continue;
+        }
+        scored[sh] = 0;
+        if (tent_alive_n() == 0 && !kr_core_open(s_khp)) {
+            break;
         }
         if (alive) {
             x1 = shot.x;
@@ -1224,6 +1234,9 @@ static void apply_damage(RbVm *vm)
             note_arm_hit(vm, arm);
             if (alive) {
                 scored[sh] = 1;
+                scored_org[sh] = shot.origin;
+                scored_x[sh] = shot.x;
+                scored_y[sh] = shot.y;
             }
             continue;
         }
@@ -1249,7 +1262,7 @@ static void apply_damage(RbVm *vm)
             int x = x0 + (x1 - x0) * k / steps;
             int y = y0 + (y1 - y0) * k / steps;
 
-            if (!on_core(x, y)) {
+            if (!on_core(x, y) || !kr_core_open(s_khp)) {
                 continue;
             }
             s_khp -= s_hit > 0 ? s_hit : 8;
@@ -1263,6 +1276,9 @@ static void apply_damage(RbVm *vm)
 #endif
             if (alive) {
                 scored[sh] = 1;
+                scored_org[sh] = shot.origin;
+                scored_x[sh] = shot.x;
+                scored_y[sh] = shot.y;
             }
             break;
         }
@@ -2095,32 +2111,34 @@ void kraken_after(RbVm *vm, int stage, int paused)
     } else if (s_phase == PH_FIGHT) {
         spawn_parts(vm);
         apply_damage(vm);
-        bullets_vs_ship(vm);
-        fire_homing(vm);
-        if (s_dash) {
-            if (++s_dash_t >= 76) {
-                s_dash = 0;
+        if (s_khp > 0) {
+            bullets_vs_ship(vm);
+            fire_homing(vm);
+            if (s_dash) {
+                if (++s_dash_t >= 76) {
+                    s_dash = 0;
+                }
+            } else if (s_dash_wait > 0) {
+                s_dash_wait--;
+            } else if (tent_alive_n() > 0) {
+                s_dash = 1;
+                s_dash_t = 0;
+                s_dash_i = alive_tent(krand(tent_alive_n()));
+                s_dash_wait = KR_CYCLE;
             }
-        } else if (s_dash_wait > 0) {
-            s_dash_wait--;
-        } else if (tent_alive_n() > 0) {
-            s_dash = 1;
-            s_dash_t = 0;
-            s_dash_i = alive_tent(krand(tent_alive_n()));
-            s_dash_wait = KR_CYCLE;
-        }
-        if (s_gen >= 0) {
-            RbEntView v;
+            if (s_gen >= 0) {
+                RbEntView v;
 
-            if (vm_ent_view(vm, s_gen, &v)) {
-                vm_ent_place(vm, s_gen, (int16_t)s_hx, (int16_t)s_hy, 0, 0, 0, 0);
+                if (vm_ent_view(vm, s_gen, &v)) {
+                    vm_ent_place(vm, s_gen, (int16_t)s_hx, (int16_t)s_hy, 0, 0, 0, 0);
+                }
             }
-        }
-        replay_cycle(vm);
-        s_cyc_t++;
-        if (s_cyc_t >= KR_CYCLE) {
-            s_cyc_i++;
-            cycle_begin(vm);
+            replay_cycle(vm);
+            s_cyc_t++;
+            if (s_cyc_t >= KR_CYCLE) {
+                s_cyc_i++;
+                cycle_begin(vm);
+            }
         }
         if (s_khp <= 0) {
             /* In the middle of the screen, the way the stage boss used to die. */
