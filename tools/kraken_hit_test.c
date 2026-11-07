@@ -235,6 +235,8 @@ int main(void)
                "eighty frames per tick paints the skip");
         expect(kr_seek_presents(36000, 0) == 1,
                "a blocking skip is one picture");
+        expect(KR_F9_SKIP_FIRE == 0x0010u,
+               "the stage skip holds the fire bit");
         expect(rb_control_bits(0x0010u, 0x0001u, 0) == 0x0010u,
                "a pad is ignored while the joystick flag is off");
         expect(rb_control_bits(0x0010u, 0x0001u, 1) == 0x0011u,
