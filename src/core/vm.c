@@ -14,6 +14,7 @@
  * by the spin word, it does not snap to the target heading.
  */
 #include "vm.h"
+#include "controls.h"
 #include "collision.h"
 #include "gfx.h"
 
@@ -112,11 +113,17 @@ struct RbVm {
     int music;             /* last music track started, -1 none */
     /* ADVANCED rank: return bullets forced on while the scan runs. */
     int force_rf;
-    /* LOOP (host option): ending load after stage 5 becomes stage 1. */
+    /* Two-loop run: ending load after stage 5 becomes stage 1 once. */
     int loop_on;
     int loop_event;
     uint8_t loop_c9;
     uint8_t loop_b2;
+    /* True last boss: swallow that ending load, and halve waits on
+     * the entities the host spawned to replay the fortress patterns. */
+    int kraken_take;
+    int kraken_event;
+    int kraken_hold;
+    uint8_t haste[ENT_N];
     uint16_t bp_type[256];
     int16_t bp_x[256], bp_y[256];
     int16_t bp_ax[256], bp_ay[256]; /* remainder, 1/100 px */
@@ -319,6 +326,7 @@ static void clear_slot(RbVm *vm, int i)
     vm->mode[i] = MODE_FETCH;
     vm->origin[i] = 0;
     vm->script_entered[i] = 0;
+    vm->haste[i] = 0;
 }
 
 /* ---- LZ77 (loader 0x6ACD) ---------------------------------------------- */
@@ -1166,6 +1174,13 @@ static int alloc_back(RbVm *vm)
     return -1;
 }
 
+/* Kraken's own entities stay out of the low slots the shot controller
+ * fills from its own index upward. */
+static int alloc_kraken(RbVm *vm)
+{
+    return alloc_span(vm, 176, ENT_N - 176);
+}
+
 static void finish_spawn(RbVm *vm, int parent, int slot, uint16_t child, uint16_t typ)
 {
     if (slot < 0) {
@@ -1176,6 +1191,7 @@ static void finish_spawn(RbVm *vm, int parent, int slot, uint16_t child, uint16_
     vm->cof[slot] = vm->cof[parent];
     vm->origin[slot] = child;
     vm->mode[slot] = MODE_FETCH;
+    vm->haste[slot] = (parent >= 0 && parent < ENT_N) ? vm->haste[parent] : 0;
     vm->spawns++;
 }
 
@@ -2503,7 +2519,14 @@ static void do_load(RbVm *vm, int ent, uint8_t record, uint8_t header)
     int looped = 0;
 
     vm->loads++;
-    /* LOOP: stage 5 (chunk 6) loads the ending, record 1 header 3. Load
+    /* True last boss: stage 5's ending load is held. The clear script
+     * is parked so it does not run the load again next frame. */
+    if (vm->kraken_take && record == 1u && header == 3u && vm->view_chunk == 6) {
+        vm->kraken_event = 1;
+        clear_slot(vm, ent);
+        return;
+    }
+    /* Two loops: stage 5 (chunk 6) loads the ending, record 1 header 3. Load
      * stage 1 (record 2 header 0) in its place, the same load the other
      * stage-to-stage handoffs use. Score, lives and weapons live in
      * globals the stage init does not clear, as on stages 2 to 5. The
@@ -3022,6 +3045,14 @@ static void run_fetch(RbVm *vm, int ent)
         case 0x06: {
             uint16_t n = rd16(vm, ent, di);
 
+            /* Host fight: the fortress patterns run at twice the rate.
+             * Only entities the host marked, and the bullets they spawn. */
+            if (vm->haste[ent] && n > 1u) {
+                n = (uint16_t)(n / 2u);
+                if (n < 1u) {
+                    n = 1u;
+                }
+            }
             di = (uint16_t)(di + 2u);
             su16(vm, ent, 8, di);
             if (n <= 1u) {
@@ -4170,9 +4201,13 @@ void vm_reset_boot(RbVm *vm)
     memset(vm->g, 0, sizeof vm->g);
     memset(vm->vars, 0, sizeof vm->vars);
     memset(vm->mode, 0, sizeof vm->mode);
+    memset(vm->haste, 0, sizeof vm->haste);
     memset(vm->origin, 0, sizeof vm->origin);
     memset(vm->foe, 0, sizeof vm->foe);
     memset(vm->script_entered, 0, sizeof vm->script_entered);
+    vm->kraken_take = 0;
+    vm->kraken_event = 0;
+    vm->kraken_hold = 0;
     vm->disp_al = 0;
     vm->spawns = 0;
     vm->step_faults = 0;
@@ -4250,9 +4285,13 @@ void vm_reset_play(RbVm *vm, uint16_t stage)
     memset(vm->g, 0, sizeof vm->g);
     memset(vm->vars, 0, sizeof vm->vars);
     memset(vm->mode, 0, sizeof vm->mode);
+    memset(vm->haste, 0, sizeof vm->haste);
     memset(vm->origin, 0, sizeof vm->origin);
     memset(vm->foe, 0, sizeof vm->foe);
     memset(vm->script_entered, 0, sizeof vm->script_entered);
+    vm->kraken_take = 0;
+    vm->kraken_event = 0;
+    vm->kraken_hold = 0;
     vm->disp_al = 0;
     vm->spawns = 0;
     vm->step_faults = 0;
@@ -4706,22 +4745,23 @@ void vm_set_input(RbVm *vm, const RbInput *in)
     if (!vm) {
         return;
     }
-    held = held_from(in);
-    flags = gu16(vm, 0x72);
-    /* A connected pad is the port's stand-in for the READJS driver.
-     * The joystick row will not set bit 0x400 until B9 bit 3 is on. */
     if (in && in->pad) {
         vm->g[0xB9] = (uint8_t)(vm->g[0xB9] | 0x08u);
     }
-    if (in && (flags & 0x0400u)) {
-        RbInput pad;
+    if (in) {
+        RbInput merged = *in;
 
-        memset(&pad, 0, sizeof pad);
-        pad.buttons = (uint16_t)(in->pad_buttons &
-                                 (RB_BTN_UP | RB_BTN_DOWN | RB_BTN_LEFT |
-                                  RB_BTN_RIGHT | RB_BTN_A | RB_BTN_B | RB_BTN_C));
-        held = (uint16_t)(held | held_from(&pad));
+        merged.buttons = rb_control_bits(
+            in->buttons,
+            (uint16_t)(in->pad_buttons & (RB_BTN_UP | RB_BTN_DOWN | RB_BTN_LEFT |
+                                          RB_BTN_RIGHT | RB_BTN_A | RB_BTN_B |
+                                          RB_BTN_C)),
+            (gu16(vm, 0x72) & 0x0400u) != 0);
+        held = held_from(&merged);
+    } else {
+        held = 0;
     }
+    flags = gu16(vm, 0x72);
     /* Poll 0x7997. Bit 0x200 exchanges fire and mode. */
     if (flags & 0x0200u) {
         uint16_t fire = (uint16_t)(held & 0x0010u);
@@ -5526,6 +5566,7 @@ int vm_self_test(RbVm *vm)
     memset(vm->ent, 0, sizeof vm->ent);
     memset(vm->g, 0, sizeof vm->g);
     memset(vm->mode, 0, sizeof vm->mode);
+    memset(vm->haste, 0, sizeof vm->haste);
     su16(vm, 0, 0, 0x4000u);
     su16(vm, 0, 8, 0);
     vm->cof[0] = SCRATCH;
@@ -5573,4 +5614,659 @@ int vm_self_test(RbVm *vm)
         return 5;
     }
     return 0;
+}
+
+/* ---- true last boss host hooks ----------------------------------------- */
+
+void vm_set_kraken_take(RbVm *vm, int on)
+{
+    if (vm) {
+        vm->kraken_take = on != 0;
+    }
+}
+
+void vm_set_kraken_hold(RbVm *vm, int on)
+{
+    if (vm) {
+        vm->kraken_hold = on != 0;
+    }
+}
+
+int vm_take_kraken(RbVm *vm)
+{
+    int e;
+
+    if (!vm) {
+        return 0;
+    }
+    e = vm->kraken_event;
+    vm->kraken_event = 0;
+    return e;
+}
+
+static int kraken_keep_ent(const RbVm *vm, int i)
+{
+    uint16_t t = eu16(vm, i, 0);
+    uint16_t kind = eu16(vm, i, 4);
+    uint16_t org = vm->origin[i];
+
+    if (t == 0) {
+        return 1;
+    }
+    /* Kraken parts and the fortress-pattern entities the host spawned. */
+    if (org == 0xCE11u || vm->haste[i]) {
+        return 1;
+    }
+    /* Ship, options, and the shot scripts. Kind alone is not enough:
+     * other stage actors share those ids and would freeze on screen. */
+    if (player_body_origin(org)) {
+        return 1;
+    }
+    /* Shot controller and its bullets, by the script addresses. */
+    if (org == 0x62E3u || org == 0x62E9u || org == 0x6331u || org == 0x6498u ||
+        org == 0x6337u || org == 0x649Eu) {
+        return 1;
+    }
+    if (t & 0x1000u) {
+        return 1;
+    }
+    /* Player shots on the ship sheet (draw code: type bit 0x0004, bank 26). */
+    /* Player shots: bit 0x1000, or a kind-0 sprite on the ship sheet.
+     * A shot whose type also has 0x0020/0x0040 must stay, or the fight
+     * deletes the bullet before it can reach an arm. */
+    if ((t & 0x0004u) && (kind == 0 || eu16(vm, i, 0x3A) == 26u)) {
+        return 1;
+    }
+    if (kind == 0 && eu16(vm, i, 0x3A) == 26u && !(t & 0x0080u)) {
+        return 1;
+    }
+    /* Stage foes (0x0020/0x0040, the bits a player shot tests) and
+     * enemy bullets (0x0080). Anything else stays, including the shot
+     * controller, so the ship keeps firing after the foes are gone. */
+    if ((t & 0x0080u) || ((t & 0x0060u) && !(t & 0x1000u))) {
+        return 0;
+    }
+    /* The stage timeline. Dropping it freezes the picture already drawn. */
+    if (vm->kraken_hold && t == 0x4000u) {
+        return 0;
+    }
+    return 1;
+}
+
+void vm_redraw(RbVm *vm)
+{
+    if (!vm || !vm->gfx) {
+        return;
+    }
+    gfx_draw_entities(vm->gfx, vm->ent, ENT_N, ENT_STR,
+                      (const uint8_t *const *)vm->chunk, vm->clen, vm->cof,
+                      (int)gu16(vm, 0x76), (int)(int16_t)gu16(vm, 0x82),
+                      vm->view_chunk >= 2 && vm->view_chunk <= 6);
+}
+
+void vm_ent_unhide(RbVm *vm, int i)
+{
+    uint16_t t;
+
+    if (!vm || i < 0 || i >= ENT_N) {
+        return;
+    }
+    t = eu16(vm, i, 0);
+    if (t == 0) {
+        return;
+    }
+    t = (uint16_t)(t & (uint16_t)~0x0200u);
+    if ((t & 0x00FFu) == 0) {
+        t = (uint16_t)(t | 0x0012u);
+    }
+    su16(vm, i, 0, t);
+}
+
+void vm_ent_set_type(RbVm *vm, int i, uint16_t type)
+{
+    if (vm && i >= 0 && i < ENT_N && eu16(vm, i, 0) != 0 && type != 0) {
+        su16(vm, i, 0, type);
+    }
+}
+
+void vm_ent_freeze(RbVm *vm, int i)
+{
+    if (vm && i >= 0 && i < ENT_N && eu16(vm, i, 0) != 0) {
+        vm->mode[i] = MODE_FOREVER;
+    }
+}
+
+void vm_ent_set_origin(RbVm *vm, int i, uint16_t origin)
+{
+    if (vm && i >= 0 && i < ENT_N && eu16(vm, i, 0) != 0) {
+        vm->origin[i] = origin;
+    }
+}
+
+int vm_ent_mode(const RbVm *vm, int i)
+{
+    if (!vm || i < 0 || i >= ENT_N || eu16(vm, i, 0) == 0) {
+        return -1;
+    }
+    return (int)vm->mode[i];
+}
+
+uint16_t vm_held(const RbVm *vm)
+{
+    return vm ? vm->held : 0;
+}
+
+int vm_ensure_record(RbVm *vm, int rec)
+{
+    if (!vm || rec < 0) {
+        return 0;
+    }
+    return ensure_chunk(vm, (unsigned)rec) == 0;
+}
+
+int vm_bind_record(RbVm *vm, uint8_t slot, uint8_t rec)
+{
+    if (!vm_ensure_record(vm, rec)) {
+        return 0;
+    }
+    gfx_bind(vm->gfx, slot, vm->chunk[rec], vm->clen[rec]);
+    return 1;
+}
+
+void vm_kraken_isolate(RbVm *vm)
+{
+    int i;
+
+    if (!vm) {
+        return;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        if (!kraken_keep_ent(vm, i)) {
+            clear_slot(vm, i);
+        }
+    }
+}
+
+void vm_force_ending(RbVm *vm)
+{
+    int s;
+
+    if (!vm) {
+        return;
+    }
+    vm->loop_on = 0;
+    vm->kraken_take = 0;
+    vm->kraken_event = 0;
+    vm->kraken_hold = 0;
+    s = alloc_span(vm, 0, ENT_N);
+    if (s < 0) {
+        s = 0;
+    }
+    vm->cof[s] = 6;
+    do_load(vm, s, 1, 3);
+}
+
+void vm_add_score(RbVm *vm, uint32_t add)
+{
+    uint32_t sc;
+
+    if (!vm || add == 0) {
+        return;
+    }
+    sc = (uint32_t)gu16(vm, 0x8E) | ((uint32_t)gu16(vm, 0x90) << 16);
+    sc += add;
+    sgu16(vm, 0x8E, (uint16_t)sc);
+    sgu16(vm, 0x90, (uint16_t)(sc >> 16));
+}
+
+int vm_ent_view(const RbVm *vm, int i, RbEntView *out)
+{
+    if (!vm || !out || i < 0 || i >= ENT_N) {
+        return 0;
+    }
+    memset(out, 0, sizeof *out);
+    out->type = eu16(vm, i, 0);
+    if (out->type == 0) {
+        return 0;
+    }
+    out->alive = 1;
+    out->kind = eu16(vm, i, 4);
+    out->origin = vm->origin[i];
+    out->hp = eu16(vm, i, 0x3C);
+    out->x = (int16_t)eu16(vm, i, 0x22);
+    out->y = (int16_t)eu16(vm, i, 0x24);
+    out->bl = (int16_t)eu16(vm, i, 0x42);
+    out->br = (int16_t)eu16(vm, i, 0x44);
+    out->bt = (int16_t)eu16(vm, i, 0x46);
+    out->bb = (int16_t)eu16(vm, i, 0x48);
+    out->pat = eu16(vm, i, 0x38);
+    out->seg = eu16(vm, i, 0x3A);
+    out->w = eu8(vm, i, 0x4C);
+    out->h = eu8(vm, i, 0x4D);
+    out->cof = vm->cof[i];
+    return 1;
+}
+
+int vm_ent_cells(const RbVm *vm, int i, uint8_t *dst, int max)
+{
+    RbEntView v;
+    const uint8_t *c;
+    uint32_t n = 0;
+    int k;
+    int total;
+
+    if (!dst || max <= 0 || !vm_ent_view(vm, i, &v)) {
+        return 0;
+    }
+    c = vm_chunk_bytes(vm, v.cof, &n);
+    total = (int)v.w * (int)v.h;
+    if (total > max) {
+        total = max;
+    }
+    if (total < 0) {
+        total = 0;
+    }
+    for (k = 0; k < total; k++) {
+        uint32_t off = (uint32_t)v.pat + (uint32_t)k;
+
+        dst[k] = (c && off < n) ? c[off] : 0;
+    }
+    return total;
+}
+
+void vm_ent_place(RbVm *vm, int i, int16_t x, int16_t y,
+                  int16_t bl, int16_t br, int16_t bt, int16_t bb)
+{
+    if (!vm || i < 0 || i >= ENT_N || eu16(vm, i, 0) == 0) {
+        return;
+    }
+    su16(vm, i, 0x22, (uint16_t)x);
+    su16(vm, i, 0x24, (uint16_t)y);
+    su16(vm, i, 0x42, (uint16_t)bl);
+    su16(vm, i, 0x44, (uint16_t)br);
+    su16(vm, i, 0x46, (uint16_t)bt);
+    su16(vm, i, 0x48, (uint16_t)bb);
+}
+
+void vm_ent_set_hp(RbVm *vm, int i, uint16_t hp)
+{
+    if (vm && i >= 0 && i < ENT_N && eu16(vm, i, 0) != 0) {
+        su16(vm, i, 0x3C, hp);
+    }
+}
+
+void vm_ent_clear(RbVm *vm, int i)
+{
+    if (vm && i >= 0 && i < ENT_N) {
+        clear_slot(vm, i);
+    }
+}
+
+int vm_spawn_hold(RbVm *vm, uint16_t type, int16_t x, int16_t y, uint16_t hp,
+                  int16_t bl, int16_t br, int16_t bt, int16_t bb)
+{
+    int s;
+
+    if (!vm) {
+        return -1;
+    }
+    s = alloc_kraken(vm);
+    if (s < 0) {
+        return -1;
+    }
+    su16(vm, s, 0, type);
+    su16(vm, s, 0x22, (uint16_t)x);
+    su16(vm, s, 0x24, (uint16_t)y);
+    su16(vm, s, 0x3C, hp);
+    su16(vm, s, 0x42, (uint16_t)bl);
+    su16(vm, s, 0x44, (uint16_t)br);
+    su16(vm, s, 0x46, (uint16_t)bt);
+    su16(vm, s, 0x48, (uint16_t)bb);
+    vm->mode[s] = MODE_FOREVER;
+    vm->origin[s] = 0xCE11u;
+    vm->haste[s] = 0;
+    return s;
+}
+
+int vm_spawn_haste(RbVm *vm, int chunk, uint16_t ip, uint16_t type,
+                   int16_t x, int16_t y)
+{
+    int s;
+
+    if (!vm || chunk < 0 || chunk >= CHUNK_N || !vm->chunk[chunk]) {
+        return -1;
+    }
+    s = alloc_kraken(vm);
+    if (s < 0) {
+        return -1;
+    }
+    su16(vm, s, 0, type ? type : 0x0041u);
+    su16(vm, s, 8, ip);
+    su16(vm, s, 0x22, (uint16_t)x);
+    su16(vm, s, 0x24, (uint16_t)y);
+    vm->cof[s] = (uint8_t)chunk;
+    vm->origin[s] = ip;
+    vm->mode[s] = MODE_FETCH;
+    vm->haste[s] = 1;
+    return s;
+}
+
+int vm_spawn_snap(RbVm *vm, const uint8_t raw[82], uint8_t cof, uint16_t ip,
+                  uint16_t origin, int16_t x, int16_t y)
+{
+    int s;
+
+    if (!vm || !raw || cof >= CHUNK_N || !vm->chunk[cof]) {
+        return -1;
+    }
+    s = alloc_kraken(vm);
+    if (s < 0) {
+        return -1;
+    }
+    memcpy(slot_ptr(vm, s), raw, ENT_STR);
+    su16(vm, s, 8, ip);
+    su16(vm, s, 0x22, (uint16_t)x);
+    su16(vm, s, 0x24, (uint16_t)y);
+    if (eu16(vm, s, 0) == 0) {
+        su16(vm, s, 0, 0x0080u);
+    }
+    vm->cof[s] = cof;
+    vm->origin[s] = origin ? origin : ip;
+    vm->mode[s] = MODE_FETCH;
+    vm->haste[s] = 1;
+    return s;
+}
+
+void vm_clear_haste(RbVm *vm)
+{
+    int i;
+
+    if (!vm) {
+        return;
+    }
+    for (i = 0; i < ENT_N; i++) {
+        if (vm->haste[i]) {
+            clear_slot(vm, i);
+        }
+    }
+}
+
+const uint8_t *vm_chunk_bytes(const RbVm *vm, int chunk, uint32_t *len)
+{
+    if (!vm || chunk < 0 || chunk >= CHUNK_N || !vm->chunk[chunk]) {
+        if (len) {
+            *len = 0;
+        }
+        return NULL;
+    }
+    if (len) {
+        *len = vm->clen[chunk];
+    }
+    return vm->chunk[chunk];
+}
+
+int vm_ent_raw(const RbVm *vm, int i, uint8_t raw[82], uint16_t *ip)
+{
+    if (!vm || !raw || i < 0 || i >= ENT_N || eu16(vm, i, 0) == 0) {
+        return 0;
+    }
+    memcpy(raw, vm->ent + (size_t)i * ENT_STR, ENT_STR);
+    if (ip) {
+        *ip = eu16(vm, i, 8);
+    }
+    return 1;
+}
+
+/* A sprite setup in a stage script: width, height, pattern, bank. */
+static int sprite_at(const uint8_t *c, uint32_t n, uint32_t i,
+                     int *w, int *h, int *pat, int *seg)
+{
+    uint32_t k;
+    int ww = -1;
+    int hh = -1;
+    int pp = -1;
+    int ss = -1;
+
+    if (i + 5 >= n) {
+        return 0;
+    }
+    /* Byte mov to width, or one word mov that writes width and height
+     * together (0x4C and 0x4D are adjacent). */
+    if (c[i] == 0x02u && c[i + 1] == 0x4Cu && c[i + 2] == 0x00u) {
+        ww = c[i + 3];
+        hh = c[i + 4];
+    } else if (c[i] == 0x00u && c[i + 1] == 0x4Cu && c[i + 2] == 0x00u) {
+        ww = c[i + 3];
+    } else {
+        return 0;
+    }
+    if (ww < 2 || ww > 24) {
+        return 0;
+    }
+    for (k = i; k < i + 96u && k + 5u < n; k++) {
+        if (c[k] == 0x00u && c[k + 1] == 0x4Du && c[k + 2] == 0x00u) {
+            hh = c[k + 3];
+        } else if (c[k] == 0x02u && c[k + 1] == 0x4Du && c[k + 2] == 0x00u) {
+            hh = c[k + 3];
+        } else if (c[k] == 0x02u && c[k + 1] == 0x38u && c[k + 2] == 0x00u) {
+            pp = (int)c[k + 3] | ((int)c[k + 4] << 8);
+        } else if (c[k] == 0x00u && c[k + 1] == 0x3Au && c[k + 2] == 0x00u) {
+            ss = c[k + 3];
+        } else if (c[k] == 0x02u && c[k + 1] == 0x3Au && c[k + 2] == 0x00u) {
+            ss = c[k + 3];
+        }
+    }
+    if (hh < 3 || hh > 24 || pp < 0 || (uint32_t)pp >= n) {
+        return 0;
+    }
+    if (ww * hh < 12) {
+        return 0;
+    }
+    *w = ww;
+    *h = hh;
+    *pat = pp;
+    *seg = ss;
+    return 1;
+}
+
+static int bind_seg(RbVm *vm, const uint8_t *c, uint32_t n, int seg)
+{
+    uint32_t i;
+    uint32_t blen = 0;
+
+    if (seg < 0 || seg > 255) {
+        return 0;
+    }
+    if (gfx_bank_data(vm->gfx, (uint8_t)seg, &blen) && blen > 128u) {
+        return 1;
+    }
+    for (i = 0; i + 3u < n; i++) {
+        if (c[i] == 0x32u && c[i + 1] == (uint8_t)seg && c[i + 2] < CHUNK_N) {
+            return vm_bind_record(vm, (uint8_t)seg, c[i + 2]);
+        }
+    }
+    return 0;
+}
+
+static char s_halb_why[160];
+
+const char *vm_halb_why(void)
+{
+    return s_halb_why;
+}
+
+static int cell_draws(RbVm *vm, int seg, int index)
+{
+    uint32_t pix[256];
+    int i;
+    int n = 0;
+
+    if (!gfx_sprite_rgba(vm->gfx, (uint8_t)seg, index, pix)) {
+        return 0;
+    }
+    for (i = 0; i < 256; i++) {
+        if (pix[i] != 0) {
+            n++;
+        }
+    }
+    return n;
+}
+
+int vm_load_halb(RbVm *vm, uint8_t *cells, int max, int *w, int *h, int *seg)
+{
+    /* One pass per stage chunk, then a match across the short lists. */
+    enum { TOP = 6 };
+    struct {
+        int w, h, pat, seg, area, chunk;
+    } top[5][TOP];
+    int ntop[5];
+    int chunk;
+    int best_score = -1;
+    int bw = 0, bh = 0, bs = 0, bc = 0, bp = 0;
+    int hits = 0;
+
+    s_halb_why[0] = 0;
+    if (!vm || !cells || max < 16 || !w || !h || !seg) {
+        snprintf(s_halb_why, sizeof s_halb_why, "bad args");
+        return 0;
+    }
+    memset(ntop, 0, sizeof ntop);
+    for (chunk = 2; chunk <= 6; chunk++) {
+        const uint8_t *c;
+        uint32_t n;
+        uint32_t i;
+        int ci = chunk - 2;
+
+        if (!vm_ensure_record(vm, chunk)) {
+            continue;
+        }
+        c = vm->chunk[chunk];
+        n = vm->clen[chunk];
+        for (i = 0; i + 8u < n; i++) {
+            int ww, hh, pat, ss, area, t;
+
+            if (!sprite_at(c, n, i, &ww, &hh, &pat, &ss)) {
+                continue;
+            }
+            hits++;
+            if ((uint32_t)pat + (uint32_t)ww * (uint32_t)hh > n) {
+                continue;
+            }
+            area = ww * hh;
+            for (t = 0; t < ntop[ci]; t++) {
+                if (top[ci][t].w == ww && top[ci][t].h == hh && top[ci][t].seg == ss) {
+                    break;
+                }
+            }
+            if (t < ntop[ci]) {
+                if (area > top[ci][t].area) {
+                    top[ci][t].area = area;
+                    top[ci][t].pat = pat;
+                }
+                continue;
+            }
+            if (ntop[ci] < TOP) {
+                t = ntop[ci]++;
+            } else {
+                int s;
+                int small = 0;
+
+                for (s = 1; s < TOP; s++) {
+                    if (top[ci][s].area < top[ci][small].area) {
+                        small = s;
+                    }
+                }
+                if (area <= top[ci][small].area) {
+                    continue;
+                }
+                t = small;
+            }
+            top[ci][t].w = ww;
+            top[ci][t].h = hh;
+            top[ci][t].pat = pat;
+            top[ci][t].seg = ss;
+            top[ci][t].area = area;
+            top[ci][t].chunk = chunk;
+        }
+    }
+    for (chunk = 0; chunk < 5; chunk++) {
+        int a;
+
+        for (a = 0; a < ntop[chunk]; a++) {
+            int stages = 0;
+            int other;
+
+            for (other = 0; other < 5; other++) {
+                int b;
+
+                for (b = 0; b < ntop[other]; b++) {
+                    if (top[other][b].w == top[chunk][a].w &&
+                        top[other][b].h == top[chunk][a].h &&
+                        top[other][b].seg == top[chunk][a].seg) {
+                        stages++;
+                        break;
+                    }
+                }
+            }
+            if (stages >= 2 && stages * 1000 + top[chunk][a].area > best_score) {
+                best_score = stages * 1000 + top[chunk][a].area;
+                bw = top[chunk][a].w;
+                bh = top[chunk][a].h;
+                bs = top[chunk][a].seg;
+                bc = top[chunk][a].chunk;
+                bp = top[chunk][a].pat;
+            }
+        }
+    }
+    if (best_score < 0 || bw * bh > max || bc < 2) {
+        snprintf(s_halb_why, sizeof s_halb_why,
+                 "no sprite shared by 2 stages (setups=%d)", hits);
+        return 0;
+    }
+    if (bs < 0 || !bind_seg(vm, vm->chunk[bc], vm->clen[bc], bs)) {
+        /* Bank slot was not next to the size. Try each sprite bind. */
+        const uint8_t *c = vm->chunk[bc];
+        uint32_t n = vm->clen[bc];
+        uint32_t i;
+        int found = 0;
+
+        for (i = 0; i + 3u < n && !found; i++) {
+            int index;
+
+            if (c[i] != 0x32u || c[i + 2] >= CHUNK_N) {
+                continue;
+            }
+            if (!vm_bind_record(vm, c[i + 1], c[i + 2])) {
+                continue;
+            }
+            index = c[bp + (bh / 2) * bw + bw / 2];
+            if (cell_draws(vm, c[i + 1], index) >= 8) {
+                bs = c[i + 1];
+                found = 1;
+            }
+        }
+        if (!found) {
+            snprintf(s_halb_why, sizeof s_halb_why,
+                     "bank for %dx%d pat=%d chunk=%d drew nothing",
+                     bw, bh, bp, bc);
+            return 0;
+        }
+    } else {
+        int index = vm->chunk[bc][bp + (bh / 2) * bw + bw / 2];
+
+        if (cell_draws(vm, bs, index) < 8 &&
+            cell_draws(vm, bs, vm->chunk[bc][bp]) < 8) {
+            snprintf(s_halb_why, sizeof s_halb_why,
+                     "seg=%d cell=%d pat=%d %dx%d chunk=%d is empty",
+                     bs, index, bp, bw, bh, bc);
+            return 0;
+        }
+    }
+    snprintf(s_halb_why, sizeof s_halb_why,
+             "seg=%d %dx%d pat=%d chunk=%d", bs, bw, bh, bp, bc);
+    memcpy(cells, vm->chunk[bc] + bp, (size_t)bw * (size_t)bh);
+    *w = bw;
+    *h = bh;
+    *seg = bs;
+    return bw * bh;
 }

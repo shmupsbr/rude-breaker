@@ -74,8 +74,8 @@ int main(void)
              "attract=off\nhitbox=off\nfullscreen=off\n"
              "some_future_key=42\n# a comment\n\nweird line without equals\n");
     load_cfg(&g);
-    CHECK(g_loop_on == 1);
     CHECK(g_sndx == 1);
+    CHECK(g_mode == 1); /* loop=on is Infinite */
     CHECK(g_attract_on == 0);
     CHECK(g_aura_on == 3);     /* NEW - BLUE: the 0.10.1 default */
     CHECK(g_mvol == 100);
@@ -87,10 +87,18 @@ int main(void)
     put(cfg, "loop=off\niframes=new\nmaster_volume=40\njoystick=off\n"
              "master_volume_typo=5\n");
     load_cfg(&g);
-    CHECK(g_loop_on == 0);
     CHECK(g_aura_on == 1);
     CHECK(g_mvol == 40);
     CHECK(g_joy_off_saved == 1);
+    CHECK(g_mode == 0); /* loop=off is Original */
+    put(cfg, "mode=blacklabel\n");
+    load_cfg(&g);
+    CHECK(g_mode == 2);
+    g_mode = 2;
+    save_cfg(&g);
+    g_mode = 0;
+    load_cfg(&g);
+    CHECK(g_mode == 2);
     /* 2b. I-FRAMES colours (new = fire), VU style, 0.10.1 scaling. */
     put(cfg, "iframes=lime\nvu=spectrum\n");
     load_cfg(&g);
@@ -115,16 +123,13 @@ int main(void)
     /* 3. Save then load keeps the values. */
     g_aura_on = 1;
     g_mvol = 70;
-    g_loop_on = 1;
     g_joy_lockout = 1;
     save_cfg(&g);
     g_aura_on = 0;
     g_mvol = 0;
-    g_loop_on = 0;
     load_cfg(&g);
     CHECK(g_aura_on == 1);
     CHECK(g_mvol == 70);
-    CHECK(g_loop_on == 1);
     CHECK(g_joy_off_saved == 1);
 
     /* 3b. SOUND output shaping: parse, clamp, round trip. */
@@ -171,7 +176,7 @@ int main(void)
     load_cfg(&g);
     CHECK(g_cfg_preset == 1);
     original_preset(&g);
-    CHECK(g_loop_on == 0 && g_aura_on == 0 && g_sndx == 0 && g_rank_on == 0);
+    CHECK(g_aura_on == 0 && g_sndx == 0 && g_rank_on == 0);
     CHECK(g_panels_on == 0 && g_bullet_c == 0 && g_modern == 0);
     CHECK(g_bal == 0 && g_eqp == EQP_FLAT && g_eqc[5] == 0);
 

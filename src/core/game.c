@@ -12,12 +12,15 @@
 #include "assets.h"
 #include "exepath.h"
 #include "vm.h"
+#include "controls.h"
 #include "cfilter.h"
 #include "crt.h"
 #include "demo.h"
 #include "gfx.h"
 #include "eq.h"
 #include "panels.h"
+#include "kraken.h"
+#include "kraken_hit.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -168,7 +171,14 @@ static int          g_cfg_101b;     /* ... and I-FRAMES NEW - BLUE as default */
 static int          g_onecc;
 /* Lives lost this run (NO DEATH box); cleared only by a new game. */
 static int          g_run_deaths;
-static int          g_loop_on;      /* LOOP option: stage 1 again after stage 5 */
+/* GAME MODE. Original is one pass then the ending. Infinite repeats
+ * loops until the game's own game over. Black Label repeats until
+ * Kraken is beaten, and is the only mode where Kraken exists. */
+#define MODE_ORIGINAL 0
+#define MODE_INFINITE 1
+#define MODE_BLACK    2
+static int          g_mode = MODE_ORIGINAL;
+static int          g_mode_set;     /* mode= in this cfg wins over loop= */
 static int          g_loop = 1;     /* current loop, 1 = first pass */
 static uint8_t      g_live_b2;      /* the difficulty's own B2 */
 static int          g_run_ok;
@@ -232,6 +242,8 @@ static void load_cfg(const RbGame *g)
     char line[80];
 
     g_modern = 1;
+    g_mode = MODE_ORIGINAL;
+    g_mode_set = 0;
     g_training = 0;
     g_rank_on = 1;
     g_rank_mode = 1;  /* new installs: ADVANCED */
@@ -240,7 +252,6 @@ static void load_cfg(const RbGame *g)
     g_bullet_c = 1;
     g_cfg_9r = 0;
     g_onecc = 0;
-    g_loop_on = 1;
     g_sndx = 1;
     g_mchip = 0;
     g_schip = 0;
@@ -446,10 +457,20 @@ static void load_cfg(const RbGame *g)
             g_attract_on = 1;
         } else if (strncmp(line, "attract=off", 11) == 0) {
             g_attract_on = 0;
-        } else if (strncmp(line, "loop=on", 7) == 0) {
-            g_loop_on = 1;
-        } else if (strncmp(line, "loop=off", 8) == 0) {
-            g_loop_on = 0;
+        } else if (strncmp(line, "mode=infinite", 13) == 0) {
+            g_mode = MODE_INFINITE;
+            g_mode_set = 1;
+        } else if (strncmp(line, "mode=black", 10) == 0) {
+            g_mode = MODE_BLACK;
+            g_mode_set = 1;
+        } else if (strncmp(line, "mode=original", 13) == 0) {
+            g_mode = MODE_ORIGINAL;
+            g_mode_set = 1;
+        } else if (!g_mode_set && strncmp(line, "loop=on", 7) == 0) {
+            /* The port's old LOOP ON repeated stages. That is Infinite. */
+            g_mode = MODE_INFINITE;
+        } else if (!g_mode_set && strncmp(line, "loop=off", 8) == 0) {
+            g_mode = MODE_ORIGINAL;
         } else if (strncmp(line, "onecc=yes", 9) == 0) {
             g_onecc = 1;
         } else if (strncmp(line, "defaults9r=1", 12) == 0) {
@@ -695,10 +716,12 @@ static void save_cfg(const RbGame *g)
             g_rank_on ? "on" : "off",
             g_panels_on ? "on" : "off",
             g_onecc ? "yes" : "no");
-    fprintf(fp, "loop=%s\nsound_channels=%s\ndefaults9zf=1\n", g_loop_on ? "on" : "off",
+    fprintf(fp, "sound_channels=%s\ndefaults9zf=1\n",
             g_sndx ? "extra" : "original");
     fprintf(fp, "rank_mode=%s\n", g_rank_mode ? "advanced" : "classic");
     fprintf(fp, "attract=%s\n", g_attract_on ? "on" : "off");
+    fprintf(fp, "mode=%s\n", g_mode == MODE_INFINITE ? "infinite" :
+                             g_mode == MODE_BLACK ? "blacklabel" : "original");
     fprintf(fp, "iframes=%s\n", g_aura_on == 1 ? "fire" : g_aura_on == 2 ? "lime" :
                                 g_aura_on == 3 ? "blue" : "classic");
     fprintf(fp, "master_volume=%d\n", g_mvol);
@@ -989,8 +1012,8 @@ enum {
     OPT_SNDTEST = 40, OPT_BACK = 41, OPT_PU0 = 50,
     OPT_EQB0 = 60, /* + EQ_BANDS */ OPT_EQRST = 70
 };
-static const int k_view_game[] = {OPT_DIFF, OPT_RANK, OPT_SUICIDE, OPT_SHIP, OPT_SPEED,
-                                  OPT_TRAINING, OPT_LOOP, OPT_ATTRACT, OPT_AURA, OPT_BACK};
+static const int k_view_game[] = {OPT_DIFF, OPT_LOOP, OPT_RANK, OPT_SUICIDE, OPT_SHIP, OPT_SPEED,
+                                  OPT_TRAINING, OPT_ATTRACT, OPT_AURA, OPT_BACK};
 static const int k_view_gfx[] = {OPT_FULLSCREEN, OPT_SCALING, OPT_ASPECT, OPT_ORIENT,
                                  OPT_PANELS, OPT_PALETTE, OPT_BULLET, OPT_HITBOX,
                                  OPT_CRT0 + 0, OPT_CRT0 + 1, OPT_CRT0 + 2,
@@ -1428,10 +1451,6 @@ static void change_value(RbGame *g, int dir)
             /* Host only: never the bullet colour, saved. */
             g_hitbox = hit_step(g_hitbox, dir);
             changed = 1;
-        } else if (opt == 11) {
-            /* Host only, saved to the settings file. */
-            g_loop_on = !g_loop_on;
-            changed = 1;
         } else if (opt == 12) {
             /* Host only: EXTRA plays effects on a second chip. Saved. */
             g_sndx = !g_sndx;
@@ -1517,6 +1536,10 @@ static void change_value(RbGame *g, int dir)
         } else if (opt == OPT_ATTRACT) {
             /* Host only: demo play after the ranking, saved. */
             g_attract_on = !g_attract_on;
+            changed = 1;
+        } else if (opt == OPT_LOOP) {
+            /* Host only. Original, Infinite, or Black Label. */
+            g_mode = (g_mode + (dir < 0 ? 2 : 1)) % 3;
             changed = 1;
         } else if (opt >= OPT_CRT0 && opt < OPT_CRT0 + CRT_COUNT) {
             /* Host only: playfield CRT effects, each saved. */
@@ -1612,7 +1635,6 @@ static void restore_defaults(RbGame *g)
     g_panels_on = 1;
     g_orient = 0;
     g_bullet_c = 1;
-    g_loop_on = 1;
     g_sndx = 1;
     g_mchip = 0;
     g_schip = 0;
@@ -1624,6 +1646,7 @@ static void restore_defaults(RbGame *g)
     g_crt = 0;
     g_hitbox = 0;
     g_attract_on = 1;
+    g_mode = MODE_ORIGINAL;
     g_aura_on = 3;
     g_vu_style = 0;
     g_mvol = 100;
@@ -1663,12 +1686,12 @@ static void original_preset(RbGame *g)
     g_rank_mode = 0;
     g_panels_on = 0;
     g_bullet_c = 0;
-    g_loop_on = 0;
     g_sndx = 0;
     g_ship_aggr = 0;
     g_crt = 0;
     g_hitbox = 0;
     g_aura_on = 0;
+    g_mode = MODE_ORIGINAL;
     eq_reset_all();
     alt_reset();
     if (g_vm) {
@@ -2396,6 +2419,10 @@ static void host_menu_paint(void)
 
             switch (v[i]) {
             case 0: paint_line(i, r, "DIFFICULTY", k_diff[diff_index()], diff_index() != 2); break;
+            case OPT_LOOP: paint_line(i, r, "GAME MODE",
+                                      g_mode == MODE_INFINITE ? "INFINITE" :
+                                      g_mode == MODE_BLACK ? "BLACK LABEL" : "ORIGINAL",
+                                      g_mode != MODE_ORIGINAL); break;
             case 1: paint_line(i, r, "SUICIDE BULLETS", suicide_on() ? "ON" : "OFF", suicide_on()); break;
             case 2: paint_line(i, r, "SHIP SELECT", ship_on() ? "ON" : "OFF", ship_on()); break;
             case 3: paint_line(i, r, "SHIP SPEED", g_ship_aggr ? "AGGRESSIVE" : "STANDARD", g_ship_aggr); break;
@@ -2406,7 +2433,6 @@ static void host_menu_paint(void)
             case 8: paint_line(i, r, "SIDE PANELS", g_panels_on ? "ON" : "OFF", g_panels_on); break;
             case 9: paint_line(i, r, "BULLET COLOR", k_bullet_name[g_bullet_c], g_bullet_c != 0); break;
             case 10: paint_line(i, r, "HITBOX", k_hit_name[g_hitbox], g_hitbox != 0); break;
-            case 11: paint_line(i, r, "LOOP", g_loop_on ? "ON" : "OFF", g_loop_on); break;
             case 12: paint_line(i, r, "SOUND CHANNELS", g_sndx ? "EXTRA" : "ORIGINAL", g_sndx); break;
             case 13: paint_line(i, r, "FULLSCREEN", g_fullscreen ? "ON" : "OFF", g_fullscreen); break;
             case 14: paint_line(i, r, "SCALING", g_scaling == 0 ? "SMOOTH" : g_scaling == 1 ? "SHARP" : g_scaling == 2 ? "INTEGER" : "AUTO", g_scaling != 3); break;
@@ -2797,8 +2823,7 @@ void game_init(RbGame *g, const RbDisk *disk)
         save_cfg(g);
     }
     if (!g_cfg_9zf) {
-        /* pr9zf update: LOOP defaults to ON, once. */
-        g_loop_on = 1;
+        /* Older builds wrote a LOOP line. Two loops are now the game. */
         g_cfg_9zf = 1;
         save_cfg(g);
     }
@@ -2905,7 +2930,15 @@ static void step_script(RbGame *g)
         vm_sustain_ship(g_vm);
     }
     vm_set_input(g_vm, &in);
-    vm_frame(g_vm);
+    {
+        int paused = (vm_global_u16(g_vm, 0x72) & 0x8000u) != 0;
+        int fair = g_run_ok && !g_training && !g_demo;
+
+        kraken_before(g_vm, g_run_deaths, fair, g_loop, (int)g->stage, paused,
+                      g_mode == MODE_BLACK);
+        vm_frame(g_vm);
+        kraken_after(g_vm, (int)g->stage, paused);
+    }
     vm_info(g_vm, &info);
     g->score = info.score;
     if (info.hiscore > g->hiscore) {
@@ -3257,10 +3290,8 @@ static void pt_reset(void)
 /* Called each live frame. Time runs at the logic rate of 92/3 Hz. */
 static void pt_update(const RbGame *g, int died, uint16_t flags)
 {
-    g_pt_buttons = g->input.buttons;
-    if (flags & 0x0400u) {
-        g_pt_buttons = (uint16_t)(g_pt_buttons | g->input.pad_buttons);
-    }
+    g_pt_buttons = rb_control_bits(g->input.buttons, g->input.pad_buttons,
+                                   (flags & 0x0400u) != 0);
     if (g_pt_stage != (int)g->stage) {
         if (((char *)0)) {
             uint32_t seen;
@@ -3547,7 +3578,7 @@ static void panels_draw(const RbGame *g, uint32_t *frame)
     d.medals = vm_global_u8(g_vm, 0xD1);
     d.difficulty = g_live && g_rank_on && !g_training ? g_eff : base_diff();
     d.loop = g_loop;
-    d.loop_on = g_loop_on;
+    d.loop_on = g_mode != MODE_ORIGINAL;
     d.level_pct = g_live && g_rank_on && !g_training && !g_rank_mode ? (int)g_vh_pct : 0;
     if (((char *)0)) {
         /* Test hook: panel layout of the LEVEL extra. */
@@ -3843,6 +3874,15 @@ static void live_update(RbGame *g)
             live_reset_match();
             pt_reset();
             g_run_deaths = 0;
+            /* A fight already on screen (debug shortcut on the first
+             * stage frame) keeps its medal count and its phase. */
+            if (!kraken_active()
+#if KRAKEN_DEBUG
+                && !kraken_debug_armed()
+#endif
+            ) {
+                kraken_reset();
+            }
             /* A run from the start, without Training or stage select. */
             g_run_ok = !g_training && !g_demo && !((char *)0) && g->stage <= 1;
         }
@@ -3867,7 +3907,17 @@ static void live_update(RbGame *g)
         if (nb > 4) {
             nb = 4;
         }
-        vm_set_loop(g_vm, g_loop_on,
+        /* Original ends after stage 5. Infinite and Black Label go
+         * back to stage 1. Black Label stops looping only while Kraken
+         * is on screen; beating Kraken loads the ending itself. */
+        /* F9 plays one stage 5 in every mode. Leaving the loop redirect
+         * on would send Black Label off this stage before the boss. */
+        vm_set_loop(g_vm,
+                    g_mode != MODE_ORIGINAL && !kraken_active()
+#if KRAKEN_DEBUG
+                    && !(kraken_debug_armed() && !kraken_active())
+#endif
+                    ,
                     g_training ? g_live_c9 : k_c9[nb],
                     g_training ? (g_live_b2 ? g_live_b2 : 2u) : k_b2[nb]);
     }
@@ -3893,10 +3943,8 @@ static void live_update(RbGame *g)
         return;
     }
     flags = flag_word();
-    btn = g->input.buttons;
-    if (flags & 0x0400u) {
-        btn = (uint16_t)(btn | g->input.pad_buttons);
-    }
+    btn = rb_control_bits(g->input.buttons, g->input.pad_buttons,
+                          (flags & 0x0400u) != 0);
     btn = (uint16_t)(btn & RB_BTN_SPEED);
     if ((flags & 0x8000u) == 0u && btn && !(g_live_prev_btn & RB_BTN_SPEED)) {
         /* LOW MID MAX MID LOW ... */
@@ -4326,10 +4374,8 @@ static void ship_move_adjust(RbGame *g)
     if (!g_aspect43) {
         my = my * 120 / 100;
     }
-    btn = g->input.buttons;
-    if (flag_word() & 0x0400u) {
-        btn = (uint16_t)(btn | g->input.pad_buttons);
-    }
+    btn = rb_control_bits(g->input.buttons, g->input.pad_buttons,
+                          (flag_word() & 0x0400u) != 0);
     ex = sp_axis(x - g_sp_px, (btn & (RB_BTN_LEFT | RB_BTN_RIGHT)) != 0, mx, &g_sp_ax);
     ey = sp_axis(y - g_sp_py, (btn & (RB_BTN_UP | RB_BTN_DOWN)) != 0, my, &g_sp_ay);
     /* Stay inside the box the game itself keeps the ship in. */
@@ -4380,6 +4426,110 @@ void game_update(RbGame *g)
         g->input.pad_buttons = 0;
     }
     apply_host_options();
+#if KRAKEN_DEBUG
+    /* F9: every mode loads stage 5 and runs it until the live core is
+     * fully on screen and holding still, then the same in-place
+     * transform the counted loop uses. Release builds do not compile
+     * this, and the key is not read. One stage entry only. */
+    {
+        static int sought;
+
+        if (sys_take_sprite_dump()) {
+            /* F10: sprite ids of everything on screen. Does not quit. */
+            kraken_dump_screen(g_vm);
+        }
+        if ((user_buttons & RB_BTN_BOSS) && !(g->input_prev.buttons & RB_BTN_BOSS)) {
+            /* Mode, stage and the open menu do not matter. */
+            if (g_demo) {
+                demo_end(g);
+            }
+            g_menu_latched = 0;
+            g_pmenu = 0;
+            g_suspend = 0;
+            g_handoff = 0;
+            g_loop = 1;
+            kraken_debug_arm();
+            begin_stage(g, 5, 1);
+            g->state = RB_STATE_PLAY;
+            sought = 0;
+        }
+        if (kraken_debug_armed() && !kraken_active() && g_vm && sought <= 90000) {
+            int before = sought;
+            RbInput idle;
+
+            /* One blocking skip, then the pace clock starts clean.
+             * Running 80 VM frames inside every paced tick painted the
+             * stage at a sprint and made the next ticks catch up, so
+             * the picture raced and the pad never had a normal frame.
+             * Events are pumped so the window and the pad stay alive.
+             * The picture on screen stays the pre-F9 frame until the
+             * boss is ready. */
+            memset(&idle, 0, sizeof idle);
+            /* The stage stops scroll while counted enemies live. A
+             * zero button word never shoots them, so the cell stays
+             * put. Hold the real fire bit; do not touch weapons. */
+            idle.buttons = KR_F9_SKIP_FIRE;
+            if (sought == 0) {
+                fprintf(stderr, "kraken f9: seeking stage 5\n");
+                fflush(stderr);
+            }
+            vm_set_loop(g_vm, 0, vm_global_u8(g_vm, 0xC9), vm_global_u8(g_vm, 0xB2));
+            while (sought < 90000 && !kraken_debug_ready(g_vm)) {
+                /* 0x0100 only. 0x0400 is restored after the skip: the
+                 * run that reached the boss did not have it set here. */
+                uint16_t f = (uint16_t)((flag_word() | 0x0100u) &
+                                        (uint16_t)~(0x0800u | 0x0400u));
+                RbInput pump;
+
+                set_flag_word(f);
+                if (vm_global_u8(g_vm, 0xD2) < 3) {
+                    vm_set_global_u8(g_vm, 0xD2, 3);
+                }
+                vm_set_input(g_vm, &idle);
+                vm_frame(g_vm);
+                sought++;
+                if ((sought % 120) == 0) {
+                    sys_read_input(&pump);
+                    if (pump.buttons & RB_BTN_QUIT) {
+                        g->state = RB_STATE_QUIT;
+                        break;
+                    }
+                }
+                if ((sought % 2400) == 0) {
+                    RbVmInfo info;
+
+                    vm_info(g_vm, &info);
+                    fprintf(stderr,
+                            "kraken f9: seek mode=%d chunk=%u cell=%u speed=%d ae=%u ship=%d lives=%u flags=%04X frames=%d\n",
+                            g_mode, (unsigned)info.chunk, (unsigned)info.cell,
+                            (int)info.speed, (unsigned)vm_global_u16(g_vm, 0xAE),
+                            (int)info.ship_x, (unsigned)vm_global_u8(g_vm, 0xD2),
+                            (unsigned)flag_word(), sought);
+                    fflush(stderr);
+                }
+            }
+            if (sought != before) {
+                if (!g_joy_lockout && sys_joy_present()) {
+                    set_flag_word((uint16_t)(flag_word() | 0x0400u));
+                }
+                sys_pace_resync();
+                fprintf(stderr, "kraken f9: seek done frames=%d\n", sought);
+                fflush(stderr);
+            }
+            if (sought >= 90000 && !kraken_debug_ready(g_vm)) {
+                RbVmInfo info;
+
+                vm_info(g_vm, &info);
+                fprintf(stderr,
+                        "kraken f9: stage 5 never reached a visible core (mode=%d chunk=%u cell=%u speed=%d ae=%u)\n",
+                        g_mode, (unsigned)info.chunk, (unsigned)info.cell,
+                        (int)info.speed, (unsigned)vm_global_u16(g_vm, 0xAE));
+                fflush(stderr);
+                sought = 90001;
+            }
+        }
+    }
+#endif
 
     switch (g->state) {
     case RB_STATE_BOOT:
@@ -4710,6 +4860,9 @@ void game_render(const RbGame *g)
                 }
             }
         }
+    }
+    if (g_vm && kraken_active() && sys_frame_pixels()) {
+        kraken_draw(g_vm, vm_gfx(g_vm), sys_frame_pixels(), RB_NATIVE_W, RB_NATIVE_H);
     }
     gfx_set_hud_inset(panels_active(g));
     if (panels_active(g)) {

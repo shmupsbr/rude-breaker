@@ -37,7 +37,7 @@ typedef struct RbPanelData {
     int iframe_max;         /* its value when granted */
     int iframe_respawn;     /* 1 if granted by a respawn */
     int run_deaths;         /* lives lost this run (NO DEATH) */
-    int loop_on;            /* LOOP option on: LOOP n by RANK from loop 2 */
+    int loop_on;            /* 1: show LOOP n beside RANK from loop 2 */
     int loop;               /* LOOP number, 1 = first pass (hidden) */
     int speed;              /* 0..2 */
     uint32_t score;

@@ -125,6 +125,9 @@ typedef struct RB_PACKED RbInput {
 #define RB_BTN_4        0x0800u
 /* Host-only speed button (> >> >>>). The game script never sees it. */
 #define RB_BTN_SPEED    0x2000u
+/* Debug-build shortcut into the true last boss. The release input
+ * path never sets it, and the script mapping ignores it. */
+#define RB_BTN_BOSS     0x4000u
 
 /* ---- entities (shared layout for Phase 1 and Phase 2) ------------------- */
 
@@ -275,6 +278,9 @@ void sys_set_scaling(int mode);
 void sys_set_aspect(int a43);
 /* 1 once per F11 press since the last call. */
 int  sys_take_fullscreen_key(void);
+/* Debug build: 1 once per F10 press (that key does not quit).
+ * Release builds return 0 and F10 still quits. */
+int  sys_take_sprite_dump(void);
 void sys_draw_sprite(const RbSprite *spr);
 void sys_draw_rect(const RbRect *rect, uint32_t rgba);
 void sys_draw_text(int16_t x, int16_t y, const char *utf8, uint32_t rgba);

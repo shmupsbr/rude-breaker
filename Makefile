@@ -9,6 +9,9 @@ BUILD    := build
 CC       ?= gcc
 CXX      ?= g++
 CFLAGS   := -std=c99 -Wall -Wextra -Wpedantic -O2 -Iinclude
+# Empty unless `make debug`. That target defines KRAKEN_DEBUG.
+EXTRA_CFLAGS ?=
+CFLAGS   += $(EXTRA_CFLAGS)
 CXXFLAGS := -std=c++14 -O2 -w -isystem third_party/ymfm -Iinclude -Isrc/hal/sdl2
 LDFLAGS  :=
 
@@ -31,7 +34,9 @@ CORE_SRCS := \
 	src/core/cfilter.c \
 	src/core/crt.c \
 	src/core/eq.c \
-	src/core/demo.c
+	src/core/demo.c \
+	src/core/kraken.c \
+	src/core/kraken_hit.c
 
 ifeq ($(PLATFORM),sdl2)
   HAL_SRCS := \
@@ -73,9 +78,17 @@ SRCS := $(CORE_SRCS) $(HAL_SRCS)
 OBJS := $(SRCS:%.c=$(BUILD)/$(PLATFORM)/%.o) \
         $(YMFM_SRCS:%.cpp=$(BUILD)/$(PLATFORM)/%.o)
 
-.PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test dirs
+.PHONY: all linux clean test-assets test-endian vm-check cfg-check zx-test hit-check dirs debug
 
-all: dirs $(TARGET) test-endian
+# `debug` must not be the first target: plain `make` is the release build.
+.DEFAULT_GOAL := all
+
+all: dirs $(TARGET) test-endian hit-check
+
+# Debug build: same game, plus F9 for the Kraken appearance sequence.
+# Leave this target and the KRAKEN_DEBUG blocks out of a release build.
+debug:
+	$(MAKE) EXTRA_CFLAGS=-DKRAKEN_DEBUG=1 all
 
 linux:
 	$(MAKE) LINUX_BUNDLE=1 all
@@ -87,11 +100,20 @@ dirs:
 $(TARGET): $(OBJS)
 	$(LINK) -o $@ $^ $(LDFLAGS)
 
-$(BUILD)/$(PLATFORM)/%.o: %.c
+# Rebuild objects when the flags change, so `make debug` cannot leave
+# -DKRAKEN_DEBUG in the binary that a later plain `make` links.
+$(BUILD)/$(PLATFORM)/cflags.tag: FORCE
+	@mkdir -p $(dir $@)
+	@printf '%s\n' '$(CFLAGS)' | cmp -s - $@ || printf '%s\n' '$(CFLAGS)' > $@
+
+FORCE:
+.PHONY: FORCE
+
+$(BUILD)/$(PLATFORM)/%.o: %.c $(BUILD)/$(PLATFORM)/cflags.tag
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(BUILD)/$(PLATFORM)/%.o: %.cpp
+$(BUILD)/$(PLATFORM)/%.o: %.cpp $(BUILD)/$(PLATFORM)/cflags.tag
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
@@ -111,6 +133,17 @@ cfg-check: dirs $(CFG_CHECK_OBJS)
 	@if [ -z "$(EXE)" ]; then $(BUILD)/cfg_check; else echo "cross compile: skipped running cfg_check$(EXE)"; fi
 
 # ZX filter rules on synthetic frames (no game data).
+# Kraken hit rules. No game data.
+hit-check:
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -o $(BUILD)/kraken_hit_test tools/kraken_hit_test.c src/core/kraken_hit.c src/core/pace.c
+	$(BUILD)/kraken_hit_test
+
+pad-check:
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -o $(BUILD)/pad_check tools/pad_check.c src/hal/sdl2/input_sdl2.c $(SDL2_LIBS)
+	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy $(BUILD)/pad_check
+
 zx-test: dirs
 	$(CC) $(CFLAGS) -c -o $(BUILD)/cfilter_zx.o src/core/cfilter.c
 	$(CC) $(CFLAGS) -o $(BUILD)/zx_rules_test tools/zx_rules_test.c $(BUILD)/cfilter_zx.o

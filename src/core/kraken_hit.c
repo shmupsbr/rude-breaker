@@ -1,0 +1,216 @@
+#include "kraken_hit.h"
+
+int kr_shot_damage(int core_max)
+{
+    int arm;
+    int hit;
+
+    if (core_max < 64) {
+        core_max = 480;
+    }
+    arm = core_max / 2;
+    if (arm < 32) {
+        arm = 32;
+    }
+    hit = arm / 16;
+    if (hit < 8) {
+        hit = 8;
+    }
+    return hit;
+}
+
+int kr_hits_to_zero(int hp, int dmg)
+{
+    int n = 0;
+
+    if (dmg < 1) {
+        dmg = 1;
+    }
+    while (hp > 0 && n < 100000) {
+        hp -= dmg;
+        n++;
+    }
+    return n;
+}
+
+int kr_core_hit(int hx, int hy, int x, int y)
+{
+    /* 48 by 80, with a few pixels of slack so a shot into the sprite counts. */
+    return x >= hx - 28 && x <= hx + 28 && y >= hy - 46 && y <= hy + 46;
+}
+
+int kr_is_projectile(unsigned type, unsigned kind, unsigned origin,
+                     unsigned seg, int w, int h)
+{
+    if (kind == 0x0012u || kind == 0x0014u) {
+        return 0;
+    }
+    /* Kraken's own parts, and the shot controller (no bullet sprite). */
+    if (origin == 0xCE11u || origin == 0x62E3u || origin == 0x62E9u) {
+        return 0;
+    }
+    if (w <= 0 || h <= 0 || w * h > 8) {
+        return 0;
+    }
+    if ((type & 0x0080u) && !(type & 0x1000u)) {
+        return 0;
+    }
+    if (type & 0x1000u) {
+        return 1;
+    }
+    if ((type & 0x0004u) && (kind == 0u || seg == 26u)) {
+        return 1;
+    }
+    if (kind == 0u && seg == 26u) {
+        return 1;
+    }
+    if (origin == 0x6331u || origin == 0x6498u ||
+        origin == 0x6337u || origin == 0x649Eu) {
+        return 1;
+    }
+    return 0;
+}
+
+int kr_loop_clean(const KrLoops *k)
+{
+    return k && k->need > 0 && k->deaths == 0 && k->medals >= k->need;
+}
+
+int kr_tlb_ready(const KrLoops *k)
+{
+    return kr_loop_clean(k) && k->banked >= 1;
+}
+
+void kr_finish_loop(KrLoops *k)
+{
+    if (!k) {
+        return;
+    }
+    if (kr_loop_clean(k) && k->banked < 2) {
+        k->banked++;
+    }
+    k->medals = 0;
+    k->deaths = 0;
+}
+
+int kr_pat_is_core(const uint8_t *b, int n)
+{
+    static const uint8_t want[12] = {
+        26, 27, 28, 74, 75, 76, 90, 91, 92, 106, 107, 108
+    };
+    int i;
+
+    if (!b || n < 12) {
+        return 0;
+    }
+    for (i = 0; i < 12; i++) {
+        if (b[i] != want[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+int kr_sprite_inside(int x, int y, int w, int h, int sw, int sh)
+{
+    int left;
+    int top;
+    int right;
+    int bottom;
+
+    if (w < 1 || h < 1 || sw < 1 || sh < 1) {
+        return 0;
+    }
+    left = x - w * 8;
+    top = y - h * 8;
+    right = x + w * 8;
+    bottom = y + h * 8;
+    return left >= 0 && top >= 0 && right <= sw && bottom <= sh;
+}
+
+int kr_f9_ready(int chunk, int live_core, int pat_ok, int bg_lit,
+                int ship, int weapon, int x, int y, int w, int h,
+                int sw, int sh)
+{
+    return chunk == 6 && live_core && pat_ok && bg_lit >= 80 && ship && weapon &&
+           kr_sprite_inside(x, y, w, h, sw, sh);
+}
+
+int kr_f9_poll(int mode, KrF9Watch *w, int ready, int x, int y,
+               int slack, int need)
+{
+    (void)mode;
+    if (!w || slack < 0 || need < 1) {
+        return 0;
+    }
+    if (!ready) {
+        w->have = 0;
+        w->held = 0;
+        return 0;
+    }
+    if (w->have && (x > w->x + slack || x < w->x - slack ||
+                    y > w->y + slack || y < w->y - slack)) {
+        w->held = 0;
+    }
+    w->x = x;
+    w->y = y;
+    w->have = 1;
+    if (w->held < need) {
+        w->held++;
+    }
+    return w->held >= need;
+}
+
+/* 0: not our death. 1: become Kraken where the core already is.
+ * 2: Black Label, but this loop does not count, so the core falls away. */
+int kr_core_fate(int black, int tlb_ready, int hp_gone)
+{
+    if (!hp_gone) {
+        return 0;
+    }
+    if (black && tlb_ready) {
+        return 1;
+    }
+    if (black) {
+        return 2;
+    }
+    return 0;
+}
+
+int kr_core_open(int hp)
+{
+    return hp > 0;
+}
+
+int kr_same_shot(int scored, unsigned org, unsigned prev_org,
+                 int x0, int y0, int x1, int y1)
+{
+    int dx;
+    int dy;
+
+    if (!scored || org != prev_org) {
+        return 0;
+    }
+    dx = x1 - x0;
+    dy = y1 - y0;
+    if (dx < 0) {
+        dx = -dx;
+    }
+    if (dy < 0) {
+        dy = -dy;
+    }
+    /* A player shot steps 24 pixels a frame. Farther than that is a
+     * new shot that reused the slot. */
+    return dx <= 36 && dy <= 36;
+}
+
+int kr_seek_presents(int vm_frames, int extra_per_update)
+{
+    if (vm_frames < 1) {
+        return 0;
+    }
+    if (extra_per_update < 1) {
+        return 1;
+    }
+    return (vm_frames + extra_per_update - 1) / extra_per_update;
+}

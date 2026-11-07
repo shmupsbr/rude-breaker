@@ -4,7 +4,8 @@
  * The game word is the loader's poll at 0x7846. Arrows and the keypad
  * match the PC-98 clusters (UP/KP8, LEFT/KP4, RIGHT/KP6, DOWN/KP2).
  * Z, Space, and KP0 are fire. X, N, M, and Return are the mode button.
- * Shift is the bit forced into the edge. Escape is bit 0x80. F10 quits.
+ * Shift is the bit forced into the edge. Escape is bit 0x80. F10 quits
+ * (in the debug build F10 prints the live sprites and does not quit).
  * WASD is an extra cluster; it is not the PC-98 matrix.
  *
  * A saved bind replaces one action. The first attached device is used:
@@ -925,12 +926,22 @@ static void note_capture(const SDL_Event *ev)
 
 static int g_any_press;
 static int g_f11;
+static int g_dump_edge;
+static int g_dump_held;
 
 int sys_take_fullscreen_key(void)
 {
     int r = g_f11;
 
     g_f11 = 0;
+    return r;
+}
+
+int sys_take_sprite_dump(void)
+{
+    int r = g_dump_edge;
+
+    g_dump_edge = 0;
     return r;
 }
 
@@ -1034,8 +1045,24 @@ void sys_read_input(RbInput *out)
         out->buttons |= RB_BTN_4;
     }
     if (keys[SDL_SCANCODE_F10]) {
+#if KRAKEN_DEBUG
+        /* Stay in the stage. One press prints every live object. */
+        if (!g_dump_held) {
+            g_dump_edge = 1;
+        }
+        g_dump_held = 1;
+#else
         out->buttons |= RB_BTN_QUIT;
+#endif
+    } else {
+        g_dump_held = 0;
     }
+#if KRAKEN_DEBUG
+    /* Debug build only. F9 starts the Kraken fight. */
+    if (keys[SDL_SCANCODE_F9]) {
+        out->buttons |= RB_BTN_BOSS;
+    }
+#endif
     out->buttons = (uint16_t)(out->buttons | held_from_env() | script_from_env());
     if (out->buttons & RB_BTN_UP) {
         out->axis_y = -1;

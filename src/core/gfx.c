@@ -3360,6 +3360,44 @@ int gfx_sprite_rgba(const RbGfx *gfx, uint8_t slot, int index, uint32_t out[256]
     return 1;
 }
 
+int gfx_bg_lit(const RbGfx *gfx)
+{
+    int n = 0;
+    int y;
+    int x;
+
+    if (!gfx || !gfx->bg) {
+        return 0;
+    }
+    for (y = 16; y < RB_GFX_H - 16; y += 4) {
+        for (x = 96; x < 544; x += 4) {
+            if (gfx->bg[pix_at(x, y)] != 0) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
+uint32_t gfx_index_rgba(const RbGfx *gfx, int idx)
+{
+    int scene;
+    int lv[3];
+    int rgb[3];
+    int ch;
+
+    if (!gfx || idx < 0 || idx > 15) {
+        return 0;
+    }
+    scene = g_modern ? grade_scene(gfx) : -1;
+    for (ch = 0; ch < 3; ch++) {
+        lv[ch] = dac_level(gfx->pal[idx][ch]);
+    }
+    expand_index(scene, idx, lv[0], lv[1], lv[2], &rgb[0], &rgb[1], &rgb[2]);
+    return ((uint32_t)rgb[0] << 24) | ((uint32_t)rgb[1] << 16) |
+           ((uint32_t)rgb[2] << 8) | 0xFFu;
+}
+
 void gfx_present(RbGfx *gfx, int scroll76, int scroll_speed,
                  const uint8_t *text, uint32_t *rgba, int w, int h,
                  int blank_sides)

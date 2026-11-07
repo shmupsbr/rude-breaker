@@ -1,0 +1,40 @@
+/**
+ * Kraken, the true last boss.
+ *
+ * Black Label only. Kraken starts when two whole loops have each been
+ * cleared with every secret medal and no death. The loops need not be
+ * the first two, and they need not be consecutive: a failed loop drops
+ * only itself. The stage 5 core then stays where it is and puts out
+ * four arms. The hull cannot be hurt until those arms are gone.
+ *
+ * KRAKEN_DEBUG (off unless the debug make target defines it) adds F9,
+ * which plays stage 5 until that same core is fully on screen and
+ * still, then uses the same transform, and
+ * F10, which dumps live sprite ids. Delete the debug target and the
+ * KRAKEN_DEBUG blocks to drop both before a release build.
+ */
+#ifndef RUDEBREAKER_KRAKEN_H
+#define RUDEBREAKER_KRAKEN_H
+
+#include "vm.h"
+
+void kraken_reset(void);
+/* fair is 1 for a run from the title with no continue and no practice.
+ * black is 1 only in Black Label. Kraken does not exist in other modes. */
+void kraken_before(RbVm *vm, int deaths, int fair, int loop, int stage, int paused,
+                   int black);
+void kraken_after(RbVm *vm, int stage, int paused);
+void kraken_draw(RbVm *vm, const RbGfx *gfx, uint32_t *px, int w, int h);
+int  kraken_active(void);
+
+#if KRAKEN_DEBUG
+void kraken_debug_arm(void);
+int  kraken_debug_armed(void);
+/* 1 when stage 5 is at its end boss, the core bank is the real one,
+ * the background is painted, and the ship can fire. */
+int  kraken_debug_ready(const RbVm *vm);
+/* F10 in the debug build: one stderr line per live object. */
+void kraken_dump_screen(const RbVm *vm);
+#endif
+
+#endif

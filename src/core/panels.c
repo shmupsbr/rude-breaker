@@ -749,7 +749,7 @@ static void draw_rank(uint32_t *o, int X, const RbPanelData *d)
     int i;
 
     {
-        /* LOOP on, loop 2 and later: the loop number beside the title. */
+        /* Loop 2: the loop number beside the title. Loop 1 stays blank. */
         static char lp[12];
 
         snprintf(lp, sizeof lp, "LOOP %d", d->loop < 1 ? 1 : d->loop > 99 ? 99 : d->loop);

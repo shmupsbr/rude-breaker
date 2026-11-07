@@ -293,8 +293,17 @@ so saves from earlier builds load unchanged.
 
 GAMEPLAY
 
-  Options, in this order: DIFFICULTY, RANK, SUICIDE BULLETS, SHIP
-  SELECT, SHIP SPEED, TRAINING, LOOP, ATTRACT MODE, I-FRAMES and BACK.
+  Options, in this order: DIFFICULTY, GAME MODE, RANK, SUICIDE BULLETS,
+  SHIP SELECT, SHIP SPEED, TRAINING, ATTRACT MODE, I-FRAMES and BACK.
+
+  GAME MODE        ORIGINAL (default), INFINITE or BLACK LABEL.
+                   ORIGINAL is the game as shipped: one pass, and
+                   clearing stage 5 plays the ending. No Kraken.
+                   INFINITE repeats loops, keeping score, lives and
+                   weapons, until the game's own game over. A lost life
+                   is still just a lost life. No Kraken.
+                   BLACK LABEL repeats loops until Kraken is beaten,
+                   which ends the run. Kraken is only in this mode.
 
   DIFFICULTY       VERY EASY, EASY, NORMAL, HARD, VERY HARD. These are
                    the original game's own difficulty levels. NORMAL
@@ -334,12 +343,6 @@ GAMEPLAY
                    movement. Saved in rudebreaker.cfg as ship_speed.
 
   TRAINING         ON: practice mode (see section 5). OFF: normal game.
-
-  LOOP             ON (default) or OFF. OFF: the game ends after
-                   stage 5 with the ending, as in the original. ON: clearing stage 5
-                   starts stage 1 again as loop 2, then loop 3 and so
-                   on, keeping your score, lives and weapons. Each loop
-                   is harder (see section 6). Saved in rudebreaker.cfg.
 
   ATTRACT MODE     ON (default) or OFF. ON: after the ranking screen a
                    30-second demo plays (no music, sound effects only),
@@ -499,9 +502,8 @@ GRAPHICS
                    stages and a continue, and
                    starts again at YES only with a new game. In
                    Training the box header also shows TRAINING.
-                   From loop 2 on (LOOP ON) the RANK box title also
-                   shows the loop: LOOP 2, LOOP 3 ... It is hidden in
-                   loop 1 and with LOOP OFF.
+                   From loop 2 on, the RANK box title also shows the
+                   loop: LOOP 2. It is hidden in loop 1.
                    The vertical (portrait) layout is no longer a SIDE
                    PANELS choice: it comes from ORIENTATION 90 or 270. A
                    save from an earlier build with SIDE PANELS TATE
@@ -727,8 +729,8 @@ PASSWORD           Opens the original password screen.
 
 ORIGINAL PRESET    One step to the game as it was on the PC-98 disk,
                    e.g. to compare. Press Fire once: PRESS AGAIN
-                   appears; press Fire again to confirm. It sets LOOP
-                   OFF, RANK OFF, SHIP SELECT ON (the weapon pick, as on
+                   appears; press Fire again to confirm. It sets RANK
+                   OFF, SHIP SELECT ON (the weapon pick, as on
                    the disk), SOUND CHANNELS ORIGINAL, the original
                    palette, no COLOR FILTER, no CRT, no side panels,
                    original bullet colours, HITBOX OFF, SHIP SPEED
@@ -894,58 +896,64 @@ What it changes:
 The rate and number of enemy shots are not changed: in the game data
 each enemy's shot timing is its own counter inside its script, so it
 cannot be changed for all enemies without changing their patterns.
-With LOOP, each new loop starts rank 100 higher and allows it 50
-higher (at most 1000), and rank rises the loop number times faster
-(see LOOP below).
+Loop 2 starts rank 100 higher and allows it 50 higher (at most 1000),
+and rank rises with the loop number (see GAME MODE below).
 Not in Training. RANK OFF turns all of this off.
 
-LOOP (GAMEPLAY option, ON by default) is an addition of this port.
-With LOOP ON, clearing stage 5 does not show the ending: stage 1
-starts again as loop 2, then loop 3 and so on, and you keep your
-score, lives and weapons. In each new loop:
+GAME MODE chooses how a clear of stage 5 continues. ORIGINAL
+(the default) plays the ending. INFINITE and BLACK LABEL start
+stage 1 again, and you keep your score, lives and weapons. The run
+ends on the game's own game over, not on a single lost life. From
+loop 2 on:
 
-  - The base difficulty is one level above the loop before, starting
-    from the DIFFICULTY you chose (VERY EASY -> EASY -> NORMAL -> HARD
-    -> VERY HARD). At VERY HARD it stays VERY HARD and only the loop
-    multiplier below keeps growing. The new level, with the game's
-    own settings for it (enemy bullets and enemy strength), takes
-    effect when stage 1 of the loop starts.
-  - Rank starts again at the new base's starting point. The step-up
-    ceiling, the rank limits and the speed-up at the ceiling follow
-    the base the same way they follow your DIFFICULTY in loop 1 (for
-    example a NORMAL game is HARD in loop 2, so it can step up to VERY
-    HARD there).
-  - Every value driven by rank is multiplied by the loop number: x1 in
-    loop 1, x2 in loop 2, x3 in loop 3 and so on. That is how fast rank
-    rises, how much rank adds to enemy bullet speed, and the +1% steps
-    of the speed-up at the ceiling. Limits: the multiplier stops at x8
-    (loop 8 and later); enemy bullet speed never goes past the game's
-    own VERY HARD value; the speed-up at the ceiling goes up to +25%
-    times the multiplier, but never past +50%.
-  - From loop 2 on (not in Training), rank gain is multiplied by the
-    loop number in both rank modes, and enemy bullets get faster with
-    rank inside the loop: the rank range of the loop (start to
-    ceiling) is split in 10 steps, and each step adds 5% bullet speed
-    times (loop - 1): +5% per step in loop 2, +10% in loop 3 and so
-    on, up to +100% at most.
-  - From loop 2 on, SUICIDE BULLETS is always ON (the menu option is
-    kept and applies again in loop 1 / a new game).
-  - From loop 2 on, bosses have more HP: each stage boss +50% per
-    extra loop (x1.5 in loop 2, x2 in loop 3 ...), and the final boss
-    (the stage 5 fortress) +100% per extra loop (x2 in loop 2, x3 in
-    loop 3 ...). The loop multiplier stops at x8 and HP is capped so
-    it never overflows.
-  - Losing a life takes you back to the loop's base difficulty, with
+  - The base difficulty is one level above the DIFFICULTY you chose
+    (VERY EASY -> EASY -> NORMAL -> HARD -> VERY HARD). At VERY HARD
+    it stays VERY HARD. The new level, with the game's own settings
+    for it, takes effect when stage 1 of loop 2 starts.
+  - Rank starts again at the new base's starting point. A NORMAL game
+    is HARD in loop 2, so it can step up to VERY HARD there.
+  - Every value driven by rank is doubled: how fast rank rises, how
+    much rank adds to enemy bullet speed, and the speed-up at the
+    ceiling. Enemy bullet speed never goes past the game's own VERY
+    HARD value. The speed-up at the ceiling never goes past +50%.
+  - Not in Training, rank gain is doubled in both rank modes, and
+    enemy bullets get faster with rank inside the loop: the rank
+    range (start to ceiling) is split in 10 steps, and each step adds
+    5% bullet speed.
+  - SUICIDE BULLETS is always ON (the menu option is kept and applies
+    again in loop 1 and in a new game).
+  - Bosses have more HP: each stage boss +50%, and the final boss
+    (the stage 5 fortress) +100%. HP is capped so it never overflows.
+  - Losing a life takes you back to loop 2's base difficulty, with
     its starting rank.
-  - From loop 2 on, the RANK box title in the side panel shows the
-    loop (LOOP 2, LOOP 3 ...); it is hidden in loop 1. The count stops
-    at 99.
-  - Game over ends the run; a new game starts at loop 1 with the
+  - The RANK box title in the side panel shows LOOP 2. It is hidden
+    in loop 1.
+  - Game over ends the run. A new game starts at loop 1 with the
     DIFFICULTY you chose.
-  - In Training, LOOP ON still starts stage 1 again after stage 5, but
-    the difficulty and the multiplier do not change.
+  - In Training, stage 1 still starts again after stage 5, but the
+    difficulty and the multiplier do not change.
 
-With LOOP OFF the game ends after stage 5 exactly as in the original.
+KRAKEN is the true last boss, and only BLACK LABEL has it. A loop
+counts when that loop had every secret medal and no death. Two such
+loops are required. They do not have to be the first two, or next to
+each other: a failed loop drops only itself and leaves a counted loop
+in place. When the second counted loop's stage 5 boss would be
+destroyed, its central part stays where it is, puts out four arms, and
+the fight starts. Beating Kraken ends the run. One counted loop, or a
+failed loop, does not start Kraken. In Black Label that boss then
+falls off the bottom and the loop continues.
+Each arm ends in a glowing orb and bends toward your ship. Kraken
+cannot be hit until all four arms are destroyed. Each arm has half of
+Kraken's hit points. Kraken fires every pattern the stage 5 fortress
+fires, at twice the rate, and switches pattern every 10 seconds. The
+arms fire homing shots: one at a time while four arms remain, two at
+a time from random arms when three remain, one from each arm when two
+remain, and very fast when one remains. Every 10 seconds one random
+arm (the same arm can be picked again) stretches out to hit you, and
+that arm does not shoot while it is stretched. The other attacks
+continue. Destroying Kraken explodes it in the middle of the screen,
+the boss death the stage 5 boss no longer plays there, and then the
+ending.
 
 The original debug cheat is still in the code. During the game, pause
 with Escape and type N E K O C O. Then:
