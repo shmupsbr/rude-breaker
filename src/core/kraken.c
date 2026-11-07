@@ -1175,6 +1175,11 @@ static void apply_damage(RbVm *vm)
     int i;
     int s;
     int sh;
+    /* A shot the host already scored. The bullet script has to exit on
+     * its own: that exit is what releases the controller's shot count.
+     * Clearing the entity here skips that exit, and the gun stops for
+     * good once the count is full. */
+    static uint8_t scored[256];
 
     for (sh = 0; sh < 256; sh++) {
         RbEntView shot;
@@ -1191,6 +1196,13 @@ static void apply_damage(RbVm *vm)
             continue;
         }
         if (!alive && !s_pshot[sh]) {
+            scored[sh] = 0;
+            continue;
+        }
+        if (scored[sh]) {
+            if (!alive) {
+                scored[sh] = 0;
+            }
             continue;
         }
         if (alive) {
@@ -1211,7 +1223,7 @@ static void apply_damage(RbVm *vm)
         if (arm >= 0) {
             note_arm_hit(vm, arm);
             if (alive) {
-                vm_ent_clear(vm, sh);
+                scored[sh] = 1;
             }
             continue;
         }
@@ -1250,7 +1262,7 @@ static void apply_damage(RbVm *vm)
             fflush(stderr);
 #endif
             if (alive) {
-                vm_ent_clear(vm, sh);
+                scored[sh] = 1;
             }
             break;
         }
@@ -1957,24 +1969,44 @@ static void gun_watch(RbVm *vm)
         }
     }
     fire = (vm_held(vm) & 0x0010u) != 0;
-    if (fire && shots == 0) {
-        dry++;
-    } else {
-        dry = 0;
-        reported = 0;
-    }
-    ticks++;
-    if ((ticks % 30) == 0 || (dry == 20 && !reported)) {
-        fprintf(stderr,
-                "kraken gun: fire=%d d5=%u d6=%u df=%u ctrl=%d org=%04X type=%04X cmode=%d shots=%d vis=%d free_lo=%d free_hi=%d flags=%04X lives=%u%s\n",
-                fire, (unsigned)vm_global_u8(vm, 0xD5), (unsigned)vm_global_u8(vm, 0xD6),
-                (unsigned)vm_global_u8(vm, 0xDF), ctrl, (unsigned)corg, (unsigned)ctype,
-                cmode, shots, vis, free_lo, free_hi,
-                (unsigned)vm_global_u16(vm, 0x72), (unsigned)vm_global_u8(vm, 0xD2),
-                (dry >= 20) ? " STOP" : "");
-        fflush(stderr);
-        if (dry >= 20) {
-            reported = 1;
+    {
+        uint8_t raw[82];
+        uint16_t ip = 0;
+        unsigned op = 0;
+        unsigned wt = 0;
+        unsigned hp = 0;
+        int have = 0;
+
+        if (ctrl >= 0 && vm_ent_raw(vm, ctrl, raw, &ip)) {
+            uint32_t n = 0;
+            const uint8_t *sc = vm_chunk_bytes(vm, 6, &n);
+
+            have = 1;
+            wt = (unsigned)raw[6] | ((unsigned)raw[7] << 8);
+            hp = (unsigned)raw[0x3C] | ((unsigned)raw[0x3D] << 8);
+            if (sc && (uint32_t)ip < n) {
+                op = sc[ip];
+            }
+        }
+        if (fire && shots == 0) {
+            dry++;
+        } else {
+            dry = 0;
+            reported = 0;
+        }
+        ticks++;
+        if ((ticks % 30) == 0 || (dry == 20 && !reported)) {
+            fprintf(stderr,
+                    "kraken gun: fire=%d d5=%u d6=%u df=%u ctrl=%d org=%04X type=%04X cmode=%d ip=%04X op=%02X wt=%u hp=%u shots=%d vis=%d free_lo=%d free_hi=%d flags=%04X lives=%u%s\n",
+                    fire, (unsigned)vm_global_u8(vm, 0xD5), (unsigned)vm_global_u8(vm, 0xD6),
+                    (unsigned)vm_global_u8(vm, 0xDF), ctrl, (unsigned)corg, (unsigned)ctype,
+                    cmode, have ? (unsigned)ip : 0u, op, wt, hp, shots, vis, free_lo, free_hi,
+                    (unsigned)vm_global_u16(vm, 0x72), (unsigned)vm_global_u8(vm, 0xD2),
+                    (dry >= 20) ? " STOP" : "");
+            fflush(stderr);
+            if (dry >= 20) {
+                reported = 1;
+            }
         }
     }
 }

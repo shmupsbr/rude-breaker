@@ -1173,10 +1173,8 @@ static int alloc_back(RbVm *vm)
     return -1;
 }
 
-/* Player shots are opcode 0x16: the first free slot at or after the
- * shot controller. The stage 5 core sits near slot 133, so that window
- * is only the slots between the controller and the core. Kraken holds
- * must not take those slots or the controller stops after one burst. */
+/* Kraken's own entities stay out of the low slots the shot controller
+ * fills from its own index upward. */
 static int alloc_kraken(RbVm *vm)
 {
     return alloc_span(vm, 176, ENT_N - 176);
