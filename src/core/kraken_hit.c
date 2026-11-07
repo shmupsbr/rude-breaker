@@ -70,3 +70,25 @@ int kr_is_projectile(unsigned type, unsigned kind, unsigned origin,
     }
     return 0;
 }
+
+int kr_loop_clean(const KrLoops *k)
+{
+    return k && k->need > 0 && k->deaths == 0 && k->medals >= k->need;
+}
+
+int kr_tlb_ready(const KrLoops *k)
+{
+    return kr_loop_clean(k) && k->banked >= 1;
+}
+
+void kr_finish_loop(KrLoops *k)
+{
+    if (!k) {
+        return;
+    }
+    if (kr_loop_clean(k) && k->banked < 2) {
+        k->banked++;
+    }
+    k->medals = 0;
+    k->deaths = 0;
+}

@@ -97,9 +97,13 @@ static int s_scanned;
 
 static int s_phase;
 static int s_timer;
-static int s_medals;
 static int s_d1;
 static int s_d1_ok;
+static KrLoops s_loops;
+static int s_death0;
+static int s_tracked;
+static int s_have_track;
+static int s_run_real;
 static int s_hx, s_hy;
 static int s_khp, s_khp_max;
 static int s_thp[KR_TENT];
@@ -144,7 +148,7 @@ static int s_gen;
 static int s_cyc_i;
 static int s_cyc_t;
 static uint32_t s_rng = 0xC0FFEEu;
-static int s_fair, s_deaths, s_loop, s_stage, s_black, s_tlb_closed;
+static int s_deaths, s_loop, s_stage, s_black;
 static int s_noship;
 static int s_boom[KR_TENT];
 static int s_bx[KR_TENT], s_by[KR_TENT];
@@ -230,29 +234,63 @@ static int is_fort(uint16_t org)
            org == 0x864Du || org == 0x895Eu;
 }
 
-static int medal_need(RbVm *vm)
+static int loop_need(const RbVm *vm)
 {
     int i;
     int n = 0;
 
     for (i = 1; i <= 5; i++) {
-        int s = vm_medal_spots(vm, i);
+        int s = vm ? vm_medal_spots(vm, i) : -1;
 
         n += s < 0 ? 10 : s;
     }
-    return n * 2;
+    return n;
 }
 
-static int qualified(RbVm *vm)
+static void sync_loops(const RbVm *vm)
+{
+    int died = s_deaths - s_death0;
+
+    s_loops.need = loop_need(vm);
+    s_loops.deaths = died < 0 ? 0 : died;
+}
+
+/* The loop number moved on, so the one just played is finished.
+ * A clean loop is kept. A death or a missed medal drops only that loop. */
+static void note_loop(const RbVm *vm)
+{
+    if (!s_have_track) {
+        s_tracked = s_loop;
+        s_death0 = s_deaths;
+        s_have_track = 1;
+        s_loops.need = loop_need(vm);
+        return;
+    }
+    if (s_loop == s_tracked) {
+        return;
+    }
+    sync_loops(vm);
+    if (s_run_real && s_black) {
+        kr_finish_loop(&s_loops);
+    } else {
+        s_loops.medals = 0;
+        s_loops.deaths = 0;
+    }
+    s_d1_ok = 0;
+    s_death0 = s_deaths;
+    s_tracked = s_loop;
+    s_loops.deaths = 0;
+}
+
+static int qualified(const RbVm *vm)
 {
     /* Debug entry starts the fight itself. It must not also swallow
      * the stage's own loads, or the picture never comes up. */
-    /* Black Label only. A death, or a miss at the end of loop 2,
-     * closes it for the rest of the run. Later loops do not reopen it. */
-    if (s_tlb_closed || !s_black || !s_fair || s_deaths != 0 || s_loop < 2 || !vm) {
+    if (!s_black || !s_run_real || !vm || s_stage != 5) {
         return 0;
     }
-    return s_medals >= medal_need(vm);
+    sync_loops(vm);
+    return kr_tlb_ready(&s_loops);
 }
 
 static void medal_tick(RbVm *vm)
@@ -269,7 +307,7 @@ static void medal_tick(RbVm *vm)
         return;
     }
     if (d1 > s_d1) {
-        s_medals += d1 - s_d1;
+        s_loops.medals += d1 - s_d1;
     }
     s_d1 = d1;
 }
@@ -339,9 +377,12 @@ void kraken_reset(void)
     s_scanned = 0;
     s_phase = PH_OFF;
     s_timer = 0;
-    s_medals = 0;
+    memset(&s_loops, 0, sizeof s_loops);
+    s_death0 = 0;
+    s_tracked = 0;
+    s_have_track = 0;
+    s_run_real = 0;
     s_black = 0;
-    s_tlb_closed = 0;
     s_d1_ok = 0;
     s_khp = 0;
     s_noship = 0;
@@ -1370,11 +1411,6 @@ static void watch_drop(RbVm *vm, int stage)
     /* hp 0 starts at once. A vanished core waits two frames so a
      * one-frame gap during the solo fight does not drop it. */
     if (s_saw_fort && s_quiet >= 2 && !s_drop && !s_drop_done) {
-        /* Loop 2 is the only window. Missing it does not end the run,
-         * and a later loop does not get another try. */
-        if (s_loop >= 2 && !qualified(vm)) {
-            s_tlb_closed = 1;
-        }
         s_drop = 1;
         s_drop_dy = 0;
         memset(s_applied, 0, sizeof s_applied);
@@ -1635,17 +1671,19 @@ void kraken_before(RbVm *vm, int deaths, int fair, int loop, int stage, int paus
 
     s_deaths = deaths;
     s_black = black;
-    s_fair = fair && black;
     s_loop = loop;
     s_stage = stage;
-    if (s_black && s_deaths > 0) {
-        s_tlb_closed = 1;
+    /* A real Black Label run from stage 1. A later death or continue
+     * does not clear this; it only spoils the loop in progress. */
+    if (black && fair && loop <= 1 && stage <= 1) {
+        s_run_real = 1;
     }
     if (!vm) {
         return;
     }
+    note_loop(vm);
     if (s_phase == PH_OFF) {
-        vm_set_kraken_take(vm, qualified(vm) && stage == 5 && loop >= 2);
+        vm_set_kraken_take(vm, qualified(vm));
         return;
     }
     if (paused) {
@@ -1711,7 +1749,7 @@ void kraken_after(RbVm *vm, int stage, int paused)
     if (!vm) {
         return;
     }
-    if (s_fair) {
+    if (s_black && s_run_real) {
         medal_tick(vm);
     }
     watch_world(vm, s_stage);
