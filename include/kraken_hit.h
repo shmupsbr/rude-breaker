@@ -75,4 +75,14 @@ int kr_f9_poll(int mode, KrF9Watch *w, int ready, int x, int y,
 /* 0: not our death. 1: Kraken where the core is. 2: Black Label fall. */
 int kr_core_fate(int black, int tlb_ready, int hp_gone);
 
+/* 1 while the core can still be damaged. The shot that reaches 0 is
+ * accepted; any later shot in that pass is not. */
+int kr_core_open(int hp);
+
+/* 1 if this sample is the projectile already scored at (x0,y0).
+ * A different origin, or a step bigger than one frame of shot travel,
+ * is a new projectile in that slot. */
+int kr_same_shot(int scored, unsigned org, unsigned prev_org,
+                 int x0, int y0, int x1, int y1);
+
 #endif
