@@ -2042,6 +2042,10 @@ static int place_column(uint32_t *out, int ow, int oh, int side_x, int side_w,
     double s;
     int col_pix;
     int origin;
+    int gutter_x;
+    int gutter_y;
+    int content_x0;
+    int content_x1;
 
     for (i = 0; i < n && nc < 32; i++) {
         int cx = boxes[i].x + boxes[i].w / 2;
@@ -2102,12 +2106,74 @@ static int place_column(uint32_t *out, int ow, int oh, int side_x, int side_w,
     if (ref_h < 1) {
         ref_h = 1;
     }
-    s = (double)side_w / 420.0;
-    if (s > (double)oh / (double)ref_h) {
-        s = (double)oh / (double)ref_h;
-    }
-    if (s < 0.05) {
-        s = 0.05;
+    {
+        /* Gutters are design pixels at 1080p, scaled with the height.
+         * The column stays at the reference scale when the strip is
+         * wide enough (16:9, 4:3). A narrower strip (8:5 on 16:9)
+         * shrinks every box by the same factor until the outlines and
+         * the gutters fit, and nothing crosses into the playfield. */
+        gutter_x = oh * RB_DASH_GUTTER_X / 1080;
+        gutter_y = oh * RB_DASH_GUTTER_Y / 1080;
+        int c0 = 100000;
+        int c1 = 0;
+        int content_w;
+        int content_h = 0;
+        int avail_w;
+        int avail_h;
+        double s_lim;
+
+        if (gutter_x < 4) {
+            gutter_x = 4;
+        }
+        if (gutter_y < 4) {
+            gutter_y = 4;
+        }
+        for (i = 0; i < nc; i++) {
+            int lx = col[i].x - col0;
+            int rx = lx + col[i].w;
+
+            if (lx < c0) {
+                c0 = lx;
+            }
+            if (rx > c1) {
+                c1 = rx;
+            }
+        }
+        content_w = c1 - c0;
+        if (content_w < 1) {
+            content_w = 1;
+        }
+        for (i = 0; i < nr; i++) {
+            content_h += rows[i].h;
+        }
+        if (content_h < 1) {
+            content_h = 1;
+        }
+        s = (double)side_w / 420.0;
+        if (s > (double)oh / (double)ref_h) {
+            s = (double)oh / (double)ref_h;
+        }
+        avail_w = side_w - 2 * gutter_x - 2;
+        avail_h = oh - ng * gutter_y - 2;
+        if (avail_w < 8) {
+            avail_w = side_w > 4 ? side_w - 4 : side_w;
+        }
+        if (avail_h < 8) {
+            avail_h = oh > 4 ? oh - 4 : oh;
+        }
+        s_lim = (double)avail_w / (double)content_w;
+        if (s_lim < s) {
+            s = s_lim;
+        }
+        s_lim = (double)avail_h / (double)content_h;
+        if (s_lim < s) {
+            s = s_lim;
+        }
+        if (s < 0.05) {
+            s = 0.05;
+        }
+        content_x0 = c0;
+        content_x1 = c1;
     }
     scaled_h = 0;
     scaled_g = 0;
@@ -2144,6 +2210,23 @@ static int place_column(uint32_t *out, int ow, int oh, int side_x, int side_w,
         col_pix = 1;
     }
     origin = side_x + (side_w - col_pix) / 2;
+    {
+        /* Keep the reference column when it fits. If a box would cross
+         * a gutter, slide the whole column. Both edges move together,
+         * so pairs stay aligned. */
+        int left_px = origin + (int)(content_x0 * s);
+        int right_px = origin + (int)(content_x1 * s + 0.5);
+        int min_l = side_x + gutter_x;
+        int max_r = side_x + side_w - gutter_x;
+
+        if (left_px < min_l) {
+            origin += min_l - left_px;
+            right_px += min_l - left_px;
+        }
+        if (right_px > max_r) {
+            origin -= right_px - max_r;
+        }
+    }
     y = gaps[0] + extra;
     gi = 1;
     for (i = 0; i < nr; i++) {
@@ -2179,11 +2262,16 @@ static int place_column(uint32_t *out, int ow, int oh, int side_x, int side_w,
             if (bh > dh) {
                 bh = dh;
             }
-            if (dx < side_x) {
-                dx = side_x;
+            if (dx < side_x + gutter_x) {
+                dx = side_x + gutter_x;
             }
-            if (dx + dw > side_x + side_w) {
-                dw = side_x + side_w - dx;
+            if (dx + dw > side_x + side_w - gutter_x) {
+                /* Rounding only. The scale already reserved the gutter,
+                 * so this is at most a pixel and stays inside the strip. */
+                dw = side_x + side_w - gutter_x - dx;
+            }
+            if (dw < 1) {
+                dw = 1;
             }
             if (dw > 0 && bh > 0) {
                 int py;
@@ -2336,11 +2424,12 @@ void panels_compose(uint32_t *out, int w, int h, int tate, const uint32_t *game,
             fy = (h - fh) / 2;
         }
     }
-    if (!tate && near_aspect(w, h, 16, 9)) {
-        /* The approved 16:9 picture is the 1920x1080 reference:
-         * 420 px columns and a 1080 square field, scaled as a whole.
-         * The largest-4:3 fit left 240 px columns and shrank the
-         * widgets to about half. */
+    if (!tate && g_panels_43 && near_aspect(w, h, 16, 9)) {
+        /* Approved 16:9 with the 4:3 game picture: the 1920x1080
+         * reference, 420 px columns and a 1080 square field, scaled
+         * as a whole. 8:5 keeps the square-pixel field from fit_field
+         * so the picture is not stretched; the columns are whatever
+         * remains and the widgets scale down to fit them. */
         double s = (double)h / 1080.0;
 
         if ((long)w * 9 < (long)h * 16) {
@@ -2373,8 +2462,12 @@ void panels_compose(uint32_t *out, int w, int h, int tate, const uint32_t *game,
          * pixels; refilling all of them every logic tick was most of
          * the host time and pushed the 30.67 Hz budget over on a 4K
          * present. */
+        static uint32_t *plate_buf;
         static int plate_w, plate_h, plate_title;
-        int refill = plate_w != w || plate_h != h || plate_title != g_have_title || !out;
+        static int plate_fx, plate_fy, plate_fw, plate_fh;
+        int refill = plate_buf != out || plate_w != w || plate_h != h ||
+                     plate_title != g_have_title || plate_fx != fx || plate_fy != fy ||
+                     plate_fw != fw || plate_fh != fh;
 
         if (refill) {
             for (i = 0; i < w * h; i++) {
@@ -2383,9 +2476,14 @@ void panels_compose(uint32_t *out, int w, int h, int tate, const uint32_t *game,
 
                 out[i] = panels_plate_at(x, y);
             }
+            plate_buf = out;
             plate_w = w;
             plate_h = h;
             plate_title = g_have_title;
+            plate_fx = fx;
+            plate_fy = fy;
+            plate_fw = fw;
+            plate_fh = fh;
         }
     }
     blit_game(out, w, fx, fy, fw, fh, game, !wide && !tate);

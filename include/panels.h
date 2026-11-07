@@ -97,4 +97,11 @@ uint32_t panels_plate_at(int x, int y);
  * 21:9, 16:10 and 4:3 stay at the output size. */
 void panels_output_size(int dw, int dh, int *cw, int *ch);
 
+/* Minimum dashboard gutters in 1920x1080 design pixels. They scale
+ * with the window height (24 and 16 at 4K). Horizontal: between a
+ * widget and the outer screen edge, and between a widget and the
+ * playfield. Vertical: between stacked widgets. */
+#define RB_DASH_GUTTER_X 12
+#define RB_DASH_GUTTER_Y 8
+
 #endif
