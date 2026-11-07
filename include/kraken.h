@@ -1,15 +1,17 @@
 /**
  * Kraken, the true last boss.
  *
- * After loop 2's stage 5, if every medal from both loops was taken and
- * the ship never went down, the recurring mid-boss leaves, waits, and
- * comes back as its central hull with four arms. The hull cannot be
- * hurt until those arms are gone.
+ * Black Label only. After loop 2's stage 5, if every medal from both
+ * loops was taken and the ship never went down, the stage 5 core falls
+ * off the bottom, the white flash plays, and three seconds later that
+ * core returns with four arms. The hull cannot be hurt until those
+ * arms are gone. Missing the condition does not end the run, and a
+ * later loop does not get another try.
  *
- * KRAKEN_DEBUG (off unless the debug make target defines it) adds an
- * F9 shortcut and an F10 dump of every live object's sprite ids.
- * Delete the debug target and the KRAKEN_DEBUG blocks to drop both
- * before a release build.
+ * KRAKEN_DEBUG (off unless the debug make target defines it) adds F9,
+ * which plays that appearance on stage 5 without the medal check, and
+ * F10, which dumps live sprite ids. Delete the debug target and the
+ * KRAKEN_DEBUG blocks to drop both before a release build.
  */
 #ifndef RUDEBREAKER_KRAKEN_H
 #define RUDEBREAKER_KRAKEN_H
@@ -17,8 +19,10 @@
 #include "vm.h"
 
 void kraken_reset(void);
-/* fair is 1 for a run from the title with no continue and no practice. */
-void kraken_before(RbVm *vm, int deaths, int fair, int loop, int stage, int paused);
+/* fair is 1 for a run from the title with no continue and no practice.
+ * black is 1 only in Black Label. Kraken does not exist in other modes. */
+void kraken_before(RbVm *vm, int deaths, int fair, int loop, int stage, int paused,
+                   int black);
 void kraken_after(RbVm *vm, int stage, int paused);
 void kraken_draw(RbVm *vm, const RbGfx *gfx, uint32_t *px, int w, int h);
 int  kraken_active(void);
