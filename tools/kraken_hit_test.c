@@ -111,6 +111,25 @@ int main(void)
         expect(kr_tlb_ready(&k), "a later clean loop still completes the pair");
     }
 
+    {
+        static const uint8_t core[12] = {
+            26, 27, 28, 74, 75, 76, 90, 91, 92, 106, 107, 108
+        };
+        uint8_t bad[12];
+
+        memcpy(bad, core, sizeof bad);
+        bad[3] = 0;
+        expect(kr_pat_is_core(core, 12), "core pattern bytes match");
+        expect(!kr_pat_is_core(bad, 12), "a different pattern is rejected");
+        expect(!kr_f9_ready(2, 1, 1, 200, 1, 1), "stage 1 is not accepted");
+        expect(!kr_f9_ready(6, 0, 1, 200, 1, 1), "no live core is not accepted");
+        expect(!kr_f9_ready(6, 1, 0, 200, 1, 1), "wrong pattern is not accepted");
+        expect(!kr_f9_ready(6, 1, 1, 10, 1, 1), "an unpainted background is not accepted");
+        expect(!kr_f9_ready(6, 1, 1, 200, 1, 0), "no weapon is not accepted");
+        expect(kr_f9_ready(6, 1, 1, 200, 1, 1), "stage 5 core context is accepted");
+        expect(!kr_f9_ready(6, 1, 1, 200, 0, 1), "no ship is not accepted");
+    }
+
     if (g_fail) {
         return 1;
     }
