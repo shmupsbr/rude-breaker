@@ -90,4 +90,9 @@ int kr_same_shot(int scored, unsigned org, unsigned prev_org,
  * fast-forwards that many VM frames onto the screen. */
 int kr_seek_presents(int vm_frames, int extra_per_update);
 
+/* Fire bit the stage-5 skip holds. The timeline waits while counted
+ * enemies are alive, and with scroll stopped they do not leave on
+ * their own. Zero buttons never reaches the boss. */
+#define KR_F9_SKIP_FIRE 0x0010u
+
 #endif
