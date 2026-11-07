@@ -33,7 +33,7 @@ static void expect(const char *name, int cond)
     }
 }
 
-static void one(int w, int h, int tate)
+static void one(int w, int h, int tate, int aspect)
 {
     uint32_t *out;
     RbPanelData d;
@@ -65,7 +65,7 @@ static void one(int w, int h, int tate)
     d.rank_on = 1;
     d.time_cs = 1250;
     d.speed = 1;
-    panels_set_aspect(1);
+    panels_set_aspect(aspect);
     panels_compose(out, w, h, tate, game, &d, &g);
     for (y = 0; y < h; y++) {
         for (x = 0; x < w; x++) {
@@ -116,11 +116,11 @@ static void one(int w, int h, int tate)
     }
     printf("  field %d,%d %dx%d widgets=%d boxes=%d black=%d\n", g.field_x, g.field_y, g.field_w,
            g.field_h, g.widgets, g.n, black);
-    if (w == 1920 && h == 1080) {
+    if (w == 1920 && h == 1080 && aspect) {
         g1080 = g;
         have1080 = 1;
     }
-    if (w == 3840 && h == 2160) {
+    if (w == 3840 && h == 2160 && aspect) {
         g2160 = g;
         have2160 = 1;
     }
@@ -176,6 +176,98 @@ static void one(int w, int h, int tate)
             snprintf(label, sizeof label, "%dx%d pairs share top and bottom", w, h);
             expect(label, stair == 0);
         }
+        {
+            /* 12 and 8 design pixels at 1080p, scaled with the height. */
+            int gx = h * RB_DASH_GUTTER_X / 1080;
+            int gy = h * RB_DASH_GUTTER_Y / 1080;
+            int invade = 0;
+            int a;
+            int b;
+
+            if (gx < 4) {
+                gx = 4;
+            }
+            if (gy < 4) {
+                gy = 4;
+            }
+            for (i = 0; i < g.n; i++) {
+                int x2 = g.x[i] + g.w[i];
+                int y2 = g.y[i] + g.h[i];
+                int fx2 = g.field_x + g.field_w;
+                int fy2 = g.field_y + g.field_h;
+                int hit = g.x[i] < fx2 && x2 > g.field_x && g.y[i] < fy2 && y2 > g.field_y;
+                int edge = g.x[i] < gx || x2 > w - gx || g.y[i] < 0 || y2 > h;
+
+                if (x2 <= g.field_x && g.field_x - x2 < gx) {
+                    edge = 1;
+                }
+                if (g.x[i] >= fx2 && g.x[i] - fx2 < gx) {
+                    edge = 1;
+                }
+                if (hit || edge) {
+                    fprintf(stderr, "  dash %d,%d %dx%d field %d,%d %dx%d\n", g.x[i], g.y[i],
+                            g.w[i], g.h[i], g.field_x, g.field_y, g.field_w, g.field_h);
+                    invade++;
+                }
+            }
+            for (a = 0; a < g.n; a++) {
+                for (b = a + 1; b < g.n; b++) {
+                    int ax2 = g.x[a] + g.w[a];
+                    int bx2 = g.x[b] + g.w[b];
+                    int atop = g.y[a];
+                    int abot = g.y[a] + g.h[a];
+                    int btop = g.y[b];
+                    int bbot = g.y[b] + g.h[b];
+                    int vgap;
+
+                    int xover = (ax2 < bx2 ? ax2 : bx2) - (g.x[a] > g.x[b] ? g.x[a] : g.x[b]);
+
+                    if (xover <= 0) {
+                        continue;
+                    }
+                    if (abot <= btop) {
+                        vgap = btop - abot;
+                    } else if (bbot <= atop) {
+                        vgap = atop - bbot;
+                    } else {
+                        continue;
+                    }
+                    if (vgap < gy) {
+                        invade++;
+                    }
+                }
+            }
+            snprintf(label, sizeof label, "%dx%d aspect %s widgets inside dash", w, h,
+                     aspect ? "4:3" : "8:5");
+            expect(label, invade == 0);
+            if (!aspect && (long)w * 9 - (long)h * 16 < (long)h * 16 / 50 &&
+                (long)h * 16 - (long)w * 9 < (long)h * 16 / 50) {
+                int ratio = g.field_w * 5 - g.field_h * 6;
+
+                if (ratio < 0) {
+                    ratio = -ratio;
+                }
+                snprintf(label, sizeof label, "%dx%d 8:5 field is 6:5", w, h);
+                expect(label, ratio * 100 < g.field_h * 6 * 3);
+            }
+        }
+    }
+    if (tate && g.widgets) {
+        int outside = 0;
+
+        for (i = 0; i < g.n; i++) {
+            int x2 = g.x[i] + g.w[i];
+            int y2 = g.y[i] + g.h[i];
+            int fx2 = g.field_x + g.field_w;
+            int fy2 = g.field_y + g.field_h;
+            int hit = g.x[i] < fx2 && x2 > g.field_x && g.y[i] < fy2 && y2 > g.field_y;
+
+            if (hit || g.x[i] < 0 || g.y[i] < 0 || x2 > w || y2 > h) {
+                outside++;
+            }
+        }
+        snprintf(label, sizeof label, "%dx%d tate bars outside field", w, h);
+        expect(label, outside == 0 && g.n > 0);
     }
     if (!tate && (long)w * 10 < (long)h * 16) {
         int seen_pl = 0, seen_pr = 0, seen_hud = 0;
@@ -210,16 +302,29 @@ int main(void)
     game[80] = PX_PLAY_L;
     game[559] = PX_PLAY_R;
     game[560] = PX_HUD;
-    one(1920, 1080, 0);
-    one(1920, 1200, 0);
-    one(1680, 1050, 0);
-    one(1024, 768, 0);  /* 4:3: no panels, full frame */
-    one(1280, 1024, 0); /* 5:4: no panels, bars are plate */
-    one(1600, 1200, 0); /* 4:3: no panels, picture fills the frame */
-    one(2560, 1080, 0);
-    one(3440, 1440, 0);
-    one(3840, 2160, 0);
-    one(1080, 1920, 1);
+    one(1920, 1080, 0, 1);
+    one(1920, 1080, 0, 0);
+    one(1600, 900, 0, 1); /* resize, still 16:9 */
+    one(1600, 900, 0, 0);
+    one(2560, 1440, 0, 1);
+    one(2560, 1440, 0, 0);
+    one(1920, 1200, 0, 1);
+    one(1920, 1200, 0, 0);
+    one(1680, 1050, 0, 1);
+    one(1680, 1050, 0, 0);
+    one(1024, 768, 0, 1);  /* 4:3: no panels, full frame */
+    one(1024, 768, 0, 0);
+    one(1280, 1024, 0, 1); /* 5:4: no panels, bars are plate */
+    one(1280, 1024, 0, 0);
+    one(1600, 1200, 0, 1); /* 4:3: no panels, picture fills the frame */
+    one(2560, 1080, 0, 1);
+    one(2560, 1080, 0, 0);
+    one(3440, 1440, 0, 1);
+    one(3440, 1440, 0, 0);
+    one(3840, 2160, 0, 1);
+    one(3840, 2160, 0, 0);
+    one(1080, 1920, 1, 1);
+    one(1080, 1920, 1, 0);
     {
         int cw = 0, ch = 0;
 
