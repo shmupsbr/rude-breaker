@@ -1,6 +1,8 @@
 /* Logic checks for Kraken damage and what counts as a player bullet.
  * No game data and no environment variables. */
 #include "kraken_hit.h"
+#include "pace.h"
+#include "controls.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -213,6 +215,30 @@ int main(void)
                "a different origin is a new shot");
         expect(!kr_same_shot(0, 0x6331u, 0x6331u, 200, 180, 200, 156),
                "an unscored slot can still hit");
+    }
+
+    {
+        uint64_t next = 0;
+        int slow = 0;
+        int n = rb_pace_due(1000, &next, 100, 4, &slow);
+
+        expect(n == 1 && !slow, "a fresh clock runs one frame");
+        next = 0;
+        n = rb_pace_due(1000000, &next, 100, 4, &slow);
+        expect(n == 1 && !slow, "resync after a long skip is one frame");
+        next = 1000;
+        n = rb_pace_due(1000 + 100ull * 100ull, &next, 100, 4, &slow);
+        expect(n == 4 && slow, "a long hitch is capped at four frames");
+        n = rb_pace_due(next, &next, 100, 4, &slow);
+        expect(n == 1 && !slow, "the frame after a hitch is not still fast");
+        expect(kr_seek_presents(36000, 80) == 450,
+               "eighty frames per tick paints the skip");
+        expect(kr_seek_presents(36000, 0) == 1,
+               "a blocking skip is one picture");
+        expect(rb_control_bits(0x0010u, 0x0001u, 0) == 0x0010u,
+               "a pad is ignored while the joystick flag is off");
+        expect(rb_control_bits(0x0010u, 0x0001u, 1) == 0x0011u,
+               "a pad reaches the ship while the joystick flag is on");
     }
 
     if (g_fail) {
