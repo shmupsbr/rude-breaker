@@ -434,6 +434,71 @@ static void step_bar(uint32_t *o, int x, int y, int w, int h, int n, const int *
 
 /* ---- background ---------------------------------------------------- */
 
+static int near_aspect(int w, int h, int aw, int ah)
+{
+    long d;
+
+    if (w <= 0 || h <= 0) {
+        return 0;
+    }
+    d = (long)w * ah - (long)h * aw;
+    if (d < 0) {
+        d = -d;
+    }
+    return d * 100 < (long)h * aw * 2;
+}
+
+void panels_output_size(int dw, int dh, int *cw, int *ch)
+{
+    int w = dw > 0 ? dw : 1;
+    int h = dh > 0 ? dh : 1;
+
+    /* 16:9 keeps the 1920x1080 reference. The GPU scales that picture
+     * onto the output, so 720p, 1080p, 1440p and 4K are the same
+     * layout. Rasterising 4K in software made the panels a different
+     * fraction of the screen and blew the frame budget. */
+    if (near_aspect(w, h, 16, 9)) {
+        w = RB_PANEL_W;
+        h = RB_PANEL_H;
+    }
+    if (cw) {
+        *cw = w;
+    }
+    if (ch) {
+        *ch = h;
+    }
+}
+
+/* Metal plate at 1:1. The same title-column tiling as the 1920 layout,
+ * repeated, never stretched: a window just crops a bigger piece of it. */
+uint32_t panels_plate_at(int x, int y)
+{
+    int ax = x < 0 ? -x : x;
+    int ay = y < 0 ? -y : y;
+
+    if (!g_have_title) {
+        return pack(C_BG);
+    }
+    {
+        int sy = (ay / 3) % 400;
+        int u = ax + 48;
+        int tile = u / 132;
+        int tx = (u % 132) / 3;
+        int sx = (tile & 1) ? 43 - tx : tx;
+        Rgb c;
+        Rgb b = C_BG;
+
+        if (sx > 43) {
+            sx = 43;
+        }
+        c = unpack(g_title[sy * 640 + sx]);
+        b.r += (c.r - b.r) * 45 / 100;
+        b.g += (c.g - b.g) * 45 / 100;
+        b.b += (c.b - b.b) * 45 / 100;
+        return pack(b);
+    }
+}
+
 static void build_back(void)
 {
     int x;
@@ -1561,6 +1626,60 @@ void panels_set_aspect(int a43)
     g_panels_43 = a43 ? 1 : 0;
 }
 
+/* Side-by-side half boxes keep the outer chamfers (top-left of the
+ * left box, bottom-right of the right one). The inner corners are
+ * squared so the pair shares one top edge and one bottom edge. */
+static void square_pair_corner(uint32_t *o, const PBox *b, int top_left)
+{
+    int px;
+    int py;
+    const int t = 3;
+
+    for (py = 0; py < b->h; py++) {
+        for (px = 0; px < b->w; px++) {
+            int cut = top_left ? (px + py < CHAMF)
+                               : ((b->w - 1 - px) + (b->h - 1 - py) < CHAMF);
+            int edge;
+
+            if (!cut) {
+                continue;
+            }
+            edge = px < t || py < t || px >= b->w - t || py >= b->h - t;
+            if (edge) {
+                blend(o, b->x + px, b->y + py, C_EDGE, 255);
+            } else if (b->head && py < HEAD) {
+                blend(o, b->x + px, b->y + py, C_HEAD, 255);
+            } else {
+                blend(o, b->x + px, b->y + py, C_FILL, 200);
+            }
+        }
+    }
+}
+
+static void square_pair_corners(uint32_t *o)
+{
+    int a;
+    int b;
+
+    for (a = 0; a < g_nbox; a++) {
+        for (b = 0; b < g_nbox; b++) {
+            const PBox *L = &g_boxes[a];
+            const PBox *R = &g_boxes[b];
+            int gap;
+
+            if (L->y != R->y || L->h != R->h || L->w > 250 || R->w > 250) {
+                continue;
+            }
+            gap = R->x - (L->x + L->w);
+            if (gap < 0 || gap > 24) {
+                continue;
+            }
+            square_pair_corner(o, L, 0);
+            square_pair_corner(o, R, 1);
+        }
+    }
+}
+
 void panels_render(uint32_t *out, const uint32_t *game, const RbPanelData *d)
 {
     static int map_x[FIELD_W];
@@ -1608,6 +1727,7 @@ void panels_render(uint32_t *out, const uint32_t *game, const RbPanelData *d)
     g_frame = d->frame;
     draw_left(out, game, d);
     draw_right(out, d);
+    square_pair_corners(out);
     if (((char *)0)) {
         pad_check(out);
     }
@@ -1826,5 +1946,654 @@ void panels_render_tate(uint32_t *out, const uint32_t *wide, const uint32_t *gam
         ih = b ? tsc(b->h - (in_cut[1] - in_cut[0]) - (in_cut[3] - in_cut[2])) : 0;
         tate_box(out, wide, md, X[2], cy, NULL, 0);
         tate_box(out, wide, b, X[2], cy + ch - ih, in_cut, 2);
+    }
+}
+
+/* ---- universal window size ----------------------------------------- */
+
+static uint32_t *ref_buf(int w, int h, uint32_t **slot, int *sw, int *sh)
+{
+    if (*sw != w || *sh != h || !*slot) {
+        free(*slot);
+        *slot = (uint32_t *)calloc((size_t)w * (size_t)h, sizeof(uint32_t));
+        *sw = *slot ? w : 0;
+        *sh = *slot ? h : 0;
+    }
+    return *slot;
+}
+
+static void blit_ink(uint32_t *out, int ow, int oh, const uint32_t *ref, int rw,
+                     const uint32_t *bg, int sx, int sy, int sw, int sh, int dx, int dy,
+                     int dw, int dh)
+{
+    int j;
+    int i;
+
+    if (dw < 1) {
+        dw = 1;
+    }
+    if (dh < 1) {
+        dh = 1;
+    }
+    for (j = 0; j < dh; j++) {
+        int ry = sy + (sh > 0 ? j * sh / dh : 0);
+        int y = dy + j;
+
+        if (ry < 0 || y < 0 || y >= oh) {
+            continue;
+        }
+        for (i = 0; i < dw; i++) {
+            int rx = sx + (sw > 0 ? i * sw / dw : 0);
+            int x = dx + i;
+            uint32_t p;
+
+            if (rx < 0 || x < 0 || x >= ow) {
+                continue;
+            }
+            p = ref[(size_t)ry * rw + rx];
+            if (!bg || p != bg[(size_t)ry * rw + rx]) {
+                out[(size_t)y * ow + x] = p;
+            }
+        }
+    }
+}
+
+static int box_less(const void *a, const void *b)
+{
+    const PBox *pa = a;
+    const PBox *pb = b;
+
+    return pa->y - pb->y;
+}
+
+/* One horizontal band of the reference column. Side-by-side boxes
+ * (EXTENDS / I-FRAMES, the hit pair, LEVEL / TIME) share a band so
+ * they are not stacked and pushed off the bottom. */
+typedef struct PRow {
+    int y;
+    int h;
+    int n;
+    int idx[8];
+} PRow;
+
+/* Lay the reference column's boxes into the side strip. Scale is the
+ * largest that fits the strip's width and the window's height, so a
+ * 21:9 window keeps the whole column (logo and INPUT included) and a
+ * wider strip does not stretch it past the height. Leftover vertical
+ * space is shared by the gaps. */
+static int place_column(uint32_t *out, int ow, int oh, int side_x, int side_w,
+                        PBox *boxes, int n, int col0, const uint32_t *ref,
+                        const uint32_t *bg, RbPanelGeom *geom)
+{
+    PBox col[32];
+    PRow rows[32];
+    int nc = 0;
+    int nr = 0;
+    int i;
+    int gaps[33];
+    int ng;
+    int scaled_h;
+    int scaled_g;
+    int left;
+    int extra;
+    int y;
+    int gi;
+    int ref_h;
+    double s;
+    int col_pix;
+    int origin;
+    int gutter_x;
+    int gutter_y;
+    int content_x0;
+    int content_x1;
+
+    for (i = 0; i < n && nc < 32; i++) {
+        int cx = boxes[i].x + boxes[i].w / 2;
+
+        if (cx >= col0 && cx < col0 + 420) {
+            col[nc++] = boxes[i];
+        }
+    }
+    if (!nc || side_w < 8 || oh < 8) {
+        return 0;
+    }
+    qsort(col, (size_t)nc, sizeof col[0], box_less);
+    for (i = 0; i < nc; i++) {
+        PRow *r;
+
+        if (nr > 0 && col[i].y < rows[nr - 1].y + rows[nr - 1].h) {
+            int bot;
+
+            r = &rows[nr - 1];
+            if (r->n < 8) {
+                r->idx[r->n++] = i;
+            }
+            bot = col[i].y + col[i].h;
+            if (bot - r->y > r->h) {
+                r->h = bot - r->y;
+            }
+            continue;
+        }
+        r = &rows[nr++];
+        r->y = col[i].y;
+        r->h = col[i].h;
+        r->n = 1;
+        r->idx[0] = i;
+    }
+    gaps[0] = rows[0].y;
+    if (gaps[0] < 0) {
+        gaps[0] = 0;
+    }
+    for (i = 0; i < nr; i++) {
+        if (i + 1 < nr) {
+            int g = rows[i + 1].y - (rows[i].y + rows[i].h);
+
+            gaps[i + 1] = g > 0 ? g : 0;
+        }
+    }
+    gaps[nr] = 1080 - (rows[nr - 1].y + rows[nr - 1].h);
+    if (gaps[nr] < 0) {
+        gaps[nr] = 0;
+    }
+    ng = nr + 1;
+    ref_h = 0;
+    for (i = 0; i < nr; i++) {
+        ref_h += rows[i].h;
+    }
+    for (i = 0; i < ng; i++) {
+        ref_h += gaps[i];
+    }
+    if (ref_h < 1) {
+        ref_h = 1;
+    }
+    {
+        /* Gutters are design pixels at 1080p, scaled with the height.
+         * The column stays at the reference scale when the strip is
+         * wide enough (16:9, 4:3). A narrower strip (8:5 on 16:9)
+         * shrinks every box by the same factor until the outlines and
+         * the gutters fit, and nothing crosses into the playfield. */
+        gutter_x = oh * RB_DASH_GUTTER_X / 1080;
+        gutter_y = oh * RB_DASH_GUTTER_Y / 1080;
+        int c0 = 100000;
+        int c1 = 0;
+        int content_w;
+        int content_h = 0;
+        int avail_w;
+        int avail_h;
+        double s_lim;
+
+        if (gutter_x < 4) {
+            gutter_x = 4;
+        }
+        if (gutter_y < 4) {
+            gutter_y = 4;
+        }
+        for (i = 0; i < nc; i++) {
+            int lx = col[i].x - col0;
+            int rx = lx + col[i].w;
+
+            if (lx < c0) {
+                c0 = lx;
+            }
+            if (rx > c1) {
+                c1 = rx;
+            }
+        }
+        content_w = c1 - c0;
+        if (content_w < 1) {
+            content_w = 1;
+        }
+        for (i = 0; i < nr; i++) {
+            content_h += rows[i].h;
+        }
+        if (content_h < 1) {
+            content_h = 1;
+        }
+        s = (double)side_w / 420.0;
+        if (s > (double)oh / (double)ref_h) {
+            s = (double)oh / (double)ref_h;
+        }
+        avail_w = side_w - 2 * gutter_x - 2;
+        avail_h = oh - ng * gutter_y - 2;
+        if (avail_w < 8) {
+            avail_w = side_w > 4 ? side_w - 4 : side_w;
+        }
+        if (avail_h < 8) {
+            avail_h = oh > 4 ? oh - 4 : oh;
+        }
+        s_lim = (double)avail_w / (double)content_w;
+        if (s_lim < s) {
+            s = s_lim;
+        }
+        s_lim = (double)avail_h / (double)content_h;
+        if (s_lim < s) {
+            s = s_lim;
+        }
+        if (s < 0.05) {
+            s = 0.05;
+        }
+        content_x0 = c0;
+        content_x1 = c1;
+    }
+    scaled_h = 0;
+    scaled_g = 0;
+    for (i = 0; i < nr; i++) {
+        scaled_h += (int)(rows[i].h * s + 0.5);
+    }
+    for (i = 0; i < ng; i++) {
+        gaps[i] = (int)(gaps[i] * s + 0.5);
+        scaled_g += gaps[i];
+    }
+    /* Rounding can overshoot by a few pixels. Take it out of the gaps
+     * so a box is never cropped. */
+    for (i = ng - 1; i >= 0 && scaled_h + scaled_g > oh; i--) {
+        int room = scaled_h + scaled_g - oh;
+
+        if (gaps[i] > room) {
+            gaps[i] -= room;
+            scaled_g -= room;
+        } else if (gaps[i] > 0) {
+            scaled_g -= gaps[i];
+            gaps[i] = 0;
+        }
+    }
+    left = oh - scaled_h - scaled_g;
+    if (left < 0) {
+        left = 0;
+    }
+    extra = ng > 0 ? left / ng : 0;
+    col_pix = (int)(420.0 * s + 0.5);
+    if (col_pix > side_w) {
+        col_pix = side_w;
+    }
+    if (col_pix < 1) {
+        col_pix = 1;
+    }
+    origin = side_x + (side_w - col_pix) / 2;
+    {
+        /* Keep the reference column when it fits. If a box would cross
+         * a gutter, slide the whole column. Both edges move together,
+         * so pairs stay aligned. */
+        int left_px = origin + (int)(content_x0 * s);
+        int right_px = origin + (int)(content_x1 * s + 0.5);
+        int min_l = side_x + gutter_x;
+        int max_r = side_x + side_w - gutter_x;
+
+        if (left_px < min_l) {
+            origin += min_l - left_px;
+            right_px += min_l - left_px;
+        }
+        if (right_px > max_r) {
+            origin -= right_px - max_r;
+        }
+    }
+    y = gaps[0] + extra;
+    gi = 1;
+    for (i = 0; i < nr; i++) {
+        int dh = (int)(rows[i].h * s + 0.5);
+        int k;
+
+        if (dh < 1) {
+            dh = 1;
+        }
+        if (y < 0) {
+            y = 0;
+        }
+        if (y + dh > oh) {
+            dh = oh - y;
+        }
+        for (k = 0; k < rows[i].n; k++) {
+            const PBox *b = &col[rows[i].idx[k]];
+            int dw = (int)(b->w * s + 0.5);
+            int bh = (int)(b->h * s + 0.5);
+            int dx = origin + (int)((b->x - col0) * s + 0.5);
+
+            if (dw < 1) {
+                dw = 1;
+            }
+            if (bh < 1) {
+                bh = 1;
+            }
+            /* Half-column partners share one top and one bottom.
+             * Separate rounding per box is what made a staircase. */
+            if (rows[i].n > 1) {
+                bh = dh;
+            }
+            if (bh > dh) {
+                bh = dh;
+            }
+            if (dx < side_x + gutter_x) {
+                dx = side_x + gutter_x;
+            }
+            if (dx + dw > side_x + side_w - gutter_x) {
+                /* Rounding only. The scale already reserved the gutter,
+                 * so this is at most a pixel and stays inside the strip. */
+                dw = side_x + side_w - gutter_x - dx;
+            }
+            if (dw < 1) {
+                dw = 1;
+            }
+            if (dw > 0 && bh > 0) {
+                int py;
+                int px;
+
+                /* Drop the previous frame's ink. The plate under the
+                 * box does not change with the window. */
+                for (py = 0; py < bh; py++) {
+                    uint32_t *row = out + (size_t)(y + py) * ow + dx;
+
+                    for (px = 0; px < dw; px++) {
+                        row[px] = panels_plate_at(dx + px, y + py);
+                    }
+                }
+                blit_ink(out, ow, oh, ref, PW, bg, b->x, b->y, b->w, b->h, dx, y, dw, bh);
+                if (geom && geom->n < 40) {
+                    geom->x[geom->n] = dx;
+                    geom->y[geom->n] = y;
+                    geom->w[geom->n] = dw;
+                    geom->h[geom->n] = bh;
+                    geom->n++;
+                }
+            }
+        }
+        y += dh;
+        if (gi < ng) {
+            y += gaps[gi] + extra;
+            gi++;
+        }
+    }
+    return nc;
+}
+
+static void fit_field(int w, int h, int *fx, int *fy, int *fw, int *fh)
+{
+    int aw = g_panels_43 ? 4 : 6;
+    int ah = g_panels_43 ? 3 : 5;
+
+    if ((long)w * ah > (long)h * aw) {
+        *fh = h;
+        *fw = (int)((long)h * aw / ah);
+    } else {
+        *fw = w;
+        *fh = (int)((long)w * ah / aw);
+    }
+    if (*fw < 1) {
+        *fw = 1;
+    }
+    if (*fh < 1) {
+        *fh = 1;
+    }
+    if (*fw > w) {
+        *fw = w;
+    }
+    if (*fh > h) {
+        *fh = h;
+    }
+    *fx = (w - *fw) / 2;
+    *fy = (h - *fh) / 2;
+}
+
+/* full=1 is 4:3 / 5:4: the playfield and HUD (source columns 80..560)
+ * are drawn, and the black side margins of the 640 frame are the metal
+ * plate, same as the letterbox bars. full=0 copies only the inner 480
+ * columns the side panels sit beside. */
+static void blit_game(uint32_t *out, int ow, int fx, int fy, int fw, int fh,
+                      const uint32_t *game, int full)
+{
+    int y;
+    int x;
+    int x0 = full ? 0 : 80;
+    int sw = full ? 640 : 480;
+
+    for (y = 0; y < fh; y++) {
+        int sy = y * 400 / fh;
+        uint32_t *dst = out + (size_t)(fy + y) * ow + fx;
+        const uint32_t *src = game + (size_t)sy * 640;
+
+        for (x = 0; x < fw; x++) {
+            int sx = x0 + x * sw / fw;
+
+            if (sx < 0) {
+                sx = 0;
+            }
+            if (sx > 639) {
+                sx = 639;
+            }
+            if (full && (sx < 80 || sx > 560)) {
+                dst[x] = panels_plate_at(fx + x, fy + y);
+            } else {
+                dst[x] = src[sx];
+            }
+        }
+    }
+}
+
+void panels_compose(uint32_t *out, int w, int h, int tate, const uint32_t *game,
+                    const RbPanelData *d, RbPanelGeom *geom)
+{
+    static uint32_t *ref;
+    static int ref_w, ref_h;
+    static uint32_t *ref_t;
+    static int rt_w, rt_h;
+    int fx, fy, fw, fh;
+    int i;
+    int wide;
+    RbPanelData dummy;
+
+    if (!out || w <= 0 || h <= 0) {
+        return;
+    }
+    if (!d) {
+        memset(&dummy, 0, sizeof dummy);
+        dummy.weapon = 'V';
+        dummy.weapon_lv = 1;
+        dummy.shot_lv = 1;
+        dummy.lives = 3;
+        dummy.medal_spots = 0;
+        d = &dummy;
+    }
+    if (!game) {
+        return;
+    }
+    if (geom) {
+        memset(geom, 0, sizeof *geom);
+    }
+    tate = tate ? 1 : 0;
+    fit_field(w, h, &fx, &fy, &fw, &fh);
+    wide = !tate && (long)w * 10 >= (long)h * 16 && fx >= 32;
+    if (wide) {
+        /* A 16:9 window of this height has side strips h*2/9. On a
+         * taller 16:10 the largest 4:3 picture would leave a thinner
+         * strip and tiny text, so the field gives that much back and
+         * the widgets stay the same size relative to the height. */
+        int side = h * 2 / 9;
+        int aw = g_panels_43 ? 4 : 6;
+        int ah = g_panels_43 ? 3 : 5;
+        int cap = w - 2 * side;
+
+        if (side >= 32 && cap > 64 && fw > cap) {
+            fw = cap;
+            fh = (int)((long)fw * ah / aw);
+            if (fh > h) {
+                fh = h;
+            }
+            if (fh < 1) {
+                fh = 1;
+            }
+            fx = (w - fw) / 2;
+            fy = (h - fh) / 2;
+        }
+    }
+    if (!tate && g_panels_43 && near_aspect(w, h, 16, 9)) {
+        /* Approved 16:9 with the 4:3 game picture: the 1920x1080
+         * reference, 420 px columns and a 1080 square field, scaled
+         * as a whole. 8:5 keeps the square-pixel field from fit_field
+         * so the picture is not stretched; the columns are whatever
+         * remains and the widgets scale down to fit them. */
+        double s = (double)h / 1080.0;
+
+        if ((long)w * 9 < (long)h * 16) {
+            s = (double)w / 1920.0;
+        }
+        fw = (int)(1080.0 * s + 0.5);
+        fh = (int)(1080.0 * s + 0.5);
+        if (fw > w) {
+            fw = w;
+        }
+        if (fh > h) {
+            fh = h;
+        }
+        if (fw < 1) {
+            fw = 1;
+        }
+        if (fh < 1) {
+            fh = 1;
+        }
+        fx = (w - fw) / 2;
+        fy = (h - fh) / 2;
+    }
+    if (g_back_ok != g_have_title) {
+        build_back();
+    }
+    {
+        /* The plate is a constant for a given window, so it is painted
+         * once. Later frames only repaint the field and the widget
+         * rects, which the draws below cover. A 4K frame is 8 million
+         * pixels; refilling all of them every logic tick was most of
+         * the host time and pushed the 30.67 Hz budget over on a 4K
+         * present. */
+        static uint32_t *plate_buf;
+        static int plate_w, plate_h, plate_title;
+        static int plate_fx, plate_fy, plate_fw, plate_fh;
+        int refill = plate_buf != out || plate_w != w || plate_h != h ||
+                     plate_title != g_have_title || plate_fx != fx || plate_fy != fy ||
+                     plate_fw != fw || plate_fh != fh;
+
+        if (refill) {
+            for (i = 0; i < w * h; i++) {
+                int x = i % w;
+                int y = i / w;
+
+                out[i] = panels_plate_at(x, y);
+            }
+            plate_buf = out;
+            plate_w = w;
+            plate_h = h;
+            plate_title = g_have_title;
+            plate_fx = fx;
+            plate_fy = fy;
+            plate_fw = fw;
+            plate_fh = fh;
+        }
+    }
+    blit_game(out, w, fx, fy, fw, fh, game, !wide && !tate);
+    if (geom) {
+        geom->field_x = fx;
+        geom->field_y = fy;
+        geom->field_w = fw;
+        geom->field_h = fh;
+        geom->widgets = 0;
+    }
+    /* Narrower than 16:10 (4:3, 5:4): the bars stay the plate alone. */
+    if (!wide && !tate) {
+        return;
+    }
+    if (!ref_buf(PW, PH, &ref, &ref_w, &ref_h)) {
+        return;
+    }
+    panels_render(ref, game, d);
+    if (tate) {
+        int top = fy;
+        int bot = h - (fy + fh);
+        int y0 = T_TOP + T_GAME;
+
+        if (!ref_buf(TW, TH, &ref_t, &rt_w, &rt_h)) {
+            return;
+        }
+        panels_render_tate(ref_t, ref, game);
+        if (top > 0) {
+            blit_ink(out, w, h, ref_t, TW, NULL, 0, 0, TW, T_TOP, 0, 0, w, top);
+        }
+        if (bot > 0) {
+            blit_ink(out, w, h, ref_t, TW, NULL, 0, y0, TW, TH - y0, 0, fy + fh, w, bot);
+        }
+        /* The plate under the copy was scaled with the widgets. Paint
+         * the plate back, then the ink only, so the metal stays 1:1. */
+        for (i = 0; i < w * h; i++) {
+            int x = i % w;
+            int y = i / w;
+
+            if (x >= fx && x < fx + fw && y >= fy && y < fy + fh) {
+                continue;
+            }
+            out[i] = panels_plate_at(x, y);
+        }
+        if (top > 0) {
+            blit_ink(out, w, h, ref_t, TW, NULL, 0, 0, TW, T_TOP, 0, 0, w, top);
+        }
+        /* Second pass kept the plate pixels too. Re-copy ink by
+         * comparing with tate_back. */
+        for (i = 0; i < w * top; i++) {
+            int x = i % w;
+            int y = i / w;
+            int rx = x * TW / w;
+            int ry = y * T_TOP / (top > 0 ? top : 1);
+            uint32_t p = ref_t[(size_t)ry * TW + rx];
+
+            if (p != tate_back(rx, ry)) {
+                out[(size_t)y * w + x] = p;
+            }
+        }
+        if (bot > 0) {
+            for (i = 0; i < w * bot; i++) {
+                int x = i % w;
+                int y = i / w;
+                int rx = x * TW / w;
+                int ry = y0 + y * (TH - y0) / bot;
+                uint32_t p = ref_t[(size_t)ry * TW + rx];
+
+                if (p != tate_back(rx, ry)) {
+                    out[(size_t)(fy + fh + y) * w + x] = p;
+                }
+            }
+        }
+        if (geom) {
+            geom->widgets = 1;
+            if (top > 0 && geom->n < 40) {
+                geom->x[geom->n] = 0;
+                geom->y[geom->n] = 0;
+                geom->w[geom->n] = w;
+                geom->h[geom->n] = top;
+                geom->n++;
+            }
+            if (bot > 0 && geom->n < 40) {
+                geom->x[geom->n] = 0;
+                geom->y[geom->n] = fy + fh;
+                geom->w[geom->n] = w;
+                geom->h[geom->n] = bot;
+                geom->n++;
+            }
+        }
+        return;
+    }
+    {
+        PBox boxes[32];
+        int n = g_nbox < 32 ? g_nbox : 32;
+        PBox logo;
+
+        memcpy(boxes, g_boxes, (size_t)n * sizeof boxes[0]);
+        logo.x = 16;
+        logo.y = 960;
+        logo.w = 388;
+        logo.h = 120;
+        logo.label = "LOGO";
+        if (n < 32) {
+            boxes[n++] = logo;
+        }
+        if (geom) {
+            geom->widgets = 1;
+        }
+        place_column(out, w, h, 0, fx, boxes, n, 0, ref, g_back, geom);
+        place_column(out, w, h, fx + fw, w - (fx + fw), boxes, n, 1500, ref, g_back, geom);
     }
 }

@@ -10,3 +10,6 @@ ym2608_rom*.zip
 
 # Host options. Written next to the disk files when the player changes one.
 rudebreaker.cfg
+
+# F12 shots. Created beside the game on the first press.
+screenshots/

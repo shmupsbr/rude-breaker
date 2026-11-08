@@ -1,0 +1,379 @@
+/* Headless panel composite: several window sizes, no black border,
+ * widgets inside the frame. No game data and no window. */
+#include "panels.h"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define GW 640
+#define GH 400
+
+static uint32_t game[GW * GH];
+static int fails;
+static RbPanelGeom g1080, g2160;
+static int have1080, have2160;
+
+static const uint32_t PX_PLAY_L = 0x00E100FFu;
+static const uint32_t PX_PLAY_R = 0x0000E1FFu;
+static const uint32_t PX_HUD = 0xE1E100FFu;
+
+static int pure_black(uint32_t p)
+{
+    return (p >> 8) == 0;
+}
+
+static void expect(const char *name, int cond)
+{
+    if (!cond) {
+        fprintf(stderr, "FAIL %s\n", name);
+        fails++;
+    } else {
+        printf("ok %s\n", name);
+    }
+}
+
+static void one(int w, int h, int tate, int aspect)
+{
+    uint32_t *out;
+    RbPanelData d;
+    RbPanelGeom g;
+    char label[64];
+    int i;
+    int black = 0;
+    int x;
+    int y;
+
+    out = (uint32_t *)calloc((size_t)w * (size_t)h, sizeof(uint32_t));
+    if (!out) {
+        fprintf(stderr, "oom %dx%d\n", w, h);
+        fails++;
+        return;
+    }
+    memset(&d, 0, sizeof d);
+    d.weapon = 'V';
+    d.weapon_lv = 1;
+    d.shot_lv = 1;
+    d.sub_on = 1;
+    d.lives = 3;
+    d.score = 123456;
+    d.hiscore = 200000;
+    d.stage = 1;
+    d.medal_spots = 8;
+    d.medals = 2;
+    d.difficulty = 2;
+    d.rank_on = 1;
+    d.time_cs = 1250;
+    d.speed = 1;
+    panels_set_aspect(aspect);
+    panels_compose(out, w, h, tate, game, &d, &g);
+    for (y = 0; y < h; y++) {
+        for (x = 0; x < w; x++) {
+            int in = x >= g.field_x && x < g.field_x + g.field_w && y >= g.field_y &&
+                     y < g.field_y + g.field_h;
+
+            if (!in && pure_black(out[(size_t)y * w + x])) {
+                black++;
+            }
+        }
+    }
+    snprintf(label, sizeof label, "%dx%d%s no black border", w, h, tate ? " tate" : "");
+    expect(label, black == 0);
+    snprintf(label, sizeof label, "%dx%d%s field inside", w, h, tate ? " tate" : "");
+    expect(label, g.field_w > 0 && g.field_h > 0 && g.field_x >= 0 && g.field_y >= 0 &&
+                      g.field_x + g.field_w <= w && g.field_y + g.field_h <= h);
+    if (!tate && (long)w * 10 >= (long)h * 16) {
+        snprintf(label, sizeof label, "%dx%d widgets on", w, h);
+        expect(label, g.widgets && g.n > 0);
+    }
+    if (!tate && (long)w * 10 < (long)h * 16) {
+        int stray = 0;
+
+        snprintf(label, sizeof label, "%dx%d no side widgets", w, h);
+        expect(label, !g.widgets && g.n == 0);
+        for (y = 0; y < h; y++) {
+            for (x = 0; x < w; x++) {
+                int in = x >= g.field_x && x < g.field_x + g.field_w &&
+                         y >= g.field_y && y < g.field_y + g.field_h;
+
+                if (!in && out[(size_t)y * w + x] != panels_plate_at(x, y)) {
+                    stray++;
+                }
+            }
+        }
+        snprintf(label, sizeof label, "%dx%d bars are plate only", w, h);
+        expect(label, stray == 0);
+    }
+    for (i = 0; i < g.n; i++) {
+        int ok = g.x[i] >= 0 && g.y[i] >= 0 && g.w[i] > 0 && g.h[i] > 0 &&
+                 g.x[i] + g.w[i] <= w && g.y[i] + g.h[i] <= h;
+
+        if (!ok) {
+            fprintf(stderr, "  box %d %d,%d %dx%d\n", i, g.x[i], g.y[i], g.w[i], g.h[i]);
+        }
+        snprintf(label, sizeof label, "%dx%d%s widget %d", w, h, tate ? " tate" : "", i);
+        expect(label, ok);
+    }
+    printf("  field %d,%d %dx%d widgets=%d boxes=%d black=%d\n", g.field_x, g.field_y, g.field_w,
+           g.field_h, g.widgets, g.n, black);
+    if (w == 1920 && h == 1080 && aspect) {
+        g1080 = g;
+        have1080 = 1;
+    }
+    if (w == 3840 && h == 2160 && aspect) {
+        g2160 = g;
+        have2160 = 1;
+    }
+    if (!tate && (long)w * 10 >= (long)h * 16) {
+        int min_h = g.field_h;
+        int max_w = 0;
+        int bot = 0;
+
+        for (i = 0; i < g.n; i++) {
+            if (g.h[i] < min_h) {
+                min_h = g.h[i];
+            }
+            if (g.w[i] > max_w) {
+                max_w = g.w[i];
+            }
+            if (g.y[i] + g.h[i] > bot) {
+                bot = g.y[i] + g.h[i];
+            }
+        }
+        snprintf(label, sizeof label, "%dx%d widgets tall enough", w, h);
+        expect(label, g.n >= 12 && min_h >= 24 && bot <= h && bot * 10 >= h * 9);
+        /* 16:10 leaves a short strip if the 4:3 picture takes the height.
+         * Widgets should stay about as wide as on a 16:9 screen this tall. */
+        if ((long)w * 9 < (long)h * 16) {
+            snprintf(label, sizeof label, "%dx%d widgets readable", w, h);
+            expect(label, max_w >= h / 6);
+        }
+        {
+            int stair = 0;
+            int a, b;
+
+            for (a = 0; a < g.n; a++) {
+                for (b = a + 1; b < g.n; b++) {
+                    int atop = g.y[a];
+                    int abot = g.y[a] + g.h[a];
+                    int btop = g.y[b];
+                    int bbot = g.y[b] + g.h[b];
+                    int overlap = (abot < bbot ? abot : bbot) - (atop > btop ? atop : btop);
+                    int ax2 = g.x[a] + g.w[a];
+                    int bx2 = g.x[b] + g.w[b];
+                    int gapx = g.x[a] < g.x[b] ? g.x[b] - ax2 : g.x[a] - bx2;
+                    int shorter = g.h[a] < g.h[b] ? g.h[a] : g.h[b];
+
+                    /* Neighbours in one column, not the two side strips. */
+                    if (gapx >= 0 && gapx <= 48 && overlap * 2 > shorter &&
+                        (atop != btop || abot != bbot)) {
+                        fprintf(stderr, "  stair %d,%d %dx%d vs %d,%d %dx%d\n", g.x[a], g.y[a],
+                                g.w[a], g.h[a], g.x[b], g.y[b], g.w[b], g.h[b]);
+                        stair++;
+                    }
+                }
+            }
+            snprintf(label, sizeof label, "%dx%d pairs share top and bottom", w, h);
+            expect(label, stair == 0);
+        }
+        {
+            /* 12 and 8 design pixels at 1080p, scaled with the height. */
+            int gx = h * RB_DASH_GUTTER_X / 1080;
+            int gy = h * RB_DASH_GUTTER_Y / 1080;
+            int invade = 0;
+            int a;
+            int b;
+
+            if (gx < 4) {
+                gx = 4;
+            }
+            if (gy < 4) {
+                gy = 4;
+            }
+            for (i = 0; i < g.n; i++) {
+                int x2 = g.x[i] + g.w[i];
+                int y2 = g.y[i] + g.h[i];
+                int fx2 = g.field_x + g.field_w;
+                int fy2 = g.field_y + g.field_h;
+                int hit = g.x[i] < fx2 && x2 > g.field_x && g.y[i] < fy2 && y2 > g.field_y;
+                int edge = g.x[i] < gx || x2 > w - gx || g.y[i] < 0 || y2 > h;
+
+                if (x2 <= g.field_x && g.field_x - x2 < gx) {
+                    edge = 1;
+                }
+                if (g.x[i] >= fx2 && g.x[i] - fx2 < gx) {
+                    edge = 1;
+                }
+                if (hit || edge) {
+                    fprintf(stderr, "  dash %d,%d %dx%d field %d,%d %dx%d\n", g.x[i], g.y[i],
+                            g.w[i], g.h[i], g.field_x, g.field_y, g.field_w, g.field_h);
+                    invade++;
+                }
+            }
+            for (a = 0; a < g.n; a++) {
+                for (b = a + 1; b < g.n; b++) {
+                    int ax2 = g.x[a] + g.w[a];
+                    int bx2 = g.x[b] + g.w[b];
+                    int atop = g.y[a];
+                    int abot = g.y[a] + g.h[a];
+                    int btop = g.y[b];
+                    int bbot = g.y[b] + g.h[b];
+                    int vgap;
+
+                    int xover = (ax2 < bx2 ? ax2 : bx2) - (g.x[a] > g.x[b] ? g.x[a] : g.x[b]);
+
+                    if (xover <= 0) {
+                        continue;
+                    }
+                    if (abot <= btop) {
+                        vgap = btop - abot;
+                    } else if (bbot <= atop) {
+                        vgap = atop - bbot;
+                    } else {
+                        continue;
+                    }
+                    if (vgap < gy) {
+                        invade++;
+                    }
+                }
+            }
+            snprintf(label, sizeof label, "%dx%d aspect %s widgets inside dash", w, h,
+                     aspect ? "4:3" : "8:5");
+            expect(label, invade == 0);
+            if (!aspect && (long)w * 9 - (long)h * 16 < (long)h * 16 / 50 &&
+                (long)h * 16 - (long)w * 9 < (long)h * 16 / 50) {
+                int ratio = g.field_w * 5 - g.field_h * 6;
+
+                if (ratio < 0) {
+                    ratio = -ratio;
+                }
+                snprintf(label, sizeof label, "%dx%d 8:5 field is 6:5", w, h);
+                expect(label, ratio * 100 < g.field_h * 6 * 3);
+            }
+        }
+    }
+    if (tate && g.widgets) {
+        int outside = 0;
+
+        for (i = 0; i < g.n; i++) {
+            int x2 = g.x[i] + g.w[i];
+            int y2 = g.y[i] + g.h[i];
+            int fx2 = g.field_x + g.field_w;
+            int fy2 = g.field_y + g.field_h;
+            int hit = g.x[i] < fx2 && x2 > g.field_x && g.y[i] < fy2 && y2 > g.field_y;
+
+            if (hit || g.x[i] < 0 || g.y[i] < 0 || x2 > w || y2 > h) {
+                outside++;
+            }
+        }
+        snprintf(label, sizeof label, "%dx%d tate bars outside field", w, h);
+        expect(label, outside == 0 && g.n > 0);
+    }
+    if (!tate && (long)w * 10 < (long)h * 16) {
+        int seen_pl = 0, seen_pr = 0, seen_hud = 0;
+        uint32_t left = out[(size_t)g.field_y * w + g.field_x];
+        uint32_t right = out[(size_t)g.field_y * w + g.field_x + g.field_w - 1];
+
+        for (y = g.field_y; y < g.field_y + g.field_h; y++) {
+            for (x = g.field_x; x < g.field_x + g.field_w; x++) {
+                uint32_t p = out[(size_t)y * w + x];
+
+                seen_pl |= p == PX_PLAY_L;
+                seen_pr |= p == PX_PLAY_R;
+                seen_hud |= p == PX_HUD;
+            }
+        }
+        snprintf(label, sizeof label, "%dx%d playfield not clipped", w, h);
+        expect(label, seen_pl && seen_pr && seen_hud);
+        snprintf(label, sizeof label, "%dx%d side margins are plate", w, h);
+        expect(label, left == panels_plate_at(g.field_x, g.field_y) &&
+                          right == panels_plate_at(g.field_x + g.field_w - 1, g.field_y));
+    }
+    free(out);
+}
+
+int main(void)
+{
+    int i;
+
+    for (i = 0; i < GW * GH; i++) {
+        game[i] = 0x203040FFu;
+    }
+    game[80] = PX_PLAY_L;
+    game[559] = PX_PLAY_R;
+    game[560] = PX_HUD;
+    one(1920, 1080, 0, 1);
+    one(1920, 1080, 0, 0);
+    one(1600, 900, 0, 1); /* resize, still 16:9 */
+    one(1600, 900, 0, 0);
+    one(2560, 1440, 0, 1);
+    one(2560, 1440, 0, 0);
+    one(1920, 1200, 0, 1);
+    one(1920, 1200, 0, 0);
+    one(1680, 1050, 0, 1);
+    one(1680, 1050, 0, 0);
+    one(1024, 768, 0, 1);  /* 4:3: no panels, full frame */
+    one(1024, 768, 0, 0);
+    one(1280, 1024, 0, 1); /* 5:4: no panels, bars are plate */
+    one(1280, 1024, 0, 0);
+    one(1600, 1200, 0, 1); /* 4:3: no panels, picture fills the frame */
+    one(2560, 1080, 0, 1);
+    one(2560, 1080, 0, 0);
+    one(3440, 1440, 0, 1);
+    one(3440, 1440, 0, 0);
+    one(3840, 2160, 0, 1);
+    one(3840, 2160, 0, 0);
+    one(1080, 1920, 1, 1);
+    one(1080, 1920, 1, 0);
+    {
+        int cw = 0, ch = 0;
+
+        panels_output_size(3840, 2160, &cw, &ch);
+        expect("4K rasterises at 1080p", cw == 1920 && ch == 1080);
+        panels_output_size(1920, 1080, &cw, &ch);
+        expect("1080p rasterises at 1080p", cw == 1920 && ch == 1080);
+        panels_output_size(2560, 1080, &cw, &ch);
+        expect("21:9 stays 1:1", cw == 2560 && ch == 1080);
+        panels_output_size(1920, 1200, &cw, &ch);
+        expect("16:10 stays 1:1", cw == 1920 && ch == 1200);
+        panels_output_size(2560, 1440, &cw, &ch);
+        expect("1440p rasterises at 1080p", cw == 1920 && ch == 1080);
+    }
+    expect("1080p field is the reference", have1080 && g1080.field_x == 420 &&
+                                               g1080.field_y == 0 && g1080.field_w == 1080 &&
+                                               g1080.field_h == 1080);
+    expect("1080p columns are the reference width",
+           have1080 && g1080.n > 0 && g1080.w[0] >= 370 && g1080.w[0] <= 400);
+    if (have1080 && have2160 && g1080.n == g2160.n && g1080.n > 0) {
+        int i;
+        int bad = 0;
+
+        expect("4K field is 2x 1080p", g2160.field_w == g1080.field_w * 2 &&
+                                            g2160.field_h == g1080.field_h * 2 &&
+                                            g2160.field_x == g1080.field_x * 2 &&
+                                            g2160.field_y == g1080.field_y * 2);
+        for (i = 0; i < g1080.n; i++) {
+            int dx = g2160.x[i] - g1080.x[i] * 2;
+            int dy = g2160.y[i] - g1080.y[i] * 2;
+            int dw = g2160.w[i] - g1080.w[i] * 2;
+            int dh = g2160.h[i] - g1080.h[i] * 2;
+
+            if (dx < -1 || dx > 1 || dy < -1 || dy > 1 || dw < -1 || dw > 1 || dh < -1 ||
+                dh > 1) {
+                fprintf(stderr, "  scale box %d 1080 %d,%d %dx%d  4k %d,%d %dx%d\n", i,
+                        g1080.x[i], g1080.y[i], g1080.w[i], g1080.h[i], g2160.x[i], g2160.y[i],
+                        g2160.w[i], g2160.h[i]);
+                bad++;
+            }
+        }
+        expect("4K widgets are 2x 1080p", bad == 0);
+    } else {
+        expect("4K and 1080p both measured", 0);
+    }
+    if (fails) {
+        fprintf(stderr, "%d failed\n", fails);
+        return 1;
+    }
+    printf("panels_fit: ok\n");
+    return 0;
+}

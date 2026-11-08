@@ -179,7 +179,6 @@ int main(int argc, char **argv)
             }
         }
         game_render(&game);
-        sys_pace_overlay_draw();
         {
             /* Smooth mode holds each logic frame for refresh/30 vsynced
              * presents. Exact mode presents every refresh, with 0 or
